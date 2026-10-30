@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Particle: Run ROHD Tests",
+      "type": "shell",
+      "command": "dart test",
+      "options": { "cwd": "${workspaceFolder}/hdl/rohd" },
+      "group": { "kind": "test", "isDefault": true }
+    }
+  ]
+}

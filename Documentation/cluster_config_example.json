@@ -1,0 +1,36 @@
+{
+  "topology": "point_to_point_fifo",
+  "shared_memory_size": 131072,
+  "shared_memory_base": "0x80000000",
+  "cores": [
+    {
+      "id": 0,
+      "name": "Core_Producer",
+      "mem_size": 131072,
+      "base_addr": "0x00000100",
+      "initial_registers": {
+        "R1": "0x00001000",
+        "R15": "0x00010000"
+      },
+      "fifo_connections": {
+        "tx": [
+          { "channel": 0, "target_core": 1, "target_channel": 0 }
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "name": "Core_Consumer",
+      "mem_size": 131072,
+      "base_addr": "0x00000100",
+      "initial_registers": {
+        "R15": "0x00010000"
+      },
+      "fifo_connections": {
+        "tx": [
+          { "channel": 0, "target_core": 0, "target_channel": 0 }
+        ]
+      }
+    }
+  ]
+}

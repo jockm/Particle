@@ -1,0 +1,4 @@
+void main() {
+    u32 data = readfifo(0);
+    writefifo(1, data);
+}

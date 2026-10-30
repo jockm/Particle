@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dart: Generate SystemVerilog Top",
+      "type": "dart",
+      "request": "launch",
+      "program": "bin/generate.dart",
+      "cwd": "${workspaceFolder}/hdl/rohd"
+    }
+  ]
+}

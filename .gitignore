@@ -1,0 +1,21 @@
+# Dart package manager build cache & toolchain artifacts
+.dart_tool/
+**/.dart_tool/
+
+# macOS metadata, Finder state, and AppleDouble resource fork shadow files
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+
+# Python Bytecode Cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# The contents of the build directories should be ignored, but not the directory itself
+apps/act/build/*
+!apps/act/build/.gitkeep
+apps/asm/build/*
+!apps/asm/build/.gitkeep
