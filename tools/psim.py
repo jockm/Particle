@@ -940,24 +940,27 @@ class Debugger(cmd.Cmd):
 
     def do_c(self, arg):
         """Continue execution until breakpoint or halt: c"""
-        if self.cluster_sim:
-            while True:
-                hit = any(c.pc in self.breakpoints for c in self.cluster_sim.cores)
-                if hit:
-                    print("Breakpoint hit on cluster core.")
-                    break
-                active = self.cluster_sim.step_all()
-                if not active:
-                    print("All cluster cores halted.")
-                    break
-        else:
-            while not self.core.halted:
-                if self.core.pc in self.breakpoints:
-                    print(f"Breakpoint hit at 0x{self.core.pc:08X}")
-                    break
-                self.core.step()
-            if self.core.halted:
-                print(f"Halted at 0x{self.core.pc:08X}")
+        try:
+            if self.cluster_sim:
+                while True:
+                    hit = any(c.pc in self.breakpoints for c in self.cluster_sim.cores)
+                    if hit:
+                        print("Breakpoint hit on cluster core.")
+                        break
+                    active = self.cluster_sim.step_all()
+                    if not active:
+                        print("All cluster cores halted.")
+                        break
+            else:
+                while not self.core.halted:
+                    if self.core.pc in self.breakpoints:
+                        print(f"Breakpoint hit at 0x{self.core.pc:08X}")
+                        break
+                    self.core.step()
+                if self.core.halted:
+                    print(f"Halted at 0x{self.core.pc:08X}")
+        except KeyboardInterrupt:
+            print(f"\nExecution paused by user at PC: 0x{self.core.pc:08X}")
 
     def do_b(self, arg):
         """Set breakpoint: b <hex_addr>"""
@@ -1016,9 +1019,18 @@ def main():
     if args.cluster:
         sim = ParticleMultiCoreSimulator(args.cluster)
         if args.debug:
-            Debugger(sim.cores[0], cluster_sim=sim).cmdloop()
+            dbg = Debugger(sim.cores[0], cluster_sim=sim)
+            while True:
+                try:
+                    dbg.cmdloop()
+                    break
+                except KeyboardInterrupt:
+                    print("^C")
         else:
-            sim.run(max_cycles=args.max_cycles)
+            try:
+                sim.run(max_cycles=args.max_cycles)
+            except KeyboardInterrupt:
+                print("\nSimulation aborted by user.")
     else:
         core = ParticleCore()
         if args.binary:
@@ -1029,12 +1041,20 @@ def main():
             print(f"Loaded {len(data)} bytes at 0x{load_addr:08X}")
 
         if args.debug or not args.binary:
-            Debugger(core).cmdloop()
+            dbg = Debugger(core)
+            while True:
+                try:
+                    dbg.cmdloop()
+                    break
+                except KeyboardInterrupt:
+                    print("^C")
         else:
-            while not core.halted and core.cycle_count < args.max_cycles:
-                core.step()
-            print(f"Simulation completed in {core.cycle_count} cycles. PC = 0x{core.pc:08X}")
-
-
+            try:
+                while not core.halted and core.cycle_count < args.max_cycles:
+                    core.step()
+                print(f"Simulation completed in {core.cycle_count} cycles. PC = 0x{core.pc:08X}")
+            except KeyboardInterrupt:
+                print(f"\nSimulation stopped at PC = 0x{core.pc:08X} (Cycle {core.cycle_count})")
+                
 if __name__ == "__main__":
     main()

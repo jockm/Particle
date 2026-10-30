@@ -8,6 +8,16 @@
 ._*
 **/._*
 
+# ROHD-generated SystemVerilog top-level outputs
+hdl/rohd/particle_top.sv
+hdl/rohd/*.sv
+
+# Synthesis and PnR toolchain artifacts (Yosys / nextpnr)
+hdl/rohd/*.synth.json
+hdl/rohd/*.config
+hdl/rohd/*.bit
+hdl/rohd/*.bin
+
 # Python Bytecode Cache
 __pycache__/
 **/__pycache__/
@@ -15,6 +25,8 @@ __pycache__/
 *$py.class
 
 # The contents of the build directories should be ignored, but not the directory itself
+build/*
+!build/.gitkeep
 apps/act/build/*
 !apps/act/build/.gitkeep
 apps/asm/build/*

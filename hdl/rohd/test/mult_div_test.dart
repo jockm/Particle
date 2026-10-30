@@ -16,13 +16,10 @@ void main() {
 
   group('Particle Multiplier & Divider Tests', () {
     test('Multiplier computes MULL, MULH, SMULH correctly', () async {
+      await Simulator.reset();
       final opA = Logic(name: 'opA', width: ParticleWidths.word);
       final opB = Logic(name: 'opB', width: ParticleWidths.word);
       final mulMode = Logic(name: 'mulMode', width: 2);
-
-      opA.put(0);
-      opB.put(0);
-      mulMode.put(0);
 
       final mul = ParticleMultiplier(
         operandA: opA,
@@ -33,21 +30,25 @@ void main() {
 
       opA.put(100);
       opB.put(25);
-      mulMode.put(0);
+      mulMode.put(0); // MULL
+      Simulator.tick();
       expect(mul.result.value.toInt(), equals(2500));
 
       opA.put(0x80000000);
       opB.put(2);
-      mulMode.put(1);
+      mulMode.put(1); // MULH
+      Simulator.tick();
       expect(mul.result.value.toInt(), equals(1));
 
       opA.put(0xFFFFFFFF);
       opB.put(5);
-      mulMode.put(2);
+      mulMode.put(2); // SMULH
+      Simulator.tick();
       expect(mul.result.value.toInt(), equals(0xFFFFFFFF));
     });
 
     test('Divider computes Unsigned Div with multi-cycle completion', () async {
+      await Simulator.reset();
       final clk = SimpleClockGenerator(10);
       final reset = Logic(name: 'reset');
       final start = Logic(name: 'start');
@@ -71,16 +72,28 @@ void main() {
       dividend.put(100);
       divisor.put(7);
 
+      bool sawDone = false;
+      int capturedQuot = 0;
+      int capturedRem = 0;
+
+      clk.clk.posedge.listen((_) {
+        if (div.done.value.isValid && div.done.value.toInt() == 1) {
+          sawDone = true;
+          capturedQuot = div.quotient.value.toInt();
+          capturedRem = div.remainder.value.toInt();
+        }
+      });
+
       Simulator.registerAction(20, () => reset.put(0));
       Simulator.registerAction(30, () => start.put(1));
       Simulator.registerAction(40, () => start.put(0));
 
-      Simulator.registerAction(400, () {
-        expect(div.done.value.toInt(), equals(1));
-        expect(div.quotient.value.toInt(), equals(14));
-        expect(div.remainder.value.toInt(), equals(2));
+      Simulator.registerAction(450, () {
+        expect(sawDone, isTrue);
+        expect(capturedQuot, equals(14));
+        expect(capturedRem, equals(2));
+        Simulator.endSimulation();
       });
-      Simulator.registerAction(420, () => Simulator.endSimulation());
 
       await Simulator.run();
     });

@@ -1,5 +1,6 @@
 // =============================================================================
 // File: hdl/rohd/test/uart_engine_test.dart
+// Architecture: Particle 32-bit RISC
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
@@ -8,10 +9,6 @@ import '../lib/uart_engine.dart';
 import 'test_helpers.dart';
 
 void main() {
-  tearDown(() async {
-    await Simulator.reset();
-  });
-
   group('Particle UART Engine Tests', () {
     late SimpleClockGenerator clk;
     late Logic reset;
@@ -48,16 +45,14 @@ void main() {
       txValid.put(0);
       rxReady.put(1);
       baudDivisor.put(4);
+      await clk.waitCycles(2);
+      reset.put(0);
     });
 
     test('Transmitter starts idle and asserts txReady', () async {
-      Simulator.registerAction(20, () => reset.put(0));
-      Simulator.registerAction(30, () {
-        expect(uart.txReady.value.toInt(), equals(1));
-        expect(uart.txPin.value.toInt(), equals(1));
-      });
-      Simulator.registerAction(50, () => Simulator.endSimulation());
-      await Simulator.run();
+      await clk.waitCycles(1);
+      expect(uart.txReady.value.toInt(), equals(1));
+      expect(uart.txPin.value.toInt(), equals(1));
     });
   });
 }

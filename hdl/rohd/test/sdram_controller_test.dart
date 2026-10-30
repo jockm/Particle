@@ -25,6 +25,7 @@ void main() {
     late SdramController controller;
 
     setUp(() async {
+      await Simulator.reset();
       clk = SimpleClockGenerator(40);
       rstN = Logic(name: 'rstN');
       cmdReq = Logic(name: 'cmdReq');
@@ -65,8 +66,9 @@ void main() {
         expect(controller.sdramCke.value.toInt(), equals(1));
         expect(controller.sdramDqm.value.toInt(), equals(0));
         expect(controller.busy.value.toInt(), equals(0));
+        Simulator.endSimulation();
       });
-      Simulator.registerAction(200, () => Simulator.endSimulation());
+
       await Simulator.run();
     });
   });

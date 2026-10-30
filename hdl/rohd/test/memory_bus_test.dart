@@ -23,19 +23,13 @@ void main() {
     late ParticleMemoryBus bus;
 
     setUp(() async {
+      await Simulator.reset();
       addr = Logic(name: 'addr', width: ParticleWidths.word);
       wData = Logic(name: 'wData', width: ParticleWidths.word);
       size = Logic(name: 'size', width: 2);
       wEn = Logic(name: 'wEn');
       rEn = Logic(name: 'rEn');
       rDataRaw = Logic(name: 'rDataRaw', width: ParticleWidths.word);
-
-      addr.put(0);
-      wData.put(0);
-      size.put(0);
-      wEn.put(0);
-      rEn.put(0);
-      rDataRaw.put(0);
 
       bus = ParticleMemoryBus(
         addr: addr,
@@ -52,15 +46,20 @@ void main() {
       size.put(2);
       wEn.put(1);
       rEn.put(0);
+      wData.put(0);
+      rDataRaw.put(0);
 
       addr.put(0x00001000);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0xF));
 
       addr.put(0x00001001);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(1));
 
       addr.put(0x00001002);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(1));
     });
 
@@ -68,16 +67,21 @@ void main() {
       size.put(1);
       wEn.put(1);
       rEn.put(0);
+      wData.put(0);
+      rDataRaw.put(0);
 
       addr.put(0x00002000);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0x3));
 
       addr.put(0x00002002);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0xC));
 
       addr.put(0x00002003);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(1));
     });
 
@@ -85,20 +89,26 @@ void main() {
       size.put(0);
       wEn.put(1);
       rEn.put(0);
+      wData.put(0);
+      rDataRaw.put(0);
 
       addr.put(0x00003000);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0x1));
 
       addr.put(0x00003001);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0x2));
 
       addr.put(0x00003002);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0x4));
 
       addr.put(0x00003003);
+      Simulator.tick();
       expect(bus.alignFault.value.toInt(), equals(0));
       expect(bus.bEn.value.toInt(), equals(0x8));
     });
