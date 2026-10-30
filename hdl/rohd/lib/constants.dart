@@ -1,7 +1,12 @@
 abstract class ParticleWidths {
   static const int word = 32;
+  static const int halfWord = 16;
   static const int inst = 16;
+  static const int byte = 8;
   static const int regAddr = 4;
+  static const int opcode = 8;
+  static const int imm4 = 4;
+  static const int imm8 = 8;
 }
 
 abstract class ParticleOpcodes {

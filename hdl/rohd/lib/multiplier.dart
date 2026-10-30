@@ -2,6 +2,11 @@ import 'package:rohd/rohd.dart';
 import 'constants.dart';
 
 class ParticleMultiplier extends Module {
+  Logic get operandA => input('operandA');
+  Logic get operandB => input('operandB');
+  Logic get mulMode => input('mulMode');
+  Logic get result => output('result');
+
   ParticleMultiplier({
     required Logic operandA,
     required Logic operandB,

@@ -2,6 +2,11 @@ import 'package:rohd/rohd.dart';
 import 'constants.dart';
 
 class ParticleFifoSubsystem extends Module {
+  Logic get popData => output('popData');
+  Logic get empty => output('empty');
+  Logic get full => output('full');
+  Logic get statusWord => output('statusWord');
+
   ParticleFifoSubsystem({
     required Logic clk,
     required Logic reset,

@@ -2,6 +2,11 @@ import 'package:rohd/rohd.dart';
 import 'constants.dart';
 
 class ParticleMemoryBus extends Module {
+  Logic get bEn => output('bEn');
+  Logic get alignFault => output('alignFault');
+  Logic get wDataAligned => output('wDataAligned');
+  Logic get rDataFormatted => output('rDataFormatted');
+
   ParticleMemoryBus({
     required Logic addr,
     required Logic wData,
