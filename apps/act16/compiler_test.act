@@ -1,0 +1,36 @@
+// =============================================================================
+// File: apps/act16/compiler_test.act
+// Description: Validation test suite for the ACT16 compiler
+// =============================================================================
+
+u32 g_counter = 0;
+u32 g_status = 0;
+
+u32 compute_sum(u32 a, u32 b) {
+    u32 temp = 0;
+    temp = a + b;
+    return temp;
+}
+
+void main() {
+    u32 sum = 0;
+    u32 i = 0;
+
+    // Test function call and arithmetic
+    sum = compute_sum(10, 20);
+
+    // Test while-loop and global modification
+    while (i < 5) {
+        g_counter = g_counter + 1;
+        i = i + 1;
+    }
+
+    // Test conditional logic and sentinel assignment
+    if (sum == 30) {
+        if (g_counter == 5) {
+            g_status = 0xCAFE;
+        }
+    }
+
+    return;
+}

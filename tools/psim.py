@@ -11,7 +11,7 @@ Features:
   - Dual UART Emulation:
       * FIFO Channel 0: ULX3S Fixed 3 Mbps FTDI UART (tied to console stdin/stdout)
       * FIFO Channel 1: Aux GPIO UART with MMIO Baud Divisor Register at 0xF0000010
-  - Multi-Core cluster execution via JSON configuration
+  - Multi-Core cluster execution via JSON configuration (-C / --cluster)
   - Shared Memory MMIO synchronization
   - Full-featured p4db interactive debugger (breakpoints, single-step, dumps)
 ================================================================================
@@ -265,7 +265,6 @@ class ParticleCore:
         if ch == 0:
             q = self.fifos[0]
             if not q:
-                # Check non-blocking stdin
                 if select.select([sys.stdin], [], [], 0)[0]:
                     ch_in = sys.stdin.read(1)
                     if ch_in:
@@ -317,7 +316,6 @@ class ParticleCore:
             return self.ext_stat_fifo(ch)
 
         if ch == 0:
-            # Check stdin readiness
             has_input = bool(self.fifos[0]) or bool(select.select([sys.stdin], [], [], 0)[0])
             empty_bit = 0 if has_input else 1
             full_bit = 0
@@ -688,49 +686,67 @@ class ParticleCore:
             self.trigger_trap(imm4 & 0x0F, next_pc)
             return True
 
-        # ---------------- Forward Branches ----------------
+        # ---------------- Forward Branches (0xB0 - 0xB9) ----------------
         elif opcode == 0xB0:  # FBRA Imm8
             next_pc = (self.pc + (imm8 * 2)) & MASK32
-        elif opcode == 0xB1 and self.r[rr] == 0:
-            next_pc = (self.pc + (self.r[rl] * 2)) & MASK32
-        elif opcode == 0xB2 and to_signed32(self.r[rr]) < 0:
-            next_pc = (self.pc + (self.r[rl] * 2)) & MASK32
-        elif opcode == 0xB3 and to_signed32(self.r[rr]) > 0:
-            next_pc = (self.pc + (self.r[rl] * 2)) & MASK32
-        elif opcode == 0xB4 and self.r[rr] == 0:
-            next_pc = (self.pc + (imm4 * 2)) & MASK32
-        elif opcode == 0xB5 and to_signed32(self.r[rr]) < 0:
-            next_pc = (self.pc + (imm4 * 2)) & MASK32
-        elif opcode == 0xB6 and to_signed32(self.r[rr]) > 0:
-            next_pc = (self.pc + (imm4 * 2)) & MASK32
-        elif opcode == 0xB7 and self.r[14] == 0:
-            next_pc = (self.pc + (imm8 * 2)) & MASK32
-        elif opcode == 0xB8 and to_signed32(self.r[14]) < 0:
-            next_pc = (self.pc + (imm8 * 2)) & MASK32
-        elif opcode == 0xB9 and to_signed32(self.r[14]) > 0:
-            next_pc = (self.pc + (imm8 * 2)) & MASK32
+        elif opcode == 0xB1:  # FBRA.Z Rr, Rl
+            if self.r[rr] == 0:
+                next_pc = (self.pc + (self.r[rl] * 2)) & MASK32
+        elif opcode == 0xB2:  # FBRA.N Rr, Rl
+            if to_signed32(self.r[rr]) < 0:
+                next_pc = (self.pc + (self.r[rl] * 2)) & MASK32
+        elif opcode == 0xB3:  # FBRA.P Rr, Rl
+            if to_signed32(self.r[rr]) > 0:
+                next_pc = (self.pc + (self.r[rl] * 2)) & MASK32
+        elif opcode == 0xB4:  # FBRA.Z Rr, Imm4
+            if self.r[rr] == 0:
+                next_pc = (self.pc + (imm4 * 2)) & MASK32
+        elif opcode == 0xB5:  # FBRA.N Rr, Imm4
+            if to_signed32(self.r[rr]) < 0:
+                next_pc = (self.pc + (imm4 * 2)) & MASK32
+        elif opcode == 0xB6:  # FBRA.P Rr, Imm4
+            if to_signed32(self.r[rr]) > 0:
+                next_pc = (self.pc + (imm4 * 2)) & MASK32
+        elif opcode == 0xB7:  # FBRA.Z R14, Imm8
+            if self.r[14] == 0:
+                next_pc = (self.pc + (imm8 * 2)) & MASK32
+        elif opcode == 0xB8:  # FBRA.N R14, Imm8
+            if to_signed32(self.r[14]) < 0:
+                next_pc = (self.pc + (imm8 * 2)) & MASK32
+        elif opcode == 0xB9:  # FBRA.P R14, Imm8
+            if to_signed32(self.r[14]) > 0:
+                next_pc = (self.pc + (imm8 * 2)) & MASK32
 
-        # ---------------- Backward Branches ----------------
+        # ---------------- Backward Branches (0xC0 - 0xC9) ----------------
         elif opcode == 0xC0:  # BBRA Imm8
             next_pc = (self.pc - (imm8 * 2)) & MASK32
-        elif opcode == 0xC1 and self.r[rr] == 0:
-            next_pc = (self.pc - (self.r[rl] * 2)) & MASK32
-        elif opcode == 0xC2 and to_signed32(self.r[rr]) < 0:
-            next_pc = (self.pc - (self.r[rl] * 2)) & MASK32
-        elif opcode == 0xC3 and to_signed32(self.r[rr]) > 0:
-            next_pc = (self.pc - (self.r[rl] * 2)) & MASK32
-        elif opcode == 0xC4 and self.r[rr] == 0:
-            next_pc = (self.pc - (imm4 * 2)) & MASK32
-        elif opcode == 0xC5 and to_signed32(self.r[rr]) < 0:
-            next_pc = (self.pc - (imm4 * 2)) & MASK32
-        elif opcode == 0xC6 and to_signed32(self.r[rr]) > 0:
-            next_pc = (self.pc - (imm4 * 2)) & MASK32
-        elif opcode == 0xC7 and self.r[14] == 0:
-            next_pc = (self.pc - (imm8 * 2)) & MASK32
-        elif opcode == 0xC8 and to_signed32(self.r[14]) < 0:
-            next_pc = (self.pc - (imm8 * 2)) & MASK32
-        elif opcode == 0xC9 and to_signed32(self.r[14]) > 0:
-            next_pc = (self.pc - (imm8 * 2)) & MASK32
+        elif opcode == 0xC1:  # BBRA.Z Rr, Rl
+            if self.r[rr] == 0:
+                next_pc = (self.pc - (self.r[rl] * 2)) & MASK32
+        elif opcode == 0xC2:  # BBRA.N Rr, Rl
+            if to_signed32(self.r[rr]) < 0:
+                next_pc = (self.pc - (self.r[rl] * 2)) & MASK32
+        elif opcode == 0xC3:  # BBRA.P Rr, Rl
+            if to_signed32(self.r[rr]) > 0:
+                next_pc = (self.pc - (self.r[rl] * 2)) & MASK32
+        elif opcode == 0xC4:  # BBRA.Z Rr, Imm4
+            if self.r[rr] == 0:
+                next_pc = (self.pc - (imm4 * 2)) & MASK32
+        elif opcode == 0xC5:  # BBRA.N Rr, Imm4
+            if to_signed32(self.r[rr]) < 0:
+                next_pc = (self.pc - (imm4 * 2)) & MASK32
+        elif opcode == 0xC6:  # BBRA.P Rr, Imm4
+            if to_signed32(self.r[rr]) > 0:
+                next_pc = (self.pc - (imm4 * 2)) & MASK32
+        elif opcode == 0xC7:  # BBRA.Z R14, Imm8
+            if self.r[14] == 0:
+                next_pc = (self.pc - (imm8 * 2)) & MASK32
+        elif opcode == 0xC8:  # BBRA.N R14, Imm8
+            if to_signed32(self.r[14]) < 0:
+                next_pc = (self.pc - (imm8 * 2)) & MASK32
+        elif opcode == 0xC9:  # BBRA.P R14, Imm8
+            if to_signed32(self.r[14]) > 0:
+                next_pc = (self.pc - (imm8 * 2)) & MASK32
 
         # ---------------- Shadow Bank Exchanges ----------------
         elif opcode == 0xD0:  # XCHG Rr
@@ -902,7 +918,7 @@ class Debugger(cmd.Cmd):
             print("Usage: switch <core_id>")
 
     def do_cores(self, arg):
-        """List all cores and execution states: cores"""
+        """List all cluster cores and their status: cores"""
         if not self.cluster_sim:
             print(f"Single Core mode: {self.core.name}")
             return
@@ -939,7 +955,7 @@ class Debugger(cmd.Cmd):
             print(f"Stepped [0x{cur_pc:08X}] -> PC: 0x{self.core.pc:08X}")
 
     def do_c(self, arg):
-        """Continue execution until breakpoint or halt: c"""
+        """Continue execution until breakpoint, halt, or user interrupt: c"""
         try:
             if self.cluster_sim:
                 while True:
@@ -1019,18 +1035,9 @@ def main():
     if args.cluster:
         sim = ParticleMultiCoreSimulator(args.cluster)
         if args.debug:
-            dbg = Debugger(sim.cores[0], cluster_sim=sim)
-            while True:
-                try:
-                    dbg.cmdloop()
-                    break
-                except KeyboardInterrupt:
-                    print("^C")
+            Debugger(sim.cores[0], cluster_sim=sim).cmdloop()
         else:
-            try:
-                sim.run(max_cycles=args.max_cycles)
-            except KeyboardInterrupt:
-                print("\nSimulation aborted by user.")
+            sim.run(max_cycles=args.max_cycles)
     else:
         core = ParticleCore()
         if args.binary:
@@ -1041,20 +1048,12 @@ def main():
             print(f"Loaded {len(data)} bytes at 0x{load_addr:08X}")
 
         if args.debug or not args.binary:
-            dbg = Debugger(core)
-            while True:
-                try:
-                    dbg.cmdloop()
-                    break
-                except KeyboardInterrupt:
-                    print("^C")
+            Debugger(core).cmdloop()
         else:
-            try:
-                while not core.halted and core.cycle_count < args.max_cycles:
-                    core.step()
-                print(f"Simulation completed in {core.cycle_count} cycles. PC = 0x{core.pc:08X}")
-            except KeyboardInterrupt:
-                print(f"\nSimulation stopped at PC = 0x{core.pc:08X} (Cycle {core.cycle_count})")
-                
+            while not core.halted and core.cycle_count < args.max_cycles:
+                core.step()
+            print(f"Simulation completed in {core.cycle_count} cycles. PC = 0x{core.pc:08X}")
+
+
 if __name__ == "__main__":
     main()
