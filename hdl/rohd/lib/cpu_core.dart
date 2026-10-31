@@ -1,7 +1,6 @@
 // =============================================================================
-// File: hdl/rohd/lib/cpu_core.dart
+// Particle Processor Core Module (cpu_core.dart)
 // Architecture: Particle 32-bit RISC
-// Framework: Intel ROHD (Dart sdk >= 3.0.0)
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
@@ -9,26 +8,29 @@ import 'constants.dart';
 import 'cpu_config.dart';
 import 'register_file.dart';
 import 'alu.dart';
-import 'multiplier.dart';
-import 'divider.dart';
-import 'fifo_subsystem.dart';
-import 'memory_bus.dart';
 
 class ParticleCpuCore extends Module {
+  // Clock and Reset
   Logic get clk => input('clk');
   Logic get reset => input('reset');
 
+  // Memory Port A: Instruction Fetch (16-bit)
   Logic get memPortARData => input('memPortARData');
-  Logic get memPortBRData => input('memPortBRData');
-  Logic get mboxStrobeIn => input('mboxStrobeIn');
-  Logic get mboxVectorIn => input('mboxVectorIn');
-
   Logic get memPortAAddr => output('memPortAAddr');
+
+  // Memory Port B: Data Load/Store (32-bit)
+  Logic get memPortBRData => input('memPortBRData');
   Logic get memPortBAddr => output('memPortBAddr');
   Logic get memPortBWData => output('memPortBWData');
   Logic get memPortBBEn => output('memPortBBEn');
   Logic get memPortBWEn => output('memPortBWEn');
   Logic get memPortBREn => output('memPortBREn');
+
+  // Cross-Core Inbound Mailbox Strobe and Vector
+  Logic get mboxStrobeIn => input('mboxStrobeIn');
+  Logic get mboxVectorIn => input('mboxVectorIn');
+
+  final CpuConfig config;
 
   ParticleCpuCore({
     required Logic clk,
@@ -37,12 +39,12 @@ class ParticleCpuCore extends Module {
     required Logic memPortBRData,
     required Logic mboxStrobeIn,
     required Logic mboxVectorIn,
-    CpuConfig config = const CpuConfig(),
+    this.config = const CpuConfig(),
     super.name = 'particle_cpu_core',
   }) {
     addInput('clk', clk);
     addInput('reset', reset);
-    addInput('memPortARData', memPortARData, width: ParticleWidths.halfWord);
+    addInput('memPortARData', memPortARData, width: ParticleWidths.inst);
     addInput('memPortBRData', memPortBRData, width: ParticleWidths.word);
     addInput('mboxStrobeIn', mboxStrobeIn);
     addInput('mboxVectorIn', mboxVectorIn, width: 4);
@@ -54,29 +56,44 @@ class ParticleCpuCore extends Module {
     addOutput('memPortBWEn');
     addOutput('memPortBREn');
 
-    _build(config);
+    _build();
   }
 
-  void _build(CpuConfig config) {
-    final pc = Logic(name: 'pc', width: ParticleWidths.word);
-    final nextPc = Logic(name: 'nextPc', width: ParticleWidths.word);
+  void _build() {
+    // -------------------------------------------------------------------------
+    // Execution State Definitions
+    // -------------------------------------------------------------------------
+    const int stateFetch = 0;
+    const int stateExec = 1;
+    const int stateWait = 2;
 
-    final rfRAddrA = Logic(name: 'rfRAddrA', width: ParticleWidths.regAddr);
-    final rfRAddrB = Logic(name: 'rfRAddrB', width: ParticleWidths.regAddr);
-    final rfWAddr = Logic(name: 'rfWAddr', width: ParticleWidths.regAddr);
+    final pc = Logic(name: 'pc', width: ParticleWidths.word);
+    final state = Logic(name: 'state', width: 2);
+
+    // -------------------------------------------------------------------------
+    // Instruction Slicing
+    // -------------------------------------------------------------------------
+    final opcode = memPortARData.slice(15, 8);
+    final rr = memPortARData.slice(7, 4);
+    final rl = memPortARData.slice(3, 0);
+
+    // -------------------------------------------------------------------------
+    // Register File Control Signals & Instantiation
+    // -------------------------------------------------------------------------
+    final rfWAddr = Logic(name: 'rfWAddr', width: 4);
     final rfWData = Logic(name: 'rfWData', width: ParticleWidths.word);
     final rfWEn = Logic(name: 'rfWEn');
     final rfXchgEn = Logic(name: 'rfXchgEn');
     final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
     final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
-    final rfXchgRegIdx =
-        Logic(name: 'rfXchgRegIdx', width: ParticleWidths.regAddr);
+    final rfXchgRegIdx = Logic(name: 'rfXchgRegIdx', width: 4);
 
+    // Register File: Read addresses are driven directly by instruction fields
     final rf = RegisterFile(
       clk: clk,
       reset: reset,
-      rAddrA: rfRAddrA,
-      rAddrB: rfRAddrB,
+      rAddrA: rr,
+      rAddrB: rl,
       wAddr: rfWAddr,
       wData: rfWData,
       wEn: rfWEn,
@@ -86,58 +103,125 @@ class ParticleCpuCore extends Module {
       xchgRegIdx: rfXchgRegIdx,
     );
 
-    final memAddr = Logic(name: 'memAddr', width: ParticleWidths.word);
-    final memSize = Logic(name: 'memSize', width: 2);
-    final memWEn = Logic(name: 'memWEn');
-    final memREn = Logic(name: 'memREn');
+    // -------------------------------------------------------------------------
+    // ALU Instantiation
+    // -------------------------------------------------------------------------
+    final aluOp = Logic(name: 'aluOp', width: 5);
 
-    final bus = ParticleMemoryBus(
-      addr: memAddr,
-      wData: rf.rDataB,
-      size: memSize,
-      wEn: memWEn,
-      rEn: memREn,
-      rDataRaw: memPortBRData,
+    // ALU inputs are directly driven from the register file read outputs
+    final alu = ParticleAlu(
+      aluOp: aluOp,
+      operandA: rf.rDataA,
+      operandB: rf.rDataB,
     );
 
-    // Direct connections to registered module outputs
+    // -------------------------------------------------------------------------
+    // Static Port Routing via Continuous Assignment
+    // -------------------------------------------------------------------------
     memPortAAddr <= pc;
-    memPortBAddr <= memAddr;
-    memPortBWData <= bus.wDataAligned;
-    memPortBBEn <= bus.bEn;
-    memPortBWEn <= bus.bEn.neq(0);
-    memPortBREn <= memREn;
+    memPortBAddr <= rf.rDataA;
+    memPortBWData <= rf.rDataB;
+    memPortBBEn <= Const(0xF, width: 4);
+    memPortBWEn <= Const(0);
+    memPortBREn <= Const(0);
 
-    // Reset and Strobe Handling
-    final targetTrap = Const(config.trapTableBase, width: ParticleWidths.word) +
-        (mboxVectorIn.zeroExtend(ParticleWidths.word) *
-            Const(config.trapStrideBytes, width: ParticleWidths.word));
+    rfWAddr <= rr;
+    rfXchgRegIdx <= rr;
+    rfWData <= alu.result;
 
-    Sequential(clk, reset: reset, resetValues: {
-      pc: Const(config.trapTableBase, width: ParticleWidths.word),
-    }, [
-      If(mboxStrobeIn, then: [
-        pc < targetTrap,
-      ], orElse: [
-        pc < nextPc,
+    // -------------------------------------------------------------------------
+    // Instruction Decode & Control Routing
+    // -------------------------------------------------------------------------
+    final inExec = state.eq(stateExec);
+
+    Combinational([
+      Case(opcode, [
+        // Arithmetic: ADD Rr, Rl
+        CaseItem(Const(ParticleOpcodes.add, width: 8), [
+          aluOp < Const(AluOps.add, width: 5),
+          rfWEn < inExec,
+          rfXchgEn < Const(0),
+          rfXchgAllEn < Const(0),
+          rfXchgMostEn < Const(0),
+        ]),
+        // Arithmetic: SUB Rr, Rl
+        CaseItem(Const(ParticleOpcodes.sub, width: 8), [
+          aluOp < Const(AluOps.sub, width: 5),
+          rfWEn < inExec,
+          rfXchgEn < Const(0),
+          rfXchgAllEn < Const(0),
+          rfXchgMostEn < Const(0),
+        ]),
+        // Logic: NOT Rr (0x72)
+        CaseItem(Const(ParticleOpcodes.not, width: 8), [
+          aluOp < Const(AluOps.not, width: 5),
+          rfWEn < inExec,
+          rfXchgEn < Const(0),
+          rfXchgAllEn < Const(0),
+          rfXchgMostEn < Const(0),
+        ]),
+        // Condition: NEZ Rr (0x73)
+        CaseItem(Const(ParticleOpcodes.nez, width: 8), [
+          aluOp < Const(AluOps.nez, width: 5),
+          rfWEn < inExec,
+          rfXchgEn < Const(0),
+          rfXchgAllEn < Const(0),
+          rfXchgMostEn < Const(0),
+        ]),
+        // Context Switch: XCHGMOST (0xD2)
+        CaseItem(Const(ParticleOpcodes.xchgmost, width: 8), [
+          aluOp < Const(AluOps.add, width: 5),
+          rfWEn < Const(0),
+          rfXchgEn < Const(0),
+          rfXchgAllEn < Const(0),
+          rfXchgMostEn < inExec,
+        ]),
+      ], defaultItem: [
+        aluOp < Const(AluOps.add, width: 5),
+        rfWEn < Const(0),
+        rfXchgEn < Const(0),
+        rfXchgAllEn < Const(0),
+        rfXchgMostEn < Const(0),
       ]),
     ]);
 
-    nextPc <= pc + Const(2, width: ParticleWidths.word);
+    // -------------------------------------------------------------------------
+    // Pipeline & Program Counter Sequential FSM
+    // -------------------------------------------------------------------------
+    // Trap computation: Target = TRAP_BASE + (vector * 64)[cite: 1]
+    final mboxTarget = Const(config.trapTableBase, width: ParticleWidths.word) +
+        (mboxVectorIn.zeroExtend(ParticleWidths.word) << 6);
 
-    // Unused controls tied off
-    rfRAddrA <= Const(0, width: ParticleWidths.regAddr);
-    rfRAddrB <= Const(0, width: ParticleWidths.regAddr);
-    rfWAddr <= Const(0, width: ParticleWidths.regAddr);
-    rfWData <= Const(0, width: ParticleWidths.word);
-    rfWEn <= Const(0);
-    rfXchgEn <= Const(0);
-    rfXchgAllEn <= Const(0);
-    rfXchgMostEn <= Const(0);
-    rfXchgRegIdx <= Const(0, width: ParticleWidths.regAddr);
-    memAddr <= Const(0, width: ParticleWidths.word);
-    memSize <= Const(0, width: 2);
-    memWEn <= Const(0);
-    memREn <= Const(0);
+    Sequential(clk, reset: reset, resetValues: {
+      pc: Const(config.trapTableBase, width: ParticleWidths.word),
+      state: Const(stateFetch, width: 2),
+    }, [
+      // Priority 1: Inbound MBOX Strobe Interruption
+      If(mboxStrobeIn, then: [
+        pc < mboxTarget,
+        state < Const(stateFetch, width: 2),
+      ], orElse: [
+        Case(state, [
+          // State 0: Fetch -> Transition to Execute
+          CaseItem(Const(stateFetch, width: 2), [
+            state < Const(stateExec, width: 2),
+          ]),
+          // State 1: Execute
+          CaseItem(Const(stateExec, width: 2), [
+            If(opcode.eq(Const(ParticleOpcodes.wait, width: 8)), then: [
+              // WAIT instruction halts pipeline advancement until strobe
+              state < Const(stateWait, width: 2),
+            ], orElse: [
+              pc < pc + Const(2, width: ParticleWidths.word),
+              state < Const(stateFetch, width: 2),
+            ]),
+          ]),
+          // State 2: Stalled / Waiting for MBOX Strobe
+          CaseItem(Const(stateWait, width: 2), [
+            // Remains parked here until mboxStrobeIn asserts
+          ]),
+        ]),
+      ]),
+    ]);
   }
 }

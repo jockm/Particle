@@ -7,7 +7,6 @@
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
-
 import 'constants.dart';
 import 'cpu_config.dart';
 import 'cpu_core.dart';
@@ -69,23 +68,15 @@ class CacheSubsystemTop extends Module {
     final c1ToC0Vector = Logic(name: 'c1_to_c0_vector', width: 4);
 
     // Mock/Bypass Read Data lines for local core instruction & data caches
-    final c0MemARData = Logic(
-      name: 'c0_mem_a_rdata',
-      width: ParticleWidths.halfWord,
-    );
-    final c0MemBRData = Logic(
-      name: 'c0_mem_b_rdata',
-      width: ParticleWidths.word,
-    );
+    final c0MemARData =
+        Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c0MemBRData =
+        Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
 
-    final c1MemARData = Logic(
-      name: 'c1_mem_a_rdata',
-      width: ParticleWidths.halfWord,
-    );
-    final c1MemBRData = Logic(
-      name: 'c1_mem_b_rdata',
-      width: ParticleWidths.word,
-    );
+    final c1MemARData =
+        Logic(name: 'c1_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c1MemBRData =
+        Logic(name: 'c1_mem_b_rdata', width: ParticleWidths.word);
 
     // -------------------------------------------------------------------------
     // Core 0 Instantiation (Application / Client Core)
@@ -137,21 +128,17 @@ class CacheSubsystemTop extends Module {
     // -------------------------------------------------------------------------
     const mmioMailboxAddr = 0xF0000020;
 
-    final c0MbWrite =
-        core0.memPortBWEn &
-        core0.memPortBAddr.eq(
-          Const(mmioMailboxAddr, width: ParticleWidths.word),
-        );
+    final c0MbWrite = core0.memPortBWEn &
+        core0.memPortBAddr
+            .eq(Const(mmioMailboxAddr, width: ParticleWidths.word));
 
     c0ToC1Strobe <=
         c0MbWrite & core0.memPortBWData.slice(7, 4).eq(Const(1, width: 4));
     c0ToC1Vector <= core0.memPortBWData.slice(3, 0);
 
-    final c1MbWrite =
-        core1.memPortBWEn &
-        core1.memPortBAddr.eq(
-          Const(mmioMailboxAddr, width: ParticleWidths.word),
-        );
+    final c1MbWrite = core1.memPortBWEn &
+        core1.memPortBAddr
+            .eq(Const(mmioMailboxAddr, width: ParticleWidths.word));
 
     c1ToC0Strobe <=
         c1MbWrite & core1.memPortBWData.slice(7, 4).eq(Const(0, width: 4));
@@ -171,39 +158,29 @@ class CacheSubsystemTop extends Module {
     final sdramCmdReq = Logic(name: 'sdram_cmd_req');
     final sdramCmdRw = Logic(name: 'sdram_cmd_rw');
 
-    Sequential(
-      clk,
-      reset: reset,
-      resetValues: {
-        regSdramAddr: Const(0, width: 24),
-        sdramCmdReq: Const(0),
-        sdramCmdRw: Const(0),
-      },
-      [
-        sdramCmdReq < 0,
+    Sequential(clk, reset: reset, resetValues: {
+      regSdramAddr: Const(0, width: 24),
+      sdramCmdReq: Const(0),
+      sdramCmdRw: Const(0),
+    }, [
+      sdramCmdReq < 0,
+      If(core1.memPortBWEn, then: [
         If(
-          core1.memPortBWEn,
-          then: [
-            If(
-              core1.memPortBAddr.eq(
-                Const(mmioSdramAddr, width: ParticleWidths.word),
-              ),
-              then: [regSdramAddr < core1.memPortBWData.slice(23, 0)],
-            ),
-            If(
-              core1.memPortBAddr.eq(
-                Const(mmioSdramCmd, width: ParticleWidths.word),
-              ),
-              then: [
-                sdramCmdReq < 1,
-                sdramCmdRw <
-                    core1.memPortBWData.slice(1, 0).eq(Const(2, width: 2)),
-              ],
-            ),
-          ],
-        ),
-      ],
-    );
+            core1.memPortBAddr
+                .eq(Const(mmioSdramAddr, width: ParticleWidths.word)),
+            then: [
+              regSdramAddr < core1.memPortBWData.slice(23, 0),
+            ]),
+        If(
+            core1.memPortBAddr
+                .eq(Const(mmioSdramCmd, width: ParticleWidths.word)),
+            then: [
+              sdramCmdReq < 1,
+              sdramCmdRw <
+                  core1.memPortBWData.slice(1, 0).eq(Const(2, width: 2)),
+            ]),
+      ]),
+    ]);
 
     // -------------------------------------------------------------------------
     // SDRAM Controller Instantiation
@@ -216,11 +193,9 @@ class CacheSubsystemTop extends Module {
       cmdAddr: regSdramAddr,
       cmdBurstLen: Const(8, width: 8),
       wdata: core1.memPortBWData.slice(15, 0),
-      wdataValid:
-          core1.memPortBWEn &
-          core1.memPortBAddr.eq(
-            Const(mmioSdramWData, width: ParticleWidths.word),
-          ),
+      wdataValid: core1.memPortBWEn &
+          core1.memPortBAddr
+              .eq(Const(mmioSdramWData, width: ParticleWidths.word)),
       sdramDqIn: sdramDqIn,
       clkFreqMhz: clkFreqMhz,
       casLatency: casLatency,

@@ -141,4 +141,44 @@ void main() {
       expect(alu.result.value.toInt(), equals(1));
     });
   });
+  group('Particle ALU Tests', () {
+    test('NOT and NEZ operations', () async {
+      final aluOp = Logic(name: 'aluOp', width: 5);
+      final operandA = Logic(name: 'operandA', width: 32);
+      final operandB = Logic(name: 'operandB', width: 32);
+
+      final alu = ParticleAlu(
+        aluOp: aluOp,
+        operandA: operandA,
+        operandB: operandB,
+      );
+
+      await alu.build();
+
+      // Test 1: Bitwise NOT
+      aluOp.put(AluOps.not);
+      operandA.put(0x00000000);
+      operandB.put(0);
+      Simulator.tick();
+      expect(alu.result.value.toInt(), equals(0xFFFFFFFF));
+
+      operandA.put(0xAAAAAAAA);
+      Simulator.tick();
+      expect(alu.result.value.toInt(), equals(0x55555555));
+
+      // Test 2: NEZ (Set on Not Equal Zero)
+      aluOp.put(AluOps.nez);
+      operandA.put(0);
+      Simulator.tick();
+      expect(alu.result.value.toInt(), equals(0));
+
+      operandA.put(1234);
+      Simulator.tick();
+      expect(alu.result.value.toInt(), equals(1));
+
+      operandA.put(0x80000000);
+      Simulator.tick();
+      expect(alu.result.value.toInt(), equals(1));
+    });
+  });
 }
