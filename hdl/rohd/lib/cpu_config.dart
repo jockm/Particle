@@ -1,8 +1,8 @@
 // =============================================================================
 // File: hdl/rohd/lib/cpu_config.dart
 // Architecture: Particle 32-bit RISC
-// Description: Parameterized core configuration supporting MR4 features, dual
-//              UARTs, optional execution units, and memory boundaries.
+// Description: Parameterized core configuration supporting dual UARTs,
+//              optional execution units, and memory boundaries.
 // =============================================================================
 
 class CpuConfig {
@@ -21,7 +21,7 @@ class CpuConfig {
   /// Hardware Core ID for multi-core topologies (Default: 0)
   final int coreId;
 
-  // ---------------- MR4 Hardware Configuration Options ----------------
+  // ---------------- Missing MR4 Hardware Configuration Options ----------------
 
   /// Enable single-cycle DSP multiplier hardware (if false, traps to soft emulation)
   final bool enableMultiplier;
@@ -32,27 +32,27 @@ class CpuConfig {
   /// On-chip tightly-coupled BRAM size in bytes (Default: 64 KB)
   final int tcmSizeBytes;
 
-  /// Base address for shared MMIO / external memory bus window (Default: 0xF0000000)
+  /// Base address for shared MMIO / external memory bus window
   final int mmioBaseAddr;
 
   // ---------------- Dual UART Peripheral Configuration ----------------
 
-  /// Enable onboard ULX3S fixed 3 Mbps FTDI UART (FIFO Channel 0)
+  /// Enable onboard ULX3S fixed 3 Mbps FTDI UART
   final bool enableUlx3sFtdiUart;
 
-  /// FIFO channel mapped to the 3 Mbps FTDI UART (Default: 0)
+  /// FIFO channel mapped to the 3 Mbps FTDI UART (Convention: Channel 0)
   final int ulx3sUartFifoChannel;
 
-  /// Base clock frequency in Hz feeding the core and UARTs (Default: 25 MHz)
+  /// Base clock frequency in Hz feeding the UART logic (e.g., 25_000_000 on ULX3S)
   final int systemClockHz;
 
-  /// Enable arbitrary-baud auxiliary UART routed to external GPIO / PMOD (FIFO Channel 1)
+  /// Enable arbitrary-baud auxiliary UART routed to external GPIO / PMOD headers
   final bool enableAuxGpioUart;
 
-  /// FIFO channel mapped to auxiliary GPIO UART (Default: 1)
+  /// FIFO channel mapped to auxiliary GPIO UART (Convention: Channel 1)
   final int auxUartFifoChannel;
 
-  /// Default baud rate for the auxiliary UART (Default: 115200)
+  /// Default baud rate for the auxiliary UART (e.g. 115200)
   final int auxUartDefaultBaud;
 
   const CpuConfig({

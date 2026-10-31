@@ -1,0 +1,18 @@
+name: parcore_rohd
+description: >-
+  Distributed 4-core pipelined CPU and cache controller topology built on
+  Particle cores in pure Intel ROHD.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  rohd: ^0.5.0
+  particle_rohd:
+    path: ../rohd
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0

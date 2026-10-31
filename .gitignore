@@ -31,3 +31,12 @@ apps/act/build/*
 !apps/act/build/.gitkeep
 apps/asm/build/*
 !apps/asm/build/.gitkeep
+
+# Parcore generated synthesis artifacts
+hdl/parcore/parcore_top.sv
+hdl/parcore/*.synth.json
+hdl/parcore/*.config
+hdl/parcore/*.bit
+
+# Stage kernel binary builds
+build/parcore/
