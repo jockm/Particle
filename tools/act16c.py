@@ -16,7 +16,7 @@ import argparse
 # ------------------------------------------------------------------------------
 
 TOKEN_TYPES = [
-    ('PREPROC',   r'#(?:ifdef|ifndef|else|endif)\b[^\n]*'),
+    ('PREPROC',   r'(?:[#.]\s*(?:ifdef|ifndef|if|else|endif)\b[^\n]*)'),
     ('COMMENT',   r'//[^\n]*|/\*[\s\S]*?\*/'),
     ('HEX',       r'0x[0-9a-fA-F]+'),
     ('INT',       r'\d+'),
@@ -66,8 +66,25 @@ def tokenize(source_text):
     return tokens
 
 # ------------------------------------------------------------------------------
-# Preprocessor (C-Style Conditionals: #ifdef, #ifndef, #else, #endif)
+# Preprocessor (Conditionals)
 # ------------------------------------------------------------------------------
+
+def eval_preproc_expr(expr_str, defines):
+    tokens = re.split(r'([+\-*/%<>&|^~() ]|\b0x[0-9a-fA-F]+\b|\b\d+\b|\b[a-zA-Z_]\w*\b)', expr_str)
+    substituted = []
+    for tok in tokens:
+        clean = tok.strip()
+        if not clean:
+            continue
+        if clean in defines:
+            substituted.append(str(defines[clean]))
+        else:
+            substituted.append(clean)
+    expr_eval = "".join(substituted)
+    try:
+        return int(eval(expr_eval, {"__builtins__": None}, {})) != 0
+    except Exception:
+        return False
 
 def run_preprocessor(tokens, defines):
     out = []
@@ -76,24 +93,31 @@ def run_preprocessor(tokens, defines):
     for t in tokens:
         if t.type == 'PREPROC':
             line = t.val.strip()
+            if line.startswith(('.', '#')):
+                line = line[1:].strip()
+
             parts = line.split(None, 1)
-            directive = parts[0]
+            directive = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""
 
-            if directive == '#ifdef':
+            if directive == 'ifdef':
                 active = (cond_stack[-1] if cond_stack else True) and (arg in defines)
                 cond_stack.append(active)
-            elif directive == '#ifndef':
+            elif directive == 'ifndef':
                 active = (cond_stack[-1] if cond_stack else True) and (arg not in defines)
                 cond_stack.append(active)
-            elif directive == '#else':
+            elif directive == 'if':
+                parent = cond_stack[-1] if cond_stack else True
+                cond_val = eval_preproc_expr(arg, defines) if parent else False
+                cond_stack.append(parent and cond_val)
+            elif directive == 'else':
                 if not cond_stack:
-                    raise SyntaxError(f"Line {t.lineno}: #else without matching #if block")
+                    raise SyntaxError(f"Line {t.lineno}: else without matching conditional block")
                 parent = cond_stack[-2] if len(cond_stack) > 1 else True
                 cond_stack[-1] = parent and (not cond_stack[-1])
-            elif directive == '#endif':
+            elif directive == 'endif':
                 if not cond_stack:
-                    raise SyntaxError(f"Line {t.lineno}: #endif without matching #if block")
+                    raise SyntaxError(f"Line {t.lineno}: endif without matching conditional block")
                 cond_stack.pop()
             continue
 
@@ -162,6 +186,14 @@ class UnaryOpNode(ASTNode):
     def __init__(self, op, operand):
         self.op = op
         self.operand = operand
+
+class StringLitNode(ASTNode):
+    def __init__(self, val):
+        self.val = val
+
+class TrapNode(ASTNode):
+    def __init__(self, trap_num):
+        self.trap_num = trap_num
 
 class CallNode(ASTNode):
     def __init__(self, name, args):
@@ -373,6 +405,10 @@ class Parser:
         if tok.type in ('INT', 'HEX'):
             self.consume()
             return IntLitNode(int(tok.val, 0))
+        if tok.type == 'STRING':
+            self.consume()
+            raw = bytes(tok.val[1:-1], 'utf-8').decode('unicode_escape')
+            return StringLitNode(raw)
         if tok.type == 'IDENT':
             name = self.consume().val
             if self.peek().val == '(':
@@ -386,6 +422,8 @@ class Parser:
                         else:
                             break
                 self.consume('PUNCT', ')')
+                if name == 'trap' and len(args) == 1 and isinstance(args[0], IntLitNode):
+                    return TrapNode(args[0].val)
                 return CallNode(name, args)
             return VarAccessNode(name)
         if tok.val == '(':
@@ -408,6 +446,7 @@ class CodeGen:
         self.types = {}
         self.stack_offset = 0
         self.current_func_name = ""
+        self.strings = []
 
     def emit(self, line, comment=""):
         if comment:
@@ -420,7 +459,7 @@ class CodeGen:
 
     def new_label(self, prefix="L"):
         self.label_counter += 1
-        return f"._{prefix}_{self.label_counter}"
+        return f"_{prefix}_{self.label_counter}"
 
     def emit_immediate(self, reg, val):
         v = val & 0xFFFFFFFF
@@ -434,16 +473,6 @@ class CodeGen:
             self.emit(f"LOAD24  R{reg}, 0x{v:06X}", f"LOAD24 tiered ({val})")
         else:
             self.emit(f"LOAD32  R{reg}, 0x{v:08X}", f"LOAD32 full word ({val})")
-
-    def emit_branch_if_zero(self, reg, target_label):
-        """
-        Emits an 8-bit forward branch to target_label if reg == 0.
-        Uses a local skip label so pasm.py calculates the 4-bit offset correctly.
-        """
-        lbl_skip = self.new_label("skip_zero_branch")
-        self.emit(f"FBRA.P  R{reg}, {lbl_skip}", "Skip wide branch if true")
-        self.emit(f"FBRA    {target_label}", "Wide branch if false/zero")
-        self.emit_label(lbl_skip)
 
     def generate(self, root):
         self.asm.append("; ==============================================================================")
@@ -462,9 +491,7 @@ class CodeGen:
             self.asm.append("; ------------------------------------------------------------------------------")
             self.asm.append(".org 0x00000100")
             self.emit_label("_vector_reset")
-            self.emit("LOAD32  R15, 0x00010000", "Initialize Stack Pointer (top of 64KB)")
-            self.emit("LOAD32  R14, _main", "Load entry address")
-            self.emit("JMP     R14, R0", "Jump to _main (R0 discards return link)")
+            self.emit("FBRA    _main", "Branch directly to main")
             self.emit(".align  64")
             self.asm.append("")
             self.emit_label("_vector_mbox")
@@ -490,6 +517,16 @@ class CodeGen:
         for f in func_decls:
             self.gen_func(f)
 
+        if self.strings:
+            self.asm.append("; ------------------------------------------------------------------------------")
+            self.asm.append("; String Literal Table")
+            self.asm.append("; ------------------------------------------------------------------------------")
+            for lbl, s in self.strings:
+                escaped = s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                self.emit_label(lbl)
+                self.emit(f'.asciz  "{escaped}"')
+            self.asm.append("")
+
         return "\n".join(self.asm)
 
     def gen_func(self, func):
@@ -499,11 +536,18 @@ class CodeGen:
         self.asm.append("; ------------------------------------------------------------------------------")
         self.emit_label(f"_{func.name}")
 
-        if func.name != "main":
-            self.emit("PUSH32  R14", "Preserve return address link")
-        
         self.locals = {}
         self.stack_offset = 0
+
+        # Prologue
+        if func.name == "main":
+            self.emit("LD      R14, 1", "Accumulate 0x00010000 into R14")
+            self.emit("PUSH8   R14, 0")
+            self.emit("PUSH8   R14, 0")
+            self.emit("LD      R15, R14", "Initialize Stack Pointer (SP = 0x00010000)")
+        else:
+            self.emit("PUSH32  R14", "Preserve return address link")
+            self.stack_offset = 4
 
         for i, (p_type, p_ptr, p_name) in enumerate(func.params):
             self.types[p_name] = (p_type, p_ptr)
@@ -514,16 +558,20 @@ class CodeGen:
 
         self.gen_block(func.body)
 
-        self.emit_label(f"._epilogue_{func.name}")
-        if self.stack_offset > 0:
-            self.emit(f"LOAD16  R14, {self.stack_offset}")
-            self.emit("ADD     R15, R14", "Deallocate stack frame")
-
+        # Epilogue
+        self.emit_label(f"_epilogue_{func.name}")
         if func.name == "main":
-            spin_lbl = f"._halt_{func.name}"
+            if self.stack_offset > 0:
+                self.emit_immediate(14, self.stack_offset)
+                self.emit("ADD     R15, R14", "Deallocate stack frame")
+            spin_lbl = f"_halt_{func.name}"
             self.emit_label(spin_lbl)
             self.emit(f"FBRA    {spin_lbl}", "Halt loop upon main completion")
         else:
+            frame_locals = self.stack_offset - 4
+            if frame_locals > 0:
+                self.emit_immediate(14, frame_locals)
+                self.emit("ADD     R15, R14", "Deallocate locals and spilled params")
             self.emit("POP32   R14", "Restore return address link")
             self.emit("RRET", "Return to caller")
         self.asm.append("")
@@ -553,31 +601,50 @@ class CodeGen:
         elif isinstance(stmt, ReturnNode):
             if stmt.expr:
                 self.gen_expr(stmt.expr, target_reg=1)
-            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
+            self.emit(f"FBRA    _epilogue_{self.current_func_name}")
 
         elif isinstance(stmt, IfNode):
             lbl_else = self.new_label("else")
             lbl_end = self.new_label("endif")
+            lbl_then = self.new_label("then")
+            lbl_tramp = self.new_label("if_tramp")
+            target = lbl_else if stmt.else_body else lbl_end
+
+            # Evaluate condition into R1
             self.gen_expr(stmt.cond, target_reg=1)
+
+            # Local 4-bit skip over an 8-bit wide FBRA trampoline
+            self.emit(f"FBRA.Z  R1, {lbl_tramp}", "If condition == 0, go to trampoline")
+            self.emit(f"FBRA    {lbl_then}", "If condition != 0, go to then body")
+            self.emit_label(lbl_tramp)
+            self.emit(f"FBRA    {target}", "Jump to else/endif (8-bit reach)")
+            self.emit_label(lbl_then)
+
+            self.gen_stmt(stmt.then_body)
             if stmt.else_body:
-                self.emit_branch_if_zero(1, lbl_else)
-                self.gen_stmt(stmt.then_body)
                 self.emit(f"FBRA    {lbl_end}")
                 self.emit_label(lbl_else)
                 self.gen_stmt(stmt.else_body)
-            else:
-                self.emit_branch_if_zero(1, lbl_end)
-                self.gen_stmt(stmt.then_body)
             self.emit_label(lbl_end)
 
         elif isinstance(stmt, WhileNode):
             lbl_loop = self.new_label("while_start")
             lbl_end = self.new_label("while_end")
+            lbl_body = self.new_label("while_body")
+            lbl_tramp = self.new_label("while_tramp")
+
             self.emit_label(lbl_loop)
             self.gen_expr(stmt.cond, target_reg=1)
-            self.emit_branch_if_zero(1, lbl_end)
+
+            # Local 4-bit skip over an 8-bit wide FBRA trampoline
+            self.emit(f"FBRA.Z  R1, {lbl_tramp}", "If condition == 0, go to trampoline")
+            self.emit(f"FBRA    {lbl_body}", "If condition != 0, enter loop body")
+            self.emit_label(lbl_tramp)
+            self.emit(f"FBRA    {lbl_end}", "Exit loop (8-bit reach)")
+            self.emit_label(lbl_body)
+
             self.gen_stmt(stmt.body)
-            self.emit(f"BBRA    {lbl_loop}", "Loop back (8-bit backward reach)")
+            self.emit(f"BBRA    {lbl_loop}", "Loop back (8-bit reach)")
             self.emit_label(lbl_end)
 
     def gen_expr(self, expr, target_reg=1):
@@ -642,6 +709,15 @@ class CodeGen:
             elif expr.op in ('==', '!=', '<', '<=', '>', '>='):
                 self._gen_relational(expr.op, target_reg)
 
+        elif isinstance(expr, StringLitNode):
+            lbl = self.new_label("str")
+            self.strings.append((lbl, expr.val))
+            self.emit(f"LOAD32  R{target_reg}, {lbl}", "Load string address")
+
+        elif isinstance(expr, TrapNode):
+            self.emit(f"TRAP    {expr.trap_num}", f"Trigger Trap #{expr.trap_num}")
+            self.emit(f"LD      R{target_reg}, 0")
+
         elif isinstance(expr, CallNode):
             if expr.name == 'readfifo':
                 chan = expr.args[0].val if isinstance(expr.args[0], IntLitNode) else 0
@@ -665,6 +741,51 @@ class CodeGen:
             self.emit(f"RCALL   _{expr.name}")
             if target_reg != 1:
                 self.emit(f"LD      R{target_reg}, R1")
+
+        elif isinstance(expr, UnaryOpNode):
+            if expr.op == '*':
+                # Pointer dereference: evaluate pointer operand into addr reg (R14)
+                self.gen_expr(expr.operand, target_reg=14)
+                # Determine element type if operand is a variable access
+                t_name = 'u8'
+                if isinstance(expr.operand, VarAccessNode):
+                    var_t, _ = self.types.get(expr.operand.name, ('u8', True))
+                    t_name = var_t
+                self._emit_load_typed(target_reg, 14, t_name, is_ptr=False)
+                return
+
+            elif expr.op == '&':
+                if isinstance(expr.operand, VarAccessNode):
+                    name = expr.operand.name
+                    if name in self.locals:
+                        offset = self.stack_offset - self.locals[name]
+                        self.emit_immediate(target_reg, offset)
+                        self.emit(f"ADD     R{target_reg}, R15")
+                    elif name in self.globals:
+                        self.emit(f"LOAD32  R{target_reg}, _{name}")
+                return
+
+            elif expr.op == '-':
+                self.gen_expr(expr.operand, target_reg=target_reg)
+                self.emit(f"NEG     R{target_reg}")
+                return
+
+            elif expr.op == '~':
+                self.gen_expr(expr.operand, target_reg=target_reg)
+                self.emit(f"NOT     R{target_reg}")
+                return
+
+            elif expr.op == '!':
+                self.gen_expr(expr.operand, target_reg=target_reg)
+                lbl_true = self.new_label("lnot_true")
+                lbl_done = self.new_label("lnot_done")
+                self.emit(f"FBRA.Z  R{target_reg}, {lbl_true}")
+                self.emit(f"LD      R{target_reg}, 0")
+                self.emit(f"FBRA    {lbl_done}")
+                self.emit_label(lbl_true)
+                self.emit(f"LD      R{target_reg}, 1")
+                self.emit_label(lbl_done)
+                return
 
     def _emit_load_typed(self, dst, addr_reg, t_name, is_ptr):
         if is_ptr or t_name in ('u32', 's32'):
@@ -690,17 +811,14 @@ class CodeGen:
 
     def _gen_relational(self, op, target_reg):
         lbl_true = self.new_label("rel_true")
-        lbl_end = self.new_label("rel_end")
-        
+        lbl_done = self.new_label("rel_done")
         if op == '==':
             self.emit("SUB     R1, R2")
             self.emit(f"FBRA.Z  R1, {lbl_true}")
         elif op == '!=':
             self.emit("SUB     R1, R2")
-            lbl_skip = self.new_label("skip_neq")
-            self.emit(f"FBRA.Z  R1, {lbl_skip}")
+            self.emit(f"FBRA.Z  R1, {lbl_done}")
             self.emit(f"FBRA    {lbl_true}")
-            self.emit_label(lbl_skip)
         elif op == '<':
             self.emit("SLT     R1, R2")
             self.emit(f"FBRA.P  R1, {lbl_true}")
@@ -714,20 +832,17 @@ class CodeGen:
             self.emit("SLT     R2, R1")
             self.emit(f"FBRA.P  R2, {lbl_true}")
 
-        # False path: load 0 and jump to end
         self.emit(f"LD      R{target_reg}, 0")
-        self.emit(f"FBRA    {lbl_end}")
-        # True path: load 1
+        self.emit(f"FBRA    {lbl_done}")
         self.emit_label(lbl_true)
         self.emit(f"LD      R{target_reg}, 1")
-        self.emit_label(lbl_end)
-
+        self.emit_label(lbl_done)
 
 def main():
     parser = argparse.ArgumentParser(description="ACT16 Systems Language Compiler for Particle")
     parser.add_argument("source", help="Input ACT16 source file (.act / .c)")
     parser.add_argument("-o", "--output", default=None, help="Output assembly file (.asm)")
-    parser.add_argument("-D", "--define", action="append", default=[], help="Predefine symbol for conditional compilation")
+    parser.add_argument("-D", "--define", action="append", default=[], help="Predefine symbol (KEY[=VALUE])")
     args = parser.parse_args()
 
     if not args.output:
@@ -738,7 +853,13 @@ def main():
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    defs = set(args.define)
+    defs = {}
+    for d in args.define:
+        if "=" in d:
+            k, v = d.split("=", 1)
+            defs[k.strip()] = int(v.strip(), 0) if v.strip().lstrip('-').isdigit() or v.strip().startswith('0x') else v.strip()
+        else:
+            defs[d.strip()] = 1
 
     with open(args.source, 'r', encoding='utf-8') as f:
         src = f.read()

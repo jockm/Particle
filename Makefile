@@ -15,7 +15,8 @@ PARCORE_DIR  := hdl/parcore
 BUILD_DIR    := build
 PARCORE_BLD  := $(BUILD_DIR)/parcore
 
-FIRMWARE_SRCS := $(wildcard firmware/parcore/*.asm)
+# Recursive wildcard across firmware/parcore to support multiple sub-firmwares (e.g. riscv)
+FIRMWARE_SRCS := $(shell find firmware/parcore -name '*.asm' 2>/dev/null)
 FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWARE_SRCS))
 
 APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
@@ -45,7 +46,7 @@ help:
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
 	@echo "  make test-sim         - Run pasm and psim verification test suites"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
-	@echo "  make firmware         - Assemble Parcore pipeline microkernels"
+	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Compile ACT16 programs and assemble ASM apps"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
 
@@ -97,7 +98,9 @@ build: firmware apps generate
 
 firmware: $(FIRMWARE_BINS)
 
-$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm | $(PARCORE_BLD)
+# Preserves nested firmware subdirectories (e.g. firmware/parcore/riscv/foo.asm -> build/parcore/riscv/foo.bin)
+$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
+	@mkdir -p $(dir $@)
 	@echo "==> Assembling Parcore stage kernel $< -> $@"
 	@$(PASM) "$<" -I lib -o "$@" --format bin
 
@@ -115,7 +118,7 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.asm | $(BUILD_DIR)
 	@echo "==> Assembling compiled ACT16 app $< -> $@"
 	@$(PASM) "$<" -I lib -o "$@" --format bin
 
-$(BUILD_DIR) $(PARCORE_BLD):
+$(BUILD_DIR):
 	@mkdir -p $@
 
 # ------------------------------------------------------------------------------

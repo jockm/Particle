@@ -1,615 +1,440 @@
 #!/usr/bin/env python3
-"""
-================================================================================
-Particle Macro Assembler (pasm.py)
-Architecture: Particle 32-bit RISC (16-bit compact instruction encoding)
-================================================================================
-"""
+# ==============================================================================
+# Particle Macro Assembler (pasm.py)
+# Architecture: Particle 32-bit RISC (16-bit compact instruction encoding)
+# ==============================================================================
 
 import sys
 import os
 import re
 import argparse
-from typing import List, Dict, Tuple, Optional, Any
 
 REG_MAP = {f"r{i}": i for i in range(16)}
 REG_MAP["sp"] = 15
 
+def split_label(line):
+    """Splits line into (label, rest) at the first unquoted colon ':'.
+    Returns (None, line) if no unquoted colon exists.
+    """
+    in_quote = False
+    quote_char = None
+    for idx, ch in enumerate(line):
+        if ch in ('"', "'"):
+            if not in_quote:
+                in_quote = True
+                quote_char = ch
+            elif ch == quote_char and (idx == 0 or line[idx - 1] != '\\'):
+                in_quote = False
+        elif ch == ':' and not in_quote:
+            return line[:idx].strip(), line[idx + 1:].strip()
+    return None, line
+
 class AssemblerError(Exception):
-    def __init__(self, message: str, filename: Optional[str] = None, lineno: Optional[int] = None):
-        loc = f"{filename or 'input'}:{lineno or '?'}: error: "
-        super().__init__(f"{loc}{message}")
+    def __init__(self, message, filename=None, lineno=None):
+        super().__init__(f"{filename or 'input'}:{lineno or '?'}: error: {message}")
         self.message = message
         self.filename = filename
         self.lineno = lineno
 
 class Macro:
-    def __init__(self, name: str, params: List[str], lines: List[str], filename: str, lineno: int):
-        self.name = name.upper()
+    def __init__(self, name, params, lines, filename, lineno):
+        self.name = name
         self.params = [p.strip() for p in params if p.strip()]
         self.lines = lines
         self.filename = filename
         self.lineno = lineno
 
 class Preprocessor:
-    def __init__(self, include_dirs: Optional[List[str]] = None, defines: Optional[Dict[str, int]] = None):
+    def __init__(self, include_dirs=None, defines=None):
         self.include_dirs = include_dirs or ["."]
-        self.defines: Dict[str, Any] = defines or {}
-        self.macros: Dict[str, Macro] = {}
+        self.defines = defines or {}
+        self.macros = {}
         self.macro_counter = 0
 
-    def _split_args(self, arg_str: str) -> List[str]:
-        tokens = []
-        cur = []
-        in_paren = 0
-        in_quote = False
-        for ch in arg_str:
-            if ch == '"':
-                in_quote = not in_quote
-                cur.append(ch)
-            elif ch == '(' and not in_quote:
-                in_paren += 1
-                cur.append(ch)
-            elif ch == ')' and not in_quote:
-                in_paren -= 1
-                cur.append(ch)
-            elif ch == ',' and in_paren == 0 and not in_quote:
-                tokens.append("".join(cur).strip())
-                cur = []
+    def resolve_include(self, current_file, inc_path):
+        candidates = [
+            os.path.join(os.path.dirname(current_file), inc_path),
+            inc_path
+        ]
+        for idir in self.include_dirs:
+            candidates.append(os.path.join(idir, inc_path))
+            candidates.append(os.path.join(idir, os.path.basename(inc_path)))
+        for c in candidates:
+            if os.path.isfile(c):
+                return os.path.abspath(c)
+        raise FileNotFoundError(f"Include file not found: {inc_path}")
+
+    def parse_expr(self, expr_str, symbols):
+        expr_str = expr_str.strip()
+        tokens = re.split(r'([+\-*/<>&|^~() ]+)', expr_str)
+        resolved_tokens = []
+        for t in tokens:
+            ts = t.strip()
+            if not ts:
+                continue
+            if ts in symbols:
+                resolved_tokens.append(str(symbols[ts]))
+            elif ts in self.defines:
+                resolved_tokens.append(str(self.defines[ts]))
+            elif ts.lower() in REG_MAP:
+                resolved_tokens.append(str(REG_MAP[ts.lower()]))
             else:
-                cur.append(ch)
-        if cur:
-            tokens.append("".join(cur).strip())
-        return [t for t in tokens if t]
-
-    def _find_include(self, inc_name: str, current_file: str) -> Optional[str]:
-        # 1. Check direct path / relative to current working directory
-        if os.path.exists(inc_name):
-            return os.path.abspath(inc_name)
-
-        # 2. Check relative to current file directory
-        cur_dir = os.path.dirname(os.path.abspath(current_file))
-        cand = os.path.normpath(os.path.join(cur_dir, inc_name))
-        if os.path.exists(cand):
-            return cand
-
-        # 3. Check include search directories (-I)
-        for d in self.include_dirs:
-            cand1 = os.path.normpath(os.path.join(d, inc_name))
-            if os.path.exists(cand1):
-                return cand1
-            cand2 = os.path.normpath(os.path.join(d, os.path.basename(inc_name)))
-            if os.path.exists(cand2):
-                return cand2
-
-        return None
-
-    def parse_expr(self, expr_str: str, symbols: Optional[Dict[str, int]] = None) -> int:
-        expr = expr_str.strip()
-        context: Dict[str, Any] = {}
-        context.update(self.defines)
-        if symbols:
-            context.update(symbols)
-
-        # Replace hexadecimal 0x prefix if needed and handle logic operators
-        # Create safe evaluation environment
-        safe_dict = {
-            "__builtins__": None,
-            "abs": abs, "min": min, "max": max
-        }
-        safe_dict.update(context)
-
-        # Protect against empty expression
-        if not expr:
-            raise ValueError("Empty expression")
-
-        # Convert bitwise not if written as ~ or !
-        cleaned = re.sub(r'\btrue\b', '1', expr, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\bfalse\b', '0', cleaned, flags=re.IGNORECASE)
-
+                resolved_tokens.append(t)
+        expr_eval = "".join(resolved_tokens)
         try:
-            val = eval(cleaned, safe_dict)
-            return int(val)
+            return int(eval(expr_eval, {"__builtins__": {}}, {}))
         except Exception as e:
-            # Try evaluating simple integer conversion
-            try:
-                return int(expr, 0)
-            except Exception:
-                raise ValueError(f"Cannot evaluate '{expr_str}': {e}")
+            raise ValueError(f"Invalid expression '{expr_str}': {e}")
 
-    def preprocess_file(self, filename: str) -> List[Tuple[str, str, int]]:
+    def process(self, filename, lines=None, visited=None):
+        if visited is None:
+            visited = set()
         abs_path = os.path.abspath(filename)
-        if not os.path.exists(abs_path):
-            raise AssemblerError(f"File not found: '{filename}'")
+        
+        # Guard against cyclic includes, but allow macro body expansion
+        if lines is None:
+            if abs_path in visited:
+                return []
+            visited.add(abs_path)
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                raw_lines = f.readlines()
+        else:
+            raw_lines = lines
 
-        with open(abs_path, "r", encoding="utf-8") as f:
-            raw_lines = f.readlines()
-
-        return self._preprocess_lines(raw_lines, abs_path)
-
-    def _preprocess_lines(self, lines: List[str], current_file: str) -> List[Tuple[str, str, int]]:
-        out_lines: List[Tuple[str, str, int]] = []
-        cond_stack: List[Tuple[bool, bool]] = []  # (active, condition_met)
-        in_macro_def: Optional[Macro] = None
-        macro_body: List[str] = []
+        expanded = []
+        cond_stack = []
+        in_macro = None
         macro_name = ""
-        macro_params: List[str] = []
-        macro_start_line = 0
+        macro_params = []
+        macro_body = []
 
-        for lineno, line in enumerate(lines, start=1):
-            sline = line.rstrip("\r\n")
-            strip_line = sline.strip()
-
-            # Handle comments for directive checks
-            comment_idx = -1
-            in_q = False
-            for i, ch in enumerate(sline):
-                if ch == '"':
-                    in_q = not in_q
-                elif ch in (';', '#') and not in_q:
-                    comment_idx = i
-                    break
-            code_part = sline[:comment_idx].strip() if comment_idx >= 0 else strip_line
-
-            # Check macro definition end
-            if in_macro_def:
-                if code_part.upper().startswith(".ENDMACRO") or code_part.upper().startswith(".ENDM"):
-                    macro_obj = Macro(macro_name, macro_params, macro_body, current_file, macro_start_line)
-                    self.macros[macro_name.upper()] = macro_obj
-                    in_macro_def = None
-                else:
-                    macro_body.append(sline)
+        for lno, raw in enumerate(raw_lines, 1):
+            line = raw.split(';')[0].strip()
+            if not line:
                 continue
 
-            # Directive matching
-            if code_part.startswith("."):
-                parts = code_part.split(None, 1)
-                directive = parts[0].upper()
-                args = parts[1].strip() if len(parts) > 1 else ""
+            active = all(cond_stack) if cond_stack else True
 
-                # Conditionals
-                if directive == ".IFDEF":
-                    is_active = (not cond_stack or cond_stack[-1][0])
-                    cond = (args.split()[0] in self.defines) if args else False
-                    cond_stack.append((is_active and cond, cond))
+            if line.startswith('.'):
+                parts = line.split(None, 1)
+                directive = parts[0].lower()
+                arg = parts[1].strip() if len(parts) > 1 else ""
+
+                if directive == '.ifdef':
+                    cond_stack.append(arg in self.defines)
                     continue
-                elif directive == ".IFNDEF":
-                    is_active = (not cond_stack or cond_stack[-1][0])
-                    cond = (args.split()[0] not in self.defines) if args else False
-                    cond_stack.append((is_active and cond, cond))
+                elif directive == '.ifndef':
+                    cond_stack.append(arg not in self.defines)
                     continue
-                elif directive == ".IF":
-                    is_active = (not cond_stack or cond_stack[-1][0])
-                    try:
-                        cond = (self.parse_expr(args) != 0) if is_active else False
-                    except Exception:
-                        cond = False
-                    cond_stack.append((is_active and cond, cond))
+                elif directive == '.if':
+                    val = self.parse_expr(arg, self.defines)
+                    cond_stack.append(bool(val))
                     continue
-                elif directive == ".ELSE":
-                    if not cond_stack:
-                        raise AssemblerError(".ELSE without .IF", current_file, lineno)
-                    prev_active, prev_met = cond_stack.pop()
-                    parent_active = (not cond_stack or cond_stack[-1][0])
-                    cond_stack.append((parent_active and not prev_met, True))
+                elif directive == '.else':
+                    if cond_stack:
+                        cond_stack[-1] = not cond_stack[-1]
                     continue
-                elif directive == ".ENDIF":
-                    if not cond_stack:
-                        raise AssemblerError(".ENDIF without .IF", current_file, lineno)
-                    cond_stack.pop()
+                elif directive == '.endif':
+                    if cond_stack:
+                        cond_stack.pop()
                     continue
 
-            # Check active conditional block
-            if cond_stack and not cond_stack[-1][0]:
-                continue
-
-            if code_part.startswith("."):
-                parts = code_part.split(None, 1)
-                directive = parts[0].upper()
-                args = parts[1].strip() if len(parts) > 1 else ""
-
-                if directive == ".DEFINE":
-                    def_parts = args.split(None, 1)
-                    sym_name = def_parts[0]
-                    val_str = def_parts[1].strip() if len(def_parts) > 1 else "1"
-                    try:
-                        val = self.parse_expr(val_str)
-                    except Exception:
-                        val = val_str
-                    self.defines[sym_name] = val
+                if not active:
                     continue
 
-                elif directive in (".MACRO", ".MAC"):
-                    def_parts = re.split(r"[\s,]+", args)
-                    macro_name = def_parts[0]
-                    macro_params = def_parts[1:]
+                if directive == '.macro':
+                    m_parts = arg.split(None, 1)
+                    macro_name = m_parts[0]
+                    macro_params = [p.strip() for p in m_parts[1].split(',')] if len(m_parts) > 1 else []
+                    in_macro = True
                     macro_body = []
-                    macro_start_line = lineno
-                    in_macro_def = True
+                    continue
+                elif directive == '.endmacro':
+                    self.macros[macro_name] = Macro(macro_name, macro_params, macro_body, abs_path, lno)
+                    in_macro = False
+                    continue
+                elif directive == '.include':
+                    inc_file = arg.strip(' "\'')
+                    full_inc = self.resolve_include(abs_path, inc_file)
+                    expanded.extend(self.process(full_inc, visited=visited))
+                    continue
+                elif directive == '.define':
+                    def_parts = arg.split(None, 1)
+                    val = self.parse_expr(def_parts[1], self.defines) if len(def_parts) > 1 else 1
+                    self.defines[def_parts[0]] = val
                     continue
 
-                elif directive == ".INCLUDE":
-                    inc_file = args.strip('"\'')
-                    resolved = self._find_include(inc_file, current_file)
-                    if not resolved:
-                        raise AssemblerError(f"Include file '{inc_file}' not found", current_file, lineno)
-                    inc_lines = self.preprocess_file(resolved)
-                    out_lines.extend(inc_lines)
-                    continue
+            if in_macro:
+                macro_body.append(raw)
+                continue
 
-            # Check for Macro Invocations
-            first_tok = code_part.split(None, 1)[0] if code_part else ""
-            # Strip trailing colon if label
-            candidate_macro = first_tok.rstrip(":").upper()
+            if not active:
+                continue
 
-            # Separate optional label from instruction
-            label_prefix = ""
-            active_stmt = code_part
-            if ":" in code_part:
-                lbl, remainder = code_part.split(":", 1)
-                lbl = lbl.strip()
-                if re.match(r'^[a-zA-Z_.$][a-zA-Z0-9_.$]*$', lbl):
-                    label_prefix = f"{lbl}:\n"
-                    active_stmt = remainder.strip()
-                    if active_stmt:
-                        first_tok = active_stmt.split(None, 1)[0]
-                        candidate_macro = first_tok.upper()
-                    else:
-                        candidate_macro = ""
-
-            if candidate_macro and candidate_macro in self.macros:
-                macro = self.macros[candidate_macro]
-                rest_args = active_stmt.split(None, 1)[1] if len(active_stmt.split(None, 1)) > 1 else ""
-                call_args = self._split_args(rest_args)
-
+            first_word = line.split()[0]
+            if first_word in self.macros:
+                m = self.macros[first_word]
+                arg_str = line[len(first_word):].strip()
+                args = [a.strip() for a in arg_str.split(',')] if arg_str else []
                 self.macro_counter += 1
-                unique_suffix = f"_{candidate_macro.lower()}_{self.macro_counter}"
+                unique_suffix = f"_{self.macro_counter}"
 
-                # Parameter mapping
-                subst: Dict[str, str] = {}
-                for idx, p in enumerate(macro.params):
-                    val = call_args[idx] if idx < len(call_args) else ""
-                    subst[f"%{p}"] = val
-
-                expanded_lines: List[str] = []
-                for mline in macro.lines:
-                    cur_line = mline
-                    # Substitute parameters
-                    for k, v in subst.items():
-                        cur_line = cur_line.replace(k, v)
-                    # Substitute local unique label
-                    cur_line = cur_line.replace("._label_%", f"._L{unique_suffix}")
-                    expanded_lines.append(cur_line)
-
-                # Re-preprocess expanded macro lines recursively
-                if label_prefix:
-                    out_lines.append((label_prefix.strip(), current_file, lineno))
-                re_expanded = self._preprocess_lines(expanded_lines, current_file)
-                out_lines.extend(re_expanded)
+                m_lines = []
+                for ml in m.lines:
+                    sub_l = ml
+                    for param, val in zip(m.params, args):
+                        sub_l = sub_l.replace(f"%{param}", val)
+                    sub_l = sub_l.replace(".%", unique_suffix)
+                    m_lines.append(sub_l)
+                expanded.extend(self.process(abs_path, lines=m_lines, visited=visited))
                 continue
 
-            out_lines.append((sline, current_file, lineno))
+            expanded.append((abs_path, lno, line))
 
-        return out_lines
+        return expanded
 
 
-class Assembler:
-    def __init__(self):
-        self.symbols: Dict[str, int] = {}
-
-    def parse_reg(self, token: str, filename: Optional[str] = None, lineno: Optional[int] = None) -> int:
-        clean = token.strip().lower()
-        if clean not in REG_MAP:
-            raise AssemblerError(f"Invalid register operand '{token}'", filename, lineno)
-        return REG_MAP[clean]
-
-    def parse_val(self, token: str, symbols: Dict[str, int], preprocessor: Preprocessor,
-                  filename: Optional[str] = None, lineno: Optional[int] = None) -> int:
-        clean = token.strip()
-        try:
-            return preprocessor.parse_expr(clean, symbols)
-        except Exception:
-            if clean in symbols:
-                return symbols[clean]
-            raise AssemblerError(f"Undefined symbol or invalid expression '{token}'", filename, lineno)
-
-    def assemble(self, preprocessed_lines: List[Tuple[str, str, int]], preprocessor: Preprocessor):
+class ParticleAssembler:
+    def __init__(self, preprocessor):
+        self.prep = preprocessor
         self.symbols = {}
-        addr = 0x00000100
-        items: List[Tuple[int, Optional[str], str, str, str, int, int]] = []
+        self.pc = 0
 
-        # ======================================================================
-        # Pass 1: Symbol resolution & instruction length computation
-        # ======================================================================
-        for raw_line, fname, lno in preprocessed_lines:
-            line = raw_line.strip()
-            # Strip comments
-            c_idx = -1
-            in_q = False
-            for i, ch in enumerate(line):
-                if ch == '"':
-                    in_q = not in_q
-                elif ch in (';', '#') and not in_q:
-                    c_idx = i
+    def parse_reg(self, token, fname, lno):
+        t = token.strip().lower()
+        if t in REG_MAP:
+            return REG_MAP[t]
+        raise AssemblerError(f"Unknown register '{token}'", fname, lno)
+
+    def assemble(self, src_file):
+        processed_lines = self.prep.process(src_file)
+
+        # ----------------- PASS 1: Symbol Calculation -----------------
+        self.pc = 0x00000100
+        for fname, lno, line in processed_lines:
+            while True:
+                label_part, rest = split_label(line)
+                if label_part is None:
                     break
-            clean = line[:c_idx].strip() if c_idx >= 0 else line
+                if label_part:
+                    self.symbols[label_part] = self.pc
+                line = rest
 
-            # Collect labels
-            while ":" in clean:
-                lbl_part, remainder = clean.split(":", 1)
-                lbl = lbl_part.strip()
-                if not re.match(r'^[a-zA-Z_.$][a-zA-Z0-9_.$]*$', lbl):
+                if not line:
                     break
-                self.symbols[lbl] = addr
-                clean = remainder.strip()
 
-            if not clean:
-                items.append((addr, None, "", raw_line, fname, lno, 0))
+            if not line:
                 continue
 
-            parts = clean.split(None, 1)
-            mnemonic = parts[0].upper()
-            operands = parts[1].strip() if len(parts) > 1 else ""
+            if line.startswith('.'):
+                parts = line.split(None, 1)
+                d = parts[0].lower()
+                arg = parts[1].strip() if len(parts) > 1 else ""
+                if d == '.org':
+                    self.pc = self.prep.parse_expr(arg, self.symbols)
+                elif d == '.align':
+                    boundary = self.prep.parse_expr(arg, self.symbols)
+                    rem = self.pc % boundary
+                    if rem != 0:
+                        self.pc += (boundary - rem)
+                elif d == '.byte':
+                    self.pc += len(arg.split(','))
+                elif d == '.half':
+                    self.pc += len(arg.split(',')) * 2
+                elif d == '.word':
+                    self.pc += len(arg.split(',')) * 4
+                elif d == '.asciz':
+                    match = re.search(r'"(.*)"', arg)
+                    raw_str = match.group(1) if match else ""
+                    decoded_bytes = bytes(raw_str, 'utf-8').decode('unicode_escape').encode('latin1') + b'\x00'
+                    self.pc += len(decoded_bytes)
 
-            if mnemonic == ".ORG":
-                addr = preprocessor.parse_expr(operands, self.symbols)
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, 0))
-            elif mnemonic == ".ALIGN":
-                align_val = preprocessor.parse_expr(operands, self.symbols)
-                pad = 0
-                if align_val > 0 and (addr % align_val) != 0:
-                    pad = align_val - (addr % align_val)
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, pad))
-                addr += pad
-            elif mnemonic == ".BYTE":
-                split_items = preprocessor._split_args(operands)
-                length = len(split_items)
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, length))
-                addr += length
-            elif mnemonic == ".HALF":
-                split_items = preprocessor._split_args(operands)
-                length = len(split_items) * 2
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, length))
-                addr += length
-            elif mnemonic == ".WORD":
-                split_items = preprocessor._split_args(operands)
-                length = len(split_items) * 4
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, length))
-                addr += length
-            elif mnemonic == ".ASCIZ":
-                s = operands.strip('"') + "\0"
-                encoded = s.encode('utf-8')
-                length = len(encoded)
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, length))
-                addr += length
-            elif mnemonic.startswith("."):
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, 0))
             else:
-                # All Particle instructions are exactly 16 bits (2 bytes)
-                items.append((addr, mnemonic, operands, raw_line, fname, lno, 2))
-                addr += 2
+                self.pc += 2
 
-        # ======================================================================
-        # Pass 2: Binary code emission & listing construction
-        # ======================================================================
-        min_addr = min((item[0] for item in items if item[6] > 0), default=0x00000100)
-        max_addr = max((item[0] + item[6] for item in items), default=addr)
-        image = bytearray(max_addr)
-        listing_entries: List[Tuple[int, bytes, int, str]] = []
+        # ----------------- PASS 2: Code Emission & Listing -----------------
+        self.pc = 0x00000100
+        binary_data = {}
+        listing_lines = []
+        max_addr = self.pc
 
-        for cur_addr, mnemonic, operands, raw_line, fname, lno, size in items:
-            emitted_bytes = b""
-            if mnemonic and size > 0:
-                if mnemonic == ".ALIGN":
-                    emitted_bytes = b"\x00" * size
-                elif mnemonic == ".BYTE":
-                    b_vals = [self.parse_val(v, self.symbols, preprocessor, fname, lno) & 0xFF
-                              for v in preprocessor._split_args(operands)]
-                    emitted_bytes = bytes(b_vals)
-                elif mnemonic == ".HALF":
-                    h_bytes = bytearray()
-                    for v in preprocessor._split_args(operands):
-                        val = self.parse_val(v, self.symbols, preprocessor, fname, lno) & 0xFFFF
-                        h_bytes.extend([val & 0xFF, (val >> 8) & 0xFF])
-                    emitted_bytes = bytes(h_bytes)
-                elif mnemonic == ".WORD":
-                    w_bytes = bytearray()
-                    for v in preprocessor._split_args(operands):
-                        val = self.parse_val(v, self.symbols, preprocessor, fname, lno) & 0xFFFFFFFF
-                        w_bytes.extend([val & 0xFF, (val >> 8) & 0xFF, (val >> 16) & 0xFF, (val >> 24) & 0xFF])
-                    emitted_bytes = bytes(w_bytes)
-                elif mnemonic == ".ASCIZ":
-                    s = operands.strip('"') + "\0"
-                    emitted_bytes = s.encode('utf-8')
-                else:
-                    code = self._encode_instruction(cur_addr, mnemonic, operands, self.symbols, preprocessor, fname, lno)
-                    emitted_bytes = bytes([code & 0xFF, (code >> 8) & 0xFF])
+        for fname, lno, orig_line in processed_lines:
+            line = orig_line
+            while True:
+                lbl, rest = split_label(line)
+                if lbl is None:
+                    break
+                if lbl:
+                    listing_lines.append(f"                 {lbl}:")
+                line = rest
 
-                image[cur_addr:cur_addr + len(emitted_bytes)] = emitted_bytes
+            if not line:
+                continue
 
-            listing_entries.append((cur_addr, emitted_bytes, lno, raw_line))
+            start_pc = self.pc
+            emitted_bytes = []
 
-        return image, min_addr, max_addr, listing_entries
+            if line.startswith('.'):
+                parts = line.split(None, 1)
+                d = parts[0].lower()
+                arg = parts[1].strip() if len(parts) > 1 else ""
+                if d == '.org':
+                    self.pc = self.prep.parse_expr(arg, self.symbols)
+                elif d == '.align':
+                    boundary = self.prep.parse_expr(arg, self.symbols)
+                    rem = self.pc % boundary
+                    if rem != 0:
+                        pad = boundary - rem
+                        for _ in range(pad):
+                            binary_data[self.pc] = 0
+                            emitted_bytes.append(0)
+                            self.pc += 1
+                elif d == '.byte':
+                    for b in arg.split(','):
+                        v = self.prep.parse_expr(b, self.symbols) & 0xFF
+                        binary_data[self.pc] = v
+                        emitted_bytes.append(v)
+                        self.pc += 1
+                elif d == '.half':
+                    for h in arg.split(','):
+                        v = self.prep.parse_expr(h, self.symbols) & 0xFFFF
+                        binary_data[self.pc] = v & 0xFF
+                        binary_data[self.pc + 1] = (v >> 8) & 0xFF
+                        emitted_bytes.extend([v & 0xFF, (v >> 8) & 0xFF])
+                        self.pc += 2
+                elif d == '.word':
+                    for w in arg.split(','):
+                        v = self.prep.parse_expr(w, self.symbols) & 0xFFFFFFFF
+                        for i in range(4):
+                            b = (v >> (i * 8)) & 0xFF
+                            binary_data[self.pc + i] = b
+                            emitted_bytes.append(b)
+                        self.pc += 4
+                elif d == '.asciz':
+                    match = re.search(r'"(.*)"', arg)
+                    raw_str = match.group(1) if match else ""
+                    s = bytes(raw_str, 'utf-8').decode('unicode_escape').encode('latin1') + b'\x00'
+                    for ch in s:
+                        binary_data[self.pc] = ch
+                        emitted_bytes.append(ch)
+                        self.pc += 1
 
-    def _encode_instruction(self, pc: int, mnem: str, op_str: str,
-                            symbols: Dict[str, int], preprocessor: Preprocessor,
-                            fname: str, lno: int) -> int:
-        mnem = mnem.upper()
-        ops = preprocessor._split_args(op_str)
+            else:
+                inst_word = self.encode_instruction(line, self.pc, fname, lno)
+                b0 = inst_word & 0xFF
+                b1 = (inst_word >> 8) & 0xFF
+                binary_data[self.pc] = b0
+                binary_data[self.pc + 1] = b1
+                emitted_bytes.extend([b0, b1])
+                self.pc += 2
 
-        def get_r(idx: int) -> int:
+            max_addr = max(max_addr, self.pc)
+
+            # Format listing line
+            if emitted_bytes:
+                hex_str = "".join(f"{b:02X}" for b in emitted_bytes[:4])
+                listing_lines.append(f"{start_pc:08X}  {hex_str:<12} {lno:<5} {orig_line}")
+            else:
+                listing_lines.append(f"{start_pc:08X}  {'':<12} {lno:<5} {orig_line}")
+
+        return binary_data, max_addr, listing_lines
+
+    def parse_mem_operand(self, op_str, fname, lno):
+        s = op_str.strip()
+        if not (s.startswith('(') and s.endswith(')')):
+            return None
+        inner = s[1:-1].strip()
+        mode = 'standard'
+        if inner.startswith('++'):
+            mode = 'pre_inc'
+            reg_name = inner[2:].strip()
+        elif inner.startswith('--'):
+            mode = 'pre_dec'
+            reg_name = inner[2:].strip()
+        elif inner.endswith('++'):
+            mode = 'post_inc'
+            reg_name = inner[:-2].strip()
+        elif inner.endswith('--'):
+            mode = 'post_dec'
+            reg_name = inner[:-2].strip()
+        else:
+            reg_name = inner
+        r = self.parse_reg(reg_name, fname, lno)
+        return r, mode
+
+    def encode_instruction(self, line, pc, fname, lno):
+        tokens = line.split(None, 1)
+        mnem = tokens[0].upper()
+        op_str = tokens[1].strip() if len(tokens) > 1 else ""
+        ops = [o.strip() for o in op_str.split(',')] if op_str else []
+
+        def get_r(idx):
             if idx >= len(ops):
-                raise AssemblerError(f"Missing register operand #{idx+1}", fname, lno)
+                raise AssemblerError(f"Missing register operand {idx+1}", fname, lno)
             return self.parse_reg(ops[idx], fname, lno)
 
-        def get_v(idx: int) -> int:
+        def get_v(idx):
             if idx >= len(ops):
-                raise AssemblerError(f"Missing value operand #{idx+1}", fname, lno)
-            return self.parse_val(ops[idx], symbols, preprocessor, fname, lno)
+                raise AssemblerError(f"Missing immediate or label operand {idx+1}", fname, lno)
+            return self.prep.parse_expr(ops[idx], self.symbols)
 
-        # ---------------- 1. Loads & Immediates (0x00 - 0x06) ----------------
-        if mnem == "LD":
-            if len(ops) < 2:
-                raise AssemblerError("LD requires 2 operands", fname, lno)
+        # ---------------- Control Flow: BRANCH Rr (0xA4) ----------------
+        if mnem == 'BRANCH':
+            if len(ops) != 1:
+                raise AssemblerError("BRANCH expects 1 operand: BRANCH Rr", fname, lno)
             rr = get_r(0)
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (0x00 << 8) | (rr << 4) | rl
-            except AssemblerError:
-                pass
+            return (0xA4 << 8) | (rr << 4)
 
-            # Immediate format
-            val = get_v(1)
-            if rr == 14:
-                if 0 <= val <= 255:
-                    return (0x02 << 8) | (val & 0xFF)
-                elif -256 <= val < 0:
-                    return (0x04 << 8) | ((-val) & 0xFF)
-            if 0 <= val <= 15:
-                return (0x01 << 8) | (rr << 4) | (val & 0x0F)
-            elif -15 <= val < 0:
-                return (0x03 << 8) | (rr << 4) | ((-val) & 0x0F)
-            raise AssemblerError(f"Immediate value {val} out of range for LD", fname, lno)
+        # ---------------- Forward / Backward Branches ----------------
+        for branch_pfx, is_backward in (('FBRA', False), ('BBRA', True)):
+            if mnem == branch_pfx or mnem.startswith(branch_pfx + '.'):
+                cond = mnem[len(branch_pfx):]
 
-        if mnem == "PUSH4":
-            return (0x05 << 8) | (get_r(0) << 4) | (get_v(1) & 0x0F)
-        if mnem == "PUSH8":
-            rr = get_r(0)
-            if rr != 14:
-                raise AssemblerError("PUSH8 destination must be R14", fname, lno)
-            return (0x06 << 8) | (get_v(1) & 0xFF)
+                if cond == '':
+                    if len(ops) != 1:
+                        raise AssemblerError(f"{mnem} expects 1 operand: {mnem} <label>", fname, lno)
+                    tgt = get_v(0)
+                    diff = (pc - tgt) if is_backward else (tgt - pc)
+                    offset = diff // 2
+                    if not (0 <= offset <= 255):
+                        raise AssemblerError(f"Branch out of 8-bit unsigned range ({offset})", fname, lno)
+                    base_op = 0xC0 if is_backward else 0xB0
+                    return (base_op << 8) | (offset & 0xFF)
 
-        # ---------------- 2. Memory Loads & Stores (0x10 - 0x39) -------------
-        mem_match = re.match(r'^LD(8|16|32)$', mnem)
-        if mem_match:
-            width_sz = int(mem_match.group(1))
-            base_op = 0x10 if width_sz == 8 else (0x20 if width_sz == 16 else 0x30)
-            opA, opB = ops[0], ops[1]
+                if cond not in ('.Z', '.N', '.P', '.NZ'):
+                    raise AssemblerError(f"Invalid branch condition: {cond}", fname, lno)
 
-            # Store: LDx (Rr), Rl or variants
-            if opA.startswith("(") and opA.endswith(")"):
-                inner = opA[1:-1].strip()
-                rl = self.parse_reg(opB, fname, lno)
-                if inner.startswith("--"):
-                    rr = self.parse_reg(inner[2:], fname, lno)
-                    return ((base_op + 6) << 8) | (rr << 4) | rl
-                elif inner.endswith("--"):
-                    rr = self.parse_reg(inner[:-2], fname, lno)
-                    return ((base_op + 7) << 8) | (rr << 4) | rl
-                elif inner.endswith("++"):
-                    rr = self.parse_reg(inner[:-2], fname, lno)
-                    return ((base_op + 8) << 8) | (rr << 4) | rl
-                elif inner.startswith("++"):
-                    rr = self.parse_reg(inner[2:], fname, lno)
-                    return ((base_op + 9) << 8) | (rr << 4) | rl
+                cond_idx = {'.Z': 1, '.N': 2, '.P': 3, '.NZ': 4}[cond]
+
+                if len(ops) != 2:
+                    raise AssemblerError(f"{mnem} expects 2 operands: {mnem} Rr, <label>", fname, lno)
+
+                r = get_r(0)
+                tgt = get_v(1)
+                diff = (pc - tgt) if is_backward else (tgt - pc)
+                offset = diff // 2
+
+                if r == 14 and (offset > 15):
+                    if not (0 <= offset <= 255):
+                        raise AssemblerError(f"Branch out of 8-bit immediate range ({offset})", fname, lno)
+                    if is_backward:
+                        op = 0xCB if cond == '.NZ' else (0xC6 + cond_idx)
+                    else:
+                        op = 0xBB if cond == '.NZ' else (0xB6 + cond_idx)
+                    return (op << 8) | (offset & 0xFF)
+
+                if not (0 <= offset <= 15):
+                    raise AssemblerError(f"Branch out of 4-bit immediate range ({offset})", fname, lno)
+
+                if is_backward:
+                    op = 0xCA if cond == '.NZ' else (0xC3 + cond_idx)
                 else:
-                    rr = self.parse_reg(inner, fname, lno)
-                    return ((base_op + 1) << 8) | (rr << 4) | rl
+                    op = 0xBA if cond == '.NZ' else (0xB3 + cond_idx)
+                return (op << 8) | (r << 4) | (offset & 0xF)
 
-            # Load: LDx Rr, (Rl) or variants
-            elif opB.startswith("(") and opB.endswith(")"):
-                inner = opB[1:-1].strip()
-                rr = self.parse_reg(opA, fname, lno)
-                if inner.endswith("++"):
-                    rl = self.parse_reg(inner[:-2], fname, lno)
-                    return ((base_op + 2) << 8) | (rr << 4) | rl
-                elif inner.startswith("++"):
-                    rl = self.parse_reg(inner[2:], fname, lno)
-                    return ((base_op + 3) << 8) | (rr << 4) | rl
-                elif inner.endswith("--"):
-                    rl = self.parse_reg(inner[:-2], fname, lno)
-                    return ((base_op + 4) << 8) | (rr << 4) | rl
-                elif inner.startswith("--"):
-                    rl = self.parse_reg(inner[2:], fname, lno)
-                    return ((base_op + 5) << 8) | (rr << 4) | rl
-                else:
-                    rl = self.parse_reg(inner, fname, lno)
-                    return (base_op << 8) | (rr << 4) | rl
-
-        # ---------------- 3. Unsigned & Signed Math (0x40 - 0x57) ------------
-        math_map = {
-            "ADD": 0x40, "SUB": 0x41, "DIV": 0x42, "MOD": 0x43,
-            "SADD": 0x50, "SSUB": 0x51, "SDIV": 0x52, "SMOD": 0x53,
-        }
-        if mnem in math_map:
-            rr = get_r(0)
-            base_op = math_map[mnem]
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (base_op << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return ((base_op + 4) << 8) | (rr << 4) | (val & 0x0F)
-
-        # ---------------- 4. Shifts, Logic & Sign-Ext (0x60 - 0x77) ----------
-        logic_map = {
-            "SHIFTL": 0x60, "SHIFTR": 0x62, "ASHIFTR": 0x63,
-            "ROTL": 0x64, "ROTR": 0x65, "AND": 0x66, "OR": 0x67, "XOR": 0x68
-        }
-        if mnem in logic_map:
-            rr = get_r(0)
-            base_op = logic_map[mnem]
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (base_op << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                imm_op = (0x69 if mnem == "SHIFTL" else
-                          (0x6B if mnem == "SHIFTR" else
-                           (0x6C if mnem == "ASHIFTR" else
-                            (0x6D if mnem == "ROTL" else
-                             (0x6E if mnem == "ROTR" else
-                              (0x6F if mnem == "AND" else
-                               (0x70 if mnem == "OR" else 0x71)))))))
-                return (imm_op << 8) | (rr << 4) | (val & 0x0F)
-
-        if mnem == "SEXT8":
-            return (0x61 << 8) | (get_r(0) << 4)
-        if mnem == "SEXT16":
-            return (0x6A << 8) | (get_r(0) << 4)
-
-        # ---------------- 5. Newly Added Inversion & Boolean (0x72 - 0x73) ----
-        if mnem == "NOT":
-            return (0x72 << 8) | (get_r(0) << 4)
-        if mnem == "NEZ":
-            return (0x73 << 8) | (get_r(0) << 4)
-
-        # ---------------- 6. Multipliers (0x78 - 0x7F) -----------------------
-        mul_map = {"MULL": 0x78, "MULH": 0x79, "SMULH": 0x7A, "MULHSU": 0x7B}
-        if mnem in mul_map:
-            rr = get_r(0)
-            base_op = mul_map[mnem]
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (base_op << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return ((base_op + 4) << 8) | (rr << 4) | (val & 0x0F)
-
-        # ---------------- 7. Bit Manipulation & System (0x80 - 0x8B) ---------
-        if mnem == "BEXTR":
-            return (0x80 << 8) | (get_r(0) << 4) | get_r(1)
-        if mnem == "JTBL":
-            return (0x81 << 8) | (get_r(0) << 4) | get_r(1)
-        if mnem == "CLZ":
-            return (0x82 << 8) | (get_r(0) << 4) | get_r(1)
-        if mnem in ("BSET", "BCLR", "BINV", "BGET"):
-            rr = get_r(0)
-            base_op = 0x83 if mnem == "BSET" else (0x85 if mnem == "BCLR" else (0x87 if mnem == "BINV" else 0x89))
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (base_op << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return ((base_op + 1) << 8) | (rr << 4) | (val & 0x0F)
-
-        if mnem == "TAS":
-            op0 = ops[0].strip("()")
-            return (0x8B << 8) | (self.parse_reg(op0, fname, lno) << 4) | get_r(1)
-
-        # ---------------- 8. Comparisons (0x90 - 0x99) -----------------------
-        if mnem in ("SLT", "SSLT"):
-            base_op = 0x90 if mnem == "SLT" else 0x95
+        # ---------------- Relational Comparisons: SLT / SSLT ----------------
+        if mnem in ('SLT', 'SSLT'):
+            base_op = 0x90 if mnem == 'SLT' else 0x95
             rr = get_r(0)
             try:
                 rl = self.parse_reg(ops[1], fname, lno)
@@ -619,217 +444,276 @@ class Assembler:
                 if rr == 14:
                     if 0 <= val <= 255:
                         return ((base_op + 3) << 8) | (val & 0xFF)
-                    elif -256 <= val < 0:
+                    elif -255 <= val < 0:
                         return ((base_op + 4) << 8) | ((-val) & 0xFF)
                 if 0 <= val <= 15:
-                    return ((base_op + 1) << 8) | (rr << 4) | (val & 0x0F)
+                    return ((base_op + 1) << 8) | (rr << 4) | (val & 0xF)
                 elif -15 <= val < 0:
-                    return ((base_op + 2) << 8) | (rr << 4) | ((-val) & 0x0F)
-                raise AssemblerError(f"Immediate {val} out of range for {mnem}", fname, lno)
+                    return ((base_op + 2) << 8) | (rr << 4) | ((-val) & 0xF)
+                raise AssemblerError(f"Immediate value {val} out of range for {mnem}", fname, lno)
 
-        # ---------------- 9. Control Flow & Sync (0xA0 - 0xA4) ---------------
-        if mnem == "JMP":
+        # ---------------- Memory Operations ----------------
+        for width_name, base_ld, base_st in (('8', 0x10, 0x15), ('16', 0x20, 0x25), ('32', 0x30, 0x35)):
+            if mnem in (f'LD{width_name}', f'ST{width_name}'):
+                if len(ops) != 2:
+                    raise AssemblerError(f"{mnem} expects 2 operands", fname, lno)
+                mem_left = self.parse_mem_operand(ops[0], fname, lno)
+                mem_right = self.parse_mem_operand(ops[1], fname, lno)
+                mode_offsets = {'standard': 0, 'pre_inc': 1, 'post_inc': 2, 'pre_dec': 3, 'post_dec': 4}
+
+                if mem_right is not None:
+                    rr = self.parse_reg(ops[0], fname, lno)
+                    rl, mode = mem_right
+                    op = base_ld + mode_offsets[mode]
+                    return (op << 8) | (rr << 4) | rl
+                elif mem_left is not None:
+                    rr, mode = mem_left
+                    rl = self.parse_reg(ops[1], fname, lno)
+                    op = base_st + mode_offsets[mode]
+                    return (op << 8) | (rr << 4) | rl
+                else:
+                    raise AssemblerError(f"Memory access syntax requires parentheses: {line}", fname, lno)
+
+        # ---------------- Register Loads & Immediate Loads ----------------
+        if mnem == 'NOP':
+            return 0x0000
+        elif mnem == 'LD':
+            if len(ops) == 2:
+                rr = get_r(0)
+                try:
+                    rl = self.parse_reg(ops[1], fname, lno)
+                    return (0x00 << 8) | (rr << 4) | rl
+                except AssemblerError:
+                    val = get_v(1)
+                    if rr == 14 and (0 <= val <= 255):
+                        return (0x02 << 8) | (val & 0xFF)
+                    elif rr == 14 and (-255 <= val < 0):
+                        return (0x04 << 8) | ((-val) & 0xFF)
+                    elif 0 <= val <= 15:
+                        return (0x01 << 8) | (rr << 4) | (val & 0xF)
+                    elif -15 <= val < 0:
+                        return (0x03 << 8) | (rr << 4) | ((-val) & 0xF)
+                    raise AssemblerError(f"Immediate value {val} out of range for LD", fname, lno)
+        elif mnem == 'PUSH4':
             rr = get_r(0)
-            rl = get_r(1) if len(ops) > 1 else 0  # Default to R0
+            v = get_v(1)
+            return (0x05 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'PUSH8':
+            rr = get_r(0)
+            v = get_v(1)
+            return (0x06 << 8) | (v & 0xFF)
+
+        # ---------------- Arithmetic & Logic ----------------
+        elif mnem == 'ADD':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x40 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x44 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SUB':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x41 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x45 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'AND':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x66 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x6F << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'OR':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x67 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x70 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'XOR':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x68 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x71 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SHIFTL':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x60 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x69 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SHIFTR':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x62 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x6B << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'ASHIFTR':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x63 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x6C << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'ROTL':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x64 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x6D << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'ROTR':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x65 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x6E << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'NOT':
+            rr = get_r(0)
+            return (0x72 << 8) | (rr << 4)
+        elif mnem == 'NEZ':
+            rr = get_r(0)
+            return (0x73 << 8) | (rr << 4)
+        elif mnem == 'SEXT8':
+            rr = get_r(0)
+            return (0x61 << 8) | (rr << 4)
+        elif mnem == 'SEXT16':
+            rr = get_r(0)
+            return (0x6A << 8) | (rr << 4)
+        elif mnem == 'CLZ':
+            rr = get_r(0)
+            return (0x82 << 8) | (rr << 4)
+        elif mnem == 'TAS':
+            if len(ops) != 2:
+                raise AssemblerError("TAS expects 2 operands: TAS (Rr), Rl", fname, lno)
+            mem_target = self.parse_mem_operand(ops[0], fname, lno)
+            if mem_target is None:
+                raise AssemblerError("TAS operand 1 must be (Rr)", fname, lno)
+            rr, _ = mem_target
+            rl = self.parse_reg(ops[1], fname, lno)
+            return (0x8B << 8) | (rr << 4) | rl
+
+        # ---------------- Control Flow: JMP, RJUMP, TRAP ----------------
+        elif mnem == 'JMP':
+            rr = get_r(0)
+            rl = get_r(1) if len(ops) > 1 else 0
             return (0xA0 << 8) | (rr << 4) | rl
-
-        if mnem == "RJUMP":
+        elif mnem == 'RJUMP':
             rr = get_r(0)
-            rl = get_r(1) if len(ops) > 1 else 0  # Default to R0
+            rl = get_r(1) if len(ops) > 1 else 0
             return (0xA1 << 8) | (rr << 4) | rl
-
-        if mnem == "TRAP":
+        elif mnem == 'TRAP':
             try:
                 rr = self.parse_reg(ops[0], fname, lno)
                 return (0xA2 << 8) | (rr << 4)
             except AssemblerError:
-                val = get_v(0)
-                return (0xA3 << 8) | (val & 0x0F)
+                v = get_v(0)
+                return (0xA3 << 8) | (v & 0xF)
 
-        if mnem == "WAIT":
-            return 0xA4 << 8
-
-        # ---------------- 10. Branches (0xB0 - 0xC9) -------------------------
-        for branch_pfx, is_backward in (("FBRA", False), ("BBRA", True)):
-            if mnem == branch_pfx:
-                # Unconditional Branch: FBRA / BBRA target
-                tgt = get_v(0)
-                diff = (pc - tgt) if is_backward else (tgt - pc)
-                offset = diff // 2
-                if not (0 <= offset <= 255):
-                    raise AssemblerError(f"Branch out of 8-bit immediate range ({offset})", fname, lno)
-                op = 0xC0 if is_backward else 0xB0
-                return (op << 8) | (offset & 0xFF)
-
-            elif mnem.startswith(f"{branch_pfx}."):
-                cond = mnem[len(branch_pfx)+1:]
-                base_op = 0xC0 if is_backward else 0xB0
-                cond_idx = 0 if cond == "Z" else (1 if cond == "N" else (2 if cond == "P" else -1))
-                if cond_idx < 0:
-                    break
-
-                rr = get_r(0)
-                # Form 1: Condition with R14 and Imm8
-                if rr == 14 and len(ops) == 2:
-                    tgt = get_v(1)
-                    diff = (pc - tgt) if is_backward else (tgt - pc)
-                    offset = diff // 2
-                    if not (0 <= offset <= 255):
-                        raise AssemblerError(f"Branch out of 8-bit immediate range ({offset})", fname, lno)
-                    return ((base_op + 7 + cond_idx) << 8) | (offset & 0xFF)
-
-                # Form 2: Register comparison or Imm4 branch
-                try:
-                    rl = self.parse_reg(ops[1], fname, lno)
-                    return ((base_op + 1 + cond_idx) << 8) | (rr << 4) | rl
-                except AssemblerError:
-                    tgt = get_v(1)
-                    diff = (pc - tgt) if is_backward else (tgt - pc)
-                    offset = diff // 2
-                    if not (0 <= offset <= 15):
-                        raise AssemblerError(f"Branch out of 4-bit immediate range ({offset})", fname, lno)
-                    return ((base_op + 4 + cond_idx) << 8) | (rr << 4) | (offset & 0x0F)
-
-        # ---------------- 11. Shadow Banks (0xD0 - 0xD2) ---------------------
-        if mnem == "XCHG":
-            return (0xD0 << 8) | (get_r(0) << 4)
-        if mnem == "XCHGALL":
-            return 0xD1 << 8
-        if mnem == "XCHGMOST":
-            return 0xD2 << 8
-
-        # ---------------- 12. Streaming FIFOs & MBOX (0xE0 - 0xE9) -----------
-        if mnem == "FIFO.R":
+        # ---------------- Context Exchange ----------------
+        elif mnem == 'XCHG':
             rr = get_r(0)
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (0xE0 << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return (0xE1 << 8) | (rr << 4) | (val & 0x0F)
+            return (0xD0 << 8) | (rr << 4)
+        elif mnem == 'XCHGALL':
+            return 0xD100
+        elif mnem == 'XCHGMOST':
+            return 0xD200
 
-        if mnem == "FIFO.W":
+        # ---------------- FIFOs ----------------
+        if mnem == 'FIFO.W':
             rr = get_r(0)
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (0xE2 << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return (0xE3 << 8) | (rr << 4) | (val & 0x0F)
+            chan = int(ops[1], 0) if len(ops) > 1 else 0
+            return (0xE1 << 8) | (rr << 4) | (chan & 0x0F)
 
-        if mnem == "FIFO.STAT":
+        if mnem == 'FIFO.R':
             rr = get_r(0)
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (0xE4 << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return (0xE5 << 8) | (rr << 4) | (val & 0x0F)
-
-        if mnem == "FIFO.TRYR":
-            return (0xE6 << 8) | (get_r(0) << 4) | get_r(1)
-        if mnem == "FIFO.TRYW":
-            return (0xE7 << 8) | (get_r(0) << 4) | get_r(1)
-
-        if mnem == "MBOX":
+            chan = int(ops[1], 0) if len(ops) > 1 else 0
+            return (0xE0 << 8) | (rr << 4) | (chan & 0x0F)        
+        
+        elif mnem == 'FIFO.STAT':
             rr = get_r(0)
-            try:
-                rl = self.parse_reg(ops[1], fname, lno)
-                return (0xE8 << 8) | (rr << 4) | rl
-            except AssemblerError:
-                val = get_v(1)
-                return (0xE9 << 8) | (rr << 4) | (val & 0x0F)
+            return (0xE2 << 8) | (rr << 4)
+        elif mnem == 'FIFO.TRYR':
+            rr = get_r(0)
+            rl = self.parse_reg(ops[1], fname, lno) if len(ops) > 1 else 0
+            return (0xE3 << 8) | (rr << 4) | rl
+        elif mnem == 'FIFO.TRYW':
+            rr = get_r(0)
+            rl = self.parse_reg(ops[1], fname, lno) if len(ops) > 1 else 0
+            return (0xE4 << 8) | (rr << 4) | rl
+        elif mnem == 'MBOX':
+            rr = get_r(0)
+            return (0xE5 << 8) | (rr << 4)
 
-        raise AssemblerError(f"Unknown or unencodable mnemonic '{mnem}'", fname, lno)
-
-
-def write_listing(lst_path: str, listing_entries: List[Tuple[int, bytes, int, str]], symbols: Dict[str, int]):
-    with open(lst_path, "w", encoding="utf-8") as f:
-        for addr, b_data, lno, src_line in listing_entries:
-            hex_bytes = b_data.hex().upper() if b_data else ""
-            # Format: ADDR  HEX_CODE  LINE_NO  SRC
-            if hex_bytes:
-                # Group bytes by halfwords
-                h_str = " ".join(hex_bytes[i:i+4] for i in range(0, len(hex_bytes), 4))
-                f.write(f"{addr:08X}  {h_str:<12}  {lno:4d}      {src_line}\n")
-            else:
-                f.write(f"                        {lno:4d}  {src_line}\n")
-
-        # Symbol table dump at end of listing
-        f.write("\n; " + "-" * 78 + "\n")
-        f.write("; SYMBOL TABLE\n")
-        f.write("; " + "-" * 78 + "\n")
-        for sym, val in sorted(symbols.items()):
-            f.write(f"; {sym:<32} = 0x{val:08X}\n")
+        raise AssemblerError(f"Unimplemented instruction mnemonic '{mnem}'", fname, lno)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Particle Two-Pass Macro Assembler (pasm.py)")
-    parser.add_argument("source", help="Source assembly (.asm) file")
-    parser.add_argument("-o", "--output", default="a.out", help="Output binary/hex file")
-    parser.add_argument("-I", "--include", action="append", default=[], help="Include directory search paths")
-    parser.add_argument("-D", "--define", action="append", default=[], help="Predefine symbols (NAME or NAME=VAL)")
-    parser.add_argument("--format", choices=["bin", "hex", "c"], default="bin", help="Output format (default: bin)")
+    parser = argparse.ArgumentParser(description="Particle Two-Pass Macro Assembler")
+    parser.add_argument("source", help="Source assembly file (.asm)")
+    parser.add_argument("-I", "--include", action="append", default=[], help="Include directory")
+    parser.add_argument("-o", "--output", default="a.out", help="Output file")
+    parser.add_argument("-D", "--define", action="append", default=[], help="Define symbol")
+    parser.add_argument("--format", choices=["bin", "hex"], default="bin", help="Output format")
     args = parser.parse_args()
 
-    # Process command line defines
-    defines: Dict[str, Any] = {}
+    defines = {}
     for d in args.define:
-        if "=" in d:
-            k, v = d.split("=", 1)
-            try:
-                defines[k.strip()] = int(v.strip(), 0)
-            except Exception:
-                defines[k.strip()] = v.strip()
+        if '=' in d:
+            k, v = d.split('=', 1)
+            defines[k] = int(v, 0)
         else:
-            defines[d.strip()] = 1
+            defines[d] = 1
 
-    include_dirs = args.include or ["."]
+    prep = Preprocessor(include_dirs=args.include, defines=defines)
+    asm = ParticleAssembler(prep)
+    bin_data, max_addr, listing_lines = asm.assemble(args.source)
 
-    preprocessor = Preprocessor(include_dirs=include_dirs, defines=defines)
-    assembler = Assembler()
+    start_addr = 0x00000100
+    size = max(0, max_addr - start_addr)
+    out_bytes = bytearray(size)
+    for addr, val in bin_data.items():
+        if addr >= start_addr:
+            out_bytes[addr - start_addr] = val
 
-    try:
-        lines = preprocessor.preprocess_file(args.source)
-        image, min_addr, max_addr, listing_entries = assembler.assemble(lines, preprocessor)
-    except AssemblerError as e:
-        print(e, file=sys.stderr)
-        sys.exit(1)
-
-    # Ensure output directory exists
-    out_dir = os.path.dirname(os.path.abspath(args.output))
+    out_dir = os.path.dirname(args.output)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    # Write binary / hex output
-    payload = image[min_addr:max_addr]
-    if args.format == "bin":
-        with open(args.output, "wb") as f:
-            f.write(payload)
-    elif args.format == "hex":
-        with open(args.output, "w", encoding="utf-8") as f:
-            for i in range(0, len(payload), 2):
-                hw = payload[i] | ((payload[i+1] if i+1 < len(payload) else 0) << 8)
-                f.write(f"{hw:04X}\n")
-    elif args.format == "c":
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write("/* Particle Assembled ROM Header */\n")
-            f.write("#include <stdint.h>\n\n")
-            f.write(f"const uint16_t particle_rom[{len(payload)//2}] = {{\n")
-            for i in range(0, len(payload), 16):
-                chunk = []
-                for j in range(i, min(i+16, len(payload)), 2):
-                    hw = payload[j] | ((payload[j+1] if j+1 < len(payload) else 0) << 8)
-                    chunk.append(f"0x{hw:04X}")
-                f.write("    " + ", ".join(chunk) + ",\n")
-            f.write("};\n")
+    with open(args.output, "wb") as f:
+        f.write(out_bytes)
 
-    # Write listing (.lst) in the same directory as output binary
-    base_name, _ = os.path.splitext(args.output)
-    lst_path = f"{base_name}.lst"
-    write_listing(lst_path, listing_entries, assembler.symbols)
+    # Automatic .lst listing generation
+    lst_path = os.path.splitext(args.output)[0] + ".lst"
+    with open(lst_path, "w", encoding="utf-8") as f:
+        f.write(f"; Listing for {args.source}\n")
+        f.write(f"; Total Emitted: {len(out_bytes)} bytes [{start_addr:08X}..{max_addr:08X}]\n\n")
+        for ll in listing_lines:
+            f.write(ll + "\n")
+        f.write("\n; ------------------------------------------------------------------------------\n")
+        f.write("; SYMBOL TABLE\n")
+        f.write("; ------------------------------------------------------------------------------\n")
+        for sym, addr in sorted(asm.symbols.items()):
+            f.write(f"; {sym:<32} = 0x{addr:08X}\n")
 
-    print(f"Assembly succeeded: {len(payload)} bytes emitted [0x{min_addr:X}..0x{max_addr:X}]. Listing emitted to: {lst_path}")
+    print(f"Assembly succeeded: {len(out_bytes)} bytes emitted [{start_addr:08X}..{max_addr:08X}]. Listing emitted to: {lst_path}")
+
 
 if __name__ == "__main__":
     main()

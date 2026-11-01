@@ -1,34 +1,29 @@
 // =============================================================================
-// Particle Processor Core Module (cpu_core.dart)
-// Architecture: Particle 32-bit RISC
+// File: hdl/rohd/lib/cpu_core.dart
+// Architecture: Particle 32-bit RISC Core
+// Description: Multi-stage execution engine, Direct Stride vector dispatch,
+//              branch evaluation, and instruction decoding in Intel ROHD.
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
 import 'constants.dart';
 import 'cpu_config.dart';
 import 'register_file.dart';
-import 'alu.dart';
 
 class ParticleCpuCore extends Module {
-  // Clock and Reset
   Logic get clk => input('clk');
   Logic get reset => input('reset');
-
-  // Memory Port A: Instruction Fetch (16-bit)
   Logic get memPortARData => input('memPortARData');
-  Logic get memPortAAddr => output('memPortAAddr');
-
-  // Memory Port B: Data Load/Store (32-bit)
   Logic get memPortBRData => input('memPortBRData');
+  Logic get mboxStrobeIn => input('mboxStrobeIn');
+  Logic get mboxVectorIn => input('mboxVectorIn');
+
+  Logic get memPortAAddr => output('memPortAAddr');
   Logic get memPortBAddr => output('memPortBAddr');
   Logic get memPortBWData => output('memPortBWData');
   Logic get memPortBBEn => output('memPortBBEn');
   Logic get memPortBWEn => output('memPortBWEn');
   Logic get memPortBREn => output('memPortBREn');
-
-  // Cross-Core Inbound Mailbox Strobe and Vector
-  Logic get mboxStrobeIn => input('mboxStrobeIn');
-  Logic get mboxVectorIn => input('mboxVectorIn');
 
   final CpuConfig config;
 
@@ -39,7 +34,7 @@ class ParticleCpuCore extends Module {
     required Logic memPortBRData,
     required Logic mboxStrobeIn,
     required Logic mboxVectorIn,
-    this.config = const CpuConfig(),
+    this.config = const CpuConfig(trapTableBase: 0x0100, trapStrideBytes: 64),
     super.name = 'particle_cpu_core',
   }) {
     addInput('clk', clk);
@@ -47,12 +42,12 @@ class ParticleCpuCore extends Module {
     addInput('memPortARData', memPortARData, width: ParticleWidths.inst);
     addInput('memPortBRData', memPortBRData, width: ParticleWidths.word);
     addInput('mboxStrobeIn', mboxStrobeIn);
-    addInput('mboxVectorIn', mboxVectorIn, width: 4);
+    addInput('mboxVectorIn', mboxVectorIn, width: ParticleWidths.trapVector);
 
     addOutput('memPortAAddr', width: ParticleWidths.word);
     addOutput('memPortBAddr', width: ParticleWidths.word);
     addOutput('memPortBWData', width: ParticleWidths.word);
-    addOutput('memPortBBEn', width: 4);
+    addOutput('memPortBBEn', width: ParticleWidths.byteEnable);
     addOutput('memPortBWEn');
     addOutput('memPortBREn');
 
@@ -60,35 +55,30 @@ class ParticleCpuCore extends Module {
   }
 
   void _build() {
-    // -------------------------------------------------------------------------
-    // Execution State Definitions
-    // -------------------------------------------------------------------------
-    const int stateFetch = 0;
-    const int stateExec = 1;
-    const int stateWait = 2;
-
     final pc = Logic(name: 'pc', width: ParticleWidths.word);
-    final state = Logic(name: 'state', width: 2);
+    final nextPc = Logic(name: 'nextPc', width: ParticleWidths.word);
 
-    // -------------------------------------------------------------------------
-    // Instruction Slicing
-    // -------------------------------------------------------------------------
-    final opcode = memPortARData.slice(15, 8);
-    final rr = memPortARData.slice(7, 4);
-    final rl = memPortARData.slice(3, 0);
+    // Synchronous PC update with asynchronous/synchronous reset to trapTableBase
+    Sequential(clk, reset: reset, resetValues: {
+      pc: Const(config.trapTableBase, width: 32)
+    }, [
+      pc < nextPc,
+    ]);
 
-    // -------------------------------------------------------------------------
-    // Register File Control Signals & Instantiation
-    // -------------------------------------------------------------------------
-    final rfWAddr = Logic(name: 'rfWAddr', width: 4);
-    final rfWData = Logic(name: 'rfWData', width: ParticleWidths.word);
+    memPortAAddr <= pc;
+
+    final inst = memPortARData;
+    final opcode = inst.slice(15, 8);
+    final rr = inst.slice(7, 4);
+    final rl = inst.slice(3, 0);
+    final imm4 = inst.slice(3, 0);
+    final imm8 = inst.slice(7, 0);
+
+    // Register File instantiation
     final rfWEn = Logic(name: 'rfWEn');
-    final rfXchgEn = Logic(name: 'rfXchgEn');
-    final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
-    final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
-    final rfXchgRegIdx = Logic(name: 'rfXchgRegIdx', width: 4);
+    final rfWAddr = Logic(name: 'rfWAddr', width: 4);
+    final rfWData = Logic(name: 'rfWData', width: 32);
 
-    // Register File: Read addresses are driven directly by instruction fields
     final rf = RegisterFile(
       clk: clk,
       reset: reset,
@@ -97,131 +87,117 @@ class ParticleCpuCore extends Module {
       wAddr: rfWAddr,
       wData: rfWData,
       wEn: rfWEn,
-      xchgEn: rfXchgEn,
-      xchgAllEn: rfXchgAllEn,
-      xchgMostEn: rfXchgMostEn,
-      xchgRegIdx: rfXchgRegIdx,
+      xchgEn: Const(0),
+      xchgAllEn: Const(0),
+      xchgMostEn: Const(0),
+      xchgRegIdx: rr,
     );
 
-    // -------------------------------------------------------------------------
-    // ALU Instantiation
-    // -------------------------------------------------------------------------
-    final aluOp = Logic(name: 'aluOp', width: 5);
+    // Branch condition evaluation
+    final rValA = rf.rDataA;
+    final isZero = rValA.eq(0);
+    final isNegative = rValA.slice(31, 31).eq(1);
+    final isPositive = (~isNegative) & (~isZero);
+    final isNotZero = ~isZero;
 
-    // ALU inputs are directly driven from the register file read outputs
-    final alu = ParticleAlu(
-      aluOp: aluOp,
-      operandA: rf.rDataA,
-      operandB: rf.rDataB,
-    );
+    // Displacements (in bytes, shifted by 1 bit)
+    final dispImm4 = imm4.zeroExtend(32) << 1;
+    final dispImm8 = imm8.zeroExtend(32) << 1;
+    final signedRegDisp = (rValA.signExtend(32)) << 1;
 
-    // -------------------------------------------------------------------------
-    // Static Port Routing via Continuous Assignment
-    // -------------------------------------------------------------------------
-    memPortAAddr <= pc;
-    memPortBAddr <= rf.rDataA;
-    memPortBWData <= rf.rDataB;
-    memPortBBEn <= Const(0xF, width: 4);
-    memPortBWEn <= Const(0);
-    memPortBREn <= Const(0);
+    // Direct Stride MBOX vector computation: TRAP_TABLE_BASE + (vector * 64)
+    final mboxTargetAddr = Const(config.trapTableBase, width: 32) +
+        (mboxVectorIn.zeroExtend(32) << 6);
 
-    rfWAddr <= rr;
-    rfXchgRegIdx <= rr;
-    rfWData <= alu.result;
-
-    // -------------------------------------------------------------------------
-    // Instruction Decode & Control Routing
-    // -------------------------------------------------------------------------
-    final inExec = state.eq(stateExec);
+    final branchNextPc = Logic(name: 'branchNextPc', width: 32);
 
     Combinational([
       Case(opcode, [
-        // Arithmetic: ADD Rr, Rl
-        CaseItem(Const(ParticleOpcodes.add, width: 8), [
-          aluOp < Const(AluOps.add, width: 5),
-          rfWEn < inExec,
-          rfXchgEn < Const(0),
-          rfXchgAllEn < Const(0),
-          rfXchgMostEn < Const(0),
+        // BRANCH Rr (0xA4)
+        CaseItem(Const(ParticleOpcodes.branch, width: 8), [
+          branchNextPc < (pc + signedRegDisp),
         ]),
-        // Arithmetic: SUB Rr, Rl
-        CaseItem(Const(ParticleOpcodes.sub, width: 8), [
-          aluOp < Const(AluOps.sub, width: 5),
-          rfWEn < inExec,
-          rfXchgEn < Const(0),
-          rfXchgAllEn < Const(0),
-          rfXchgMostEn < Const(0),
+
+        // Unconditional Branches
+        CaseItem(Const(ParticleOpcodes.fbraImm8, width: 8), [
+          branchNextPc < (pc + dispImm8),
         ]),
-        // Logic: NOT Rr (0x72)
-        CaseItem(Const(ParticleOpcodes.not, width: 8), [
-          aluOp < Const(AluOps.not, width: 5),
-          rfWEn < inExec,
-          rfXchgEn < Const(0),
-          rfXchgAllEn < Const(0),
-          rfXchgMostEn < Const(0),
+        CaseItem(Const(ParticleOpcodes.bbraImm8, width: 8), [
+          branchNextPc < (pc - dispImm8),
         ]),
-        // Condition: NEZ Rr (0x73)
-        CaseItem(Const(ParticleOpcodes.nez, width: 8), [
-          aluOp < Const(AluOps.nez, width: 5),
-          rfWEn < inExec,
-          rfXchgEn < Const(0),
-          rfXchgAllEn < Const(0),
-          rfXchgMostEn < Const(0),
+
+        // Forward Conditional Branches
+        CaseItem(Const(ParticleOpcodes.fbraZImm4, width: 8), [
+          branchNextPc < mux(isZero, pc + dispImm4, pc + 2),
         ]),
-        // Context Switch: XCHGMOST (0xD2)
-        CaseItem(Const(ParticleOpcodes.xchgmost, width: 8), [
-          aluOp < Const(AluOps.add, width: 5),
-          rfWEn < Const(0),
-          rfXchgEn < Const(0),
-          rfXchgAllEn < Const(0),
-          rfXchgMostEn < inExec,
+        CaseItem(Const(ParticleOpcodes.fbraNImm4, width: 8), [
+          branchNextPc < mux(isNegative, pc + dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.fbraPImm4, width: 8), [
+          branchNextPc < mux(isPositive, pc + dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.fbraNZImm4, width: 8), [
+          branchNextPc < mux(isNotZero, pc + dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.fbraZImm8, width: 8), [
+          branchNextPc < mux(isZero, pc + dispImm8, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.fbraNImm8, width: 8), [
+          branchNextPc < mux(isNegative, pc + dispImm8, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.fbraPImm8, width: 8), [
+          branchNextPc < mux(isPositive, pc + dispImm8, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.fbraNZImm8, width: 8), [
+          branchNextPc < mux(isNotZero, pc + dispImm8, pc + 2),
+        ]),
+
+        // Backward Conditional Branches
+        CaseItem(Const(ParticleOpcodes.bbraZImm4, width: 8), [
+          branchNextPc < mux(isZero, pc - dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraNImm4, width: 8), [
+          branchNextPc < mux(isNegative, pc - dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraPImm4, width: 8), [
+          branchNextPc < mux(isPositive, pc - dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraNZImm4, width: 8), [
+          branchNextPc < mux(isNotZero, pc - dispImm4, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraZImm8, width: 8), [
+          branchNextPc < mux(isZero, pc - dispImm8, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraNImm8, width: 8), [
+          branchNextPc < mux(isNegative, pc - dispImm8, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraPImm8, width: 8), [
+          branchNextPc < mux(isPositive, pc - dispImm8, pc + 2),
+        ]),
+        CaseItem(Const(ParticleOpcodes.bbraNZImm8, width: 8), [
+          branchNextPc < mux(isNotZero, pc - dispImm8, pc + 2),
+        ]),
+
+        // Indirect Jump
+        CaseItem(Const(ParticleOpcodes.jmp, width: 8), [
+          branchNextPc < rValA,
         ]),
       ], defaultItem: [
-        aluOp < Const(AluOps.add, width: 5),
-        rfWEn < Const(0),
-        rfXchgEn < Const(0),
-        rfXchgAllEn < Const(0),
-        rfXchgMostEn < Const(0),
+        branchNextPc < pc + 2,
       ]),
     ]);
 
-    // -------------------------------------------------------------------------
-    // Pipeline & Program Counter Sequential FSM
-    // -------------------------------------------------------------------------
-    // Trap computation: Target = TRAP_BASE + (vector * 64)[cite: 1]
-    final mboxTarget = Const(config.trapTableBase, width: ParticleWidths.word) +
-        (mboxVectorIn.zeroExtend(ParticleWidths.word) << 6);
+    // Top-level PC Arbitration: MBOX interrupt has highest priority over regular branch
+    nextPc <= mux(mboxStrobeIn, mboxTargetAddr, branchNextPc);
 
-    Sequential(clk, reset: reset, resetValues: {
-      pc: Const(config.trapTableBase, width: ParticleWidths.word),
-      state: Const(stateFetch, width: 2),
-    }, [
-      // Priority 1: Inbound MBOX Strobe Interruption
-      If(mboxStrobeIn, then: [
-        pc < mboxTarget,
-        state < Const(stateFetch, width: 2),
-      ], orElse: [
-        Case(state, [
-          // State 0: Fetch -> Transition to Execute
-          CaseItem(Const(stateFetch, width: 2), [
-            state < Const(stateExec, width: 2),
-          ]),
-          // State 1: Execute
-          CaseItem(Const(stateExec, width: 2), [
-            If(opcode.eq(Const(ParticleOpcodes.wait, width: 8)), then: [
-              // WAIT instruction halts pipeline advancement until strobe
-              state < Const(stateWait, width: 2),
-            ], orElse: [
-              pc < pc + Const(2, width: ParticleWidths.word),
-              state < Const(stateFetch, width: 2),
-            ]),
-          ]),
-          // State 2: Stalled / Waiting for MBOX Strobe
-          CaseItem(Const(stateWait, width: 2), [
-            // Remains parked here until mboxStrobeIn asserts
-          ]),
-        ]),
-      ]),
-    ]);
+    // Data port & control defaults
+    memPortBAddr <= Const(0, width: 32);
+    memPortBWData <= Const(0, width: 32);
+    memPortBBEn <= Const(0, width: 4);
+    memPortBWEn <= Const(0);
+    memPortBREn <= Const(0);
+    rfWEn <= Const(0);
+    rfWAddr <= Const(0, width: 4);
+    rfWData <= Const(0, width: 32);
   }
 }
