@@ -20,12 +20,37 @@ def to_unsigned32(val):
     return val & MASK32
 
 
+
+class RegisterWindowView:
+    def __init__(self, core):
+        self.core = core
+        self.raw = [0] * 32
+
+    def _eff(self, idx):
+        if idx == 0:
+            return 0
+        return (idx + self.core.rbase) & 0x1F
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return [self[i] for i in range(*idx.indices(32))]
+        return self.raw[self._eff(idx)]
+
+    def __setitem__(self, idx, val):
+        phys = self._eff(idx)
+        if phys != 0:
+            self.raw[phys] = val & MASK32
+
+    def __len__(self):
+        return 32
+
 class ParticleCore:
     def __init__(self, mem_size=0x20000, num_fifos=4):
         self.mem_size = mem_size
         self.mem = bytearray(mem_size)
-        self.r = [0] * 16
-        self.shadow_r = [0] * 16
+        self.rbase = 0
+        self.r = RegisterWindowView(self)
+        self.shadow_r = [0] * 32
         self.pc = 0x00000100
         self.fifos = [deque(maxlen=256) for _ in range(num_fifos)]
         self.trap_base = 0x00000100
@@ -35,8 +60,9 @@ class ParticleCore:
         self.stalled = False
 
     def reset(self):
-        self.r = [0] * 16
-        self.shadow_r = [0] * 16
+        self.r = RegisterWindowView(self)
+        self.shadow_r = [0] * 32
+        self.rbase = 0
         self.pc = self.trap_base
         self.cycle_count = 0
         self.halted = False
@@ -96,9 +122,14 @@ class ParticleCore:
         self.mem[(a + 2) & (self.mem_size - 1)] = (val >> 16) & 0xFF
         self.mem[(a + 3) & (self.mem_size - 1)] = (val >> 24) & 0xFF
 
+    def eff_idx(self, idx):
+        return self.r._eff(idx)
+
+    def get_reg(self, idx):
+        return self.r[idx]
+
     def set_reg(self, idx, val):
-        if idx != 0:
-            self.r[idx] = val & MASK32
+        self.r[idx] = val
 
     def step(self):
         if self.halted or self.pc >= self.mem_size:
@@ -118,7 +149,7 @@ class ParticleCore:
 
         next_pc = (self.pc + 2) & MASK32
 
-        # ---------------- Register Loads & Immediates ----------------
+        # ---------------- Register Loads & Immediates (0x00 - 0x06) ----------------
         if opcode == 0x00:    # LD Rr, Rl
             self.set_reg(rr, self.r[rl])
         elif opcode == 0x01:  # LD Rr, Imm4
@@ -134,7 +165,7 @@ class ParticleCore:
         elif opcode == 0x06:  # PUSH8 R14, Imm8
             self.set_reg(14, (self.r[14] << 8) | imm8)
 
-        # ---------------- Memory Group (8-bit) ----------------
+        # ---------------- Memory Group (8-bit: 0x10 - 0x19) ----------------
         elif opcode == 0x10:  # LD8 Rr, (Rl)
             self.set_reg(rr, self.read8(self.r[rl]))
         elif opcode == 0x11:  # LD8 Rr, (++Rl)
@@ -172,7 +203,7 @@ class ParticleCore:
             self.set_reg(rr, (addr - 1) & MASK32)
             self.write8(addr, self.r[rl])
 
-        # ---------------- Memory Group (16-bit) ----------------
+        # ---------------- Memory Group (16-bit: 0x20 - 0x29) ----------------
         elif opcode == 0x20:  # LD16 Rr, (Rl)
             self.set_reg(rr, self.read16(self.r[rl]))
         elif opcode == 0x21:  # LD16 Rr, (++Rl)
@@ -210,7 +241,7 @@ class ParticleCore:
             self.set_reg(rr, (addr - 2) & MASK32)
             self.write16(addr, self.r[rl])
 
-        # ---------------- Memory Group (32-bit) ----------------
+        # ---------------- Memory Group (32-bit: 0x30 - 0x39) ----------------
         elif opcode == 0x30:  # LD32 Rr, (Rl)
             self.set_reg(rr, self.read32(self.r[rl]))
         elif opcode == 0x31:  # LD32 Rr, (++Rl)
@@ -248,7 +279,9 @@ class ParticleCore:
             self.set_reg(rr, (addr - 4) & MASK32)
             self.write32(addr, self.r[rl])
 
-        # ---------------- Unsigned Arithmetic ----------------
+        # ---------------- Unsigned Arithmetic (0x40 - 0x47) ----------------
+        elif opcode == 0x48:  # NEG Rr
+            self.set_reg(rr, to_unsigned32(-to_signed32(self.r[rr])))
         elif opcode == 0x40:  # ADD Rr, Rl
             self.set_reg(rr, self.r[rr] + self.r[rl])
         elif opcode == 0x41:  # SUB Rr, Rl
@@ -268,7 +301,7 @@ class ParticleCore:
         elif opcode == 0x47:  # MOD Rr, Imm4
             self.set_reg(rr, self.r[rr] if imm4 == 0 else self.r[rr] % imm4)
 
-        # ---------------- Signed Arithmetic ----------------
+        # ---------------- Signed Arithmetic (0x50 - 0x57) ----------------
         elif opcode == 0x50:  # SADD Rr, Rl
             self.set_reg(rr, to_signed32(self.r[rr]) + to_signed32(self.r[rl]))
         elif opcode == 0x51:  # SSUB Rr, Rl
@@ -279,8 +312,22 @@ class ParticleCore:
         elif opcode == 0x53:  # SMOD Rr, Rl
             n, d = to_signed32(self.r[rr]), to_signed32(self.r[rl])
             self.set_reg(rr, n if d == 0 else (n - int(n / d) * d))
+        elif opcode == 0x54:  # SADD Rr, Imm4
+            imm_s = imm4 if imm4 < 8 else imm4 - 16
+            self.set_reg(rr, to_signed32(self.r[rr]) + imm_s)
+        elif opcode == 0x55:  # SSUB Rr, Imm4
+            imm_s = imm4 if imm4 < 8 else imm4 - 16
+            self.set_reg(rr, to_signed32(self.r[rr]) - imm_s)
+        elif opcode == 0x56:  # SDIV Rr, Imm4
+            imm_s = imm4 if imm4 < 8 else imm4 - 16
+            n = to_signed32(self.r[rr])
+            self.set_reg(rr, -1 if imm_s == 0 else int(n / imm_s))
+        elif opcode == 0x57:  # SMOD Rr, Imm4
+            imm_s = imm4 if imm4 < 8 else imm4 - 16
+            n = to_signed32(self.r[rr])
+            self.set_reg(rr, n if imm_s == 0 else (n - int(n / imm_s) * imm_s))
 
-        # ---------------- Shifts & Logic ----------------
+        # ---------------- Shifts & Logic (0x60 - 0x73) ----------------
         elif opcode == 0x60:  # SHIFTL Rr, Rl
             self.set_reg(rr, self.r[rr] << (self.r[rl] & 31))
         elif opcode == 0x61:  # SEXT8 Rr
@@ -326,7 +373,7 @@ class ParticleCore:
         elif opcode == 0x73:  # NEZ Rr
             self.set_reg(rr, 1 if self.r[rr] != 0 else 0)
 
-        # ---------------- Multipliers ----------------
+        # ---------------- Multipliers (0x78 - 0x7F) ----------------
         elif opcode == 0x78:  # MULL Rr, Rl
             self.set_reg(rr, self.r[rr] * self.r[rl])
         elif opcode == 0x79:  # MULH Rr, Rl
@@ -337,8 +384,26 @@ class ParticleCore:
         elif opcode == 0x7B:  # MULHSU Rr, Rl
             p = to_signed32(self.r[rr]) * self.r[rl]
             self.set_reg(rr, p >> 32)
+        elif opcode == 0x7C:  # MULL Rr, Imm4
+            self.set_reg(rr, self.r[rr] * imm4)
+        elif opcode == 0x7D:  # MULH Rr, Imm4
+            self.set_reg(rr, (self.r[rr] * imm4) >> 32)
+        elif opcode == 0x7E:  # SMULH Rr, Imm4
+            imm_s = imm4 if imm4 < 8 else imm4 - 16
+            p = to_signed32(self.r[rr]) * imm_s
+            self.set_reg(rr, p >> 32)
+        elif opcode == 0x7F:  # MULHSU Rr, Imm4
+            p = to_signed32(self.r[rr]) * imm4
+            self.set_reg(rr, p >> 32)
 
-        # ---------------- Bit Manipulation & Atomic ----------------
+        # ---------------- Bit Manipulation & Special (0x80 - 0x8B) ----------------
+        elif opcode == 0x80:  # BEXTR Rr, Rl
+            pos = self.r[rl] & 0x1F
+            length = (self.r[rl] >> 5) & 0x1F
+            mask = (1 << length) - 1 if length < 32 else 0xFFFFFFFF
+            self.set_reg(rr, (self.r[rr] >> pos) & mask)
+        elif opcode == 0x81:  # JTBL Rr
+            next_pc = (self.pc + 2 + (self.r[rr] * 2)) & MASK32
         elif opcode == 0x82:  # CLZ Rr, Rl
             val = self.r[rl]
             cnt = 0
@@ -347,13 +412,44 @@ class ParticleCore:
                     break
                 cnt += 1
             self.set_reg(rr, cnt)
+        elif opcode == 0x83:  # BSET Rr, Rl
+            self.set_reg(rr, self.r[rr] | (1 << (self.r[rl] & 31)))
+        elif opcode == 0x84:  # BSET Rr, Imm4
+            self.set_reg(rr, self.r[rr] | (1 << imm4))
+        elif opcode == 0x85:  # BCLR Rr, Rl
+            self.set_reg(rr, self.r[rr] & ~(1 << (self.r[rl] & 31)))
+        elif opcode == 0x86:  # BCLR Rr, Imm4
+            self.set_reg(rr, self.r[rr] & ~(1 << imm4))
+        elif opcode == 0x87:  # BINV Rr, Rl
+            self.set_reg(rr, self.r[rr] ^ (1 << (self.r[rl] & 31)))
+        elif opcode == 0x88:  # BINV Rr, Imm4
+            self.set_reg(rr, self.r[rr] ^ (1 << imm4))
+        elif opcode == 0x89:  # BGET Rr, Rl
+            self.set_reg(rr, (self.r[rr] >> (self.r[rl] & 31)) & 1)
+        elif opcode == 0x8A:  # BGET Rr, Imm4
+            self.set_reg(rr, (self.r[rr] >> imm4) & 1)
         elif opcode == 0x8B:  # TAS (Rr), Rl
             addr = self.r[rr]
             old_val = self.read32(addr)
             self.write32(addr, self.r[rl])
             self.set_reg(rl, old_val)
+        elif opcode == 0x8C:  # REV32 Rr
+            v = self.r[rr]
+            swapped = (((v & 0x000000FF) << 24) |
+                       ((v & 0x0000FF00) << 8) |
+                       ((v & 0x00FF0000) >> 8) |
+                       ((v & 0xFF000000) >> 24))
+            self.set_reg(rr, swapped)
+        elif opcode == 0x8C:  # REV32 Rr
+            v = self.r[rr]
+            swapped = ((v & 0x000000FF) << 24) | ((v & 0x0000FF00) << 8) | ((v & 0x00FF0000) >> 8) | ((v & 0xFF000000) >> 24)
+            self.set_reg(rr, swapped)
+            addr = self.r[rr]
+            old_val = self.read32(addr)
+            self.write32(addr, self.r[rl])
+            self.set_reg(rl, old_val)
 
-        # ---------------- Comparisons (SLT / SSLT) ----------------
+        # ---------------- Comparisons (SLT / SSLT: 0x90 - 0x99) ----------------
         elif opcode == 0x90:  # SLT Rr, Rl
             self.set_reg(rr, 1 if self.r[rr] < self.r[rl] else 0)
         elif opcode == 0x91:  # SLT Rr, Imm4
@@ -376,8 +472,15 @@ class ParticleCore:
             self.set_reg(14, 1 if to_signed32(self.r[14]) < imm_s else 0)
         elif opcode == 0x99:  # SSLT R14, -Imm8
             self.set_reg(14, 1 if to_signed32(self.r[14]) < -imm8 else 0)
-
-        # ---------------- Control Flow ----------------
+        elif opcode == 0x9A:  # SEQ Rr, Rl
+            self.set_reg(rr, 1 if self.r[rr] == self.r[rl] else 0)
+        elif opcode == 0x9B:  # SNE Rr, Rl
+            self.set_reg(rr, 1 if self.r[rr] != self.r[rl] else 0)
+        elif opcode == 0x9C:  # SLE Rr, Rl
+            self.set_reg(rr, 1 if self.r[rr] <= self.r[rl] else 0)
+        elif opcode == 0x9D:  # SSLE Rr, Rl
+            self.set_reg(rr, 1 if to_signed32(self.r[rr]) <= to_signed32(self.r[rl]) else 0)
+        # ---------------- Control Flow (0xA0 - 0xA4) ----------------
         elif opcode == 0xA0:  # JMP Rr, Rl
             target = self.r[rr]
             self.set_reg(rl, next_pc)
@@ -395,7 +498,7 @@ class ParticleCore:
         elif opcode == 0xA4:  # BRANCH Rr
             next_pc = (self.pc + (to_signed32(self.r[rr]) * 2)) & MASK32
 
-        # ---------------- Forward Branches ----------------
+        # ---------------- Forward Branches (0xB0 - 0xBB) ----------------
         elif opcode == 0xB0:  # FBRA Imm8
             next_pc = (self.pc + (imm8 * 2)) & MASK32
         elif opcode == 0xB1:
@@ -421,7 +524,7 @@ class ParticleCore:
         elif opcode == 0xBB:  # FBRA.NZ R14, Imm8
             if self.r[14] != 0: next_pc = (self.pc + (imm8 * 2)) & MASK32
 
-        # ---------------- Backward Branches ----------------
+        # ---------------- Backward Branches (0xC0 - 0xCB) ----------------
         elif opcode == 0xC0:  # BBRA Imm8
             next_pc = (self.pc - (imm8 * 2)) & MASK32
         elif opcode == 0xC1:
@@ -447,7 +550,7 @@ class ParticleCore:
         elif opcode == 0xCB:  # BBRA.NZ R14, Imm8
             if self.r[14] != 0: next_pc = (self.pc - (imm8 * 2)) & MASK32
 
-        # ---------------- Shadow Banks ----------------
+        # ---------------- Shadow Banks (0xD0 - 0xD2) ----------------
         elif opcode == 0xD0:  # XCHG Rr
             if rr != 0:
                 self.r[rr], self.shadow_r[rr] = self.shadow_r[rr], self.r[rr]
@@ -456,9 +559,14 @@ class ParticleCore:
                 self.r[i], self.shadow_r[i] = self.shadow_r[i], self.r[i]
         elif opcode == 0xD2:  # XCHGMOST
             for i in range(1, 15):
-                self.r[i], self.shadow_r[i] = self.shadow_r[i], self.r[i]
+                phys = self.eff_idx(i)
+                self.r[phys], self.shadow_r[phys] = self.shadow_r[phys], self.r[phys]
+        elif opcode == 0xD3:  # RBASE Imm8
+            self.rbase = imm8 & 0x1F
+        elif opcode == 0xD4:  # RBASE Rr
+            self.rbase = self.get_reg(rr) & 0x1F
 
-        # ---------------- Streaming FIFOs ----------------
+        # ---------------- Streaming FIFOs (0xE0 - 0xE7) ----------------
         elif opcode == 0xE0:  # FIFO.R Rr, chan
             fid = imm4 % len(self.fifos)
             

@@ -145,5 +145,111 @@ void main() {
       expect(rf.rDataA.value.toInt(), equals(0x000000AA));
       expect(rf.rDataB.value.toInt(), equals(0x00010000));
     });
-  });
+  
+    test('Option 2 RBASE windowing shifts R1-R15 while keeping R0 zero', () async {
+      final clk = SimpleClockGenerator(10).clk;
+      final reset = Logic(name: 'reset');
+      final rAddrA = Logic(name: 'rAddrA', width: 4);
+      final rAddrB = Logic(name: 'rAddrB', width: 4);
+      final wAddr = Logic(name: 'wAddr', width: 4);
+      final wData = Logic(name: 'wData', width: 32);
+      final wEn = Logic(name: 'wEn');
+      final rbaseEn = Logic(name: 'rbaseEn');
+      final rbaseIn = Logic(name: 'rbaseIn', width: 5);
+
+      final rf = RegisterFile(
+        clk: clk,
+        reset: reset,
+        rAddrA: rAddrA,
+        rAddrB: rAddrB,
+        wAddr: wAddr,
+        wData: wData,
+        wEn: wEn,
+        xchgEn: Const(0),
+        xchgAllEn: Const(0),
+        xchgMostEn: Const(0),
+        xchgRegIdx: Const(0, width: 4),
+        rbaseEn: rbaseEn,
+        rbaseIn: rbaseIn,
+      );
+
+      await rf.build();
+
+      // Reset
+      rAddrA.inject(0);
+      rAddrB.inject(0);
+      wAddr.inject(0);
+      wData.inject(0);
+      wEn.inject(0);
+      rbaseIn.inject(0);
+      rbaseEn.inject(0);
+      reset.inject(1);
+      await clk.nextPosedge;
+      reset.inject(0);
+      await clk.nextPosedge;
+
+      // 1. With RBASE=0: Write 0xAAAA to R1 (physical 1)
+      wAddr.inject(1);
+      wData.inject(0xAAAA);
+      wEn.inject(1);
+      await clk.nextPosedge;
+      wEn.inject(0);
+      wAddr.inject(0);
+      wData.inject(0);
+      await clk.nextPosedge;
+
+      // Read back R1 (physical 1)
+      rAddrA.inject(1);
+      await clk.nextPosedge;
+      expect(rf.rDataA.value.toInt(), equals(0xAAAA));
+
+      // 2. Switch RBASE to 16
+      rbaseIn.inject(16);
+      rbaseEn.inject(1);
+      await clk.nextPosedge;
+      rbaseEn.inject(0);
+      await clk.nextPosedge;
+
+      // With RBASE=16, virtual R1 addresses physical 17 (should be initial 0)
+      rAddrA.inject(0);
+      await clk.nextPosedge;
+      rAddrA.inject(1);
+      await clk.nextPosedge;
+      expect(rf.rDataA.value.toInt(), equals(0));
+
+      // Write 0xBBBB to virtual R1 (physical 17)
+      wAddr.inject(1);
+      wData.inject(0xBBBB);
+      wEn.inject(1);
+      await clk.nextPosedge;
+      wEn.inject(0);
+      wAddr.inject(0);
+      wData.inject(0);
+      await clk.nextPosedge;
+
+      // Verify physical 17 has 0xBBBB
+      rAddrA.inject(1);
+      await clk.nextPosedge;
+      expect(rf.rDataA.value.toInt(), equals(0xBBBB));
+
+      // 3. Virtual R0 must ALWAYS be 0 even when RBASE=16
+      rAddrB.inject(0);
+      await clk.nextPosedge;
+      expect(rf.rDataB.value.toInt(), equals(0));
+
+      // 4. Switch back to RBASE=0
+      rbaseIn.inject(0);
+      rbaseEn.inject(1);
+      await clk.nextPosedge;
+      rbaseEn.inject(0);
+      await clk.nextPosedge;
+
+      // Virtual R1 now points to physical 1 again (should still be 0xAAAA)
+      rAddrA.inject(0);
+      await clk.nextPosedge;
+      rAddrA.inject(1);
+      await clk.nextPosedge;
+      expect(rf.rDataA.value.toInt(), equals(0xAAAA));
+    });
+});
 }

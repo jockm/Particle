@@ -1,25 +1,17 @@
 // =============================================================================
 // File: hdl/rohd/lib/alu.dart
 // Architecture: Particle 32-bit RISC Core
-// Description: Purely combinational 32-bit ALU with arithmetic, logic, shift,
-//              CLZ, BEXTR, bit manipulation, and relational comparison support.
+// Description: Combinational ALU with 32-bit logic, shifts, math, comparisons,
+//              and extended native instructions (NEG, REV32, SEQ, SNE, SLE, SSLE).
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
 import 'constants.dart';
 
 class ParticleAlu extends Module {
-  Logic get operandA => input('operandA');
-  Logic get operandB => input('operandB');
-  Logic get aluOp => input('aluOp');
-
   Logic get result => output('result');
-  Logic get zero => output('zero');
-  Logic get negative => output('negative');
-
-  // Testbench aliases
-  Logic get isZero => output('zero');
-  Logic get isNegative => output('negative');
+  Logic get isZero => output('isZero');
+  Logic get isNegative => output('isNegative');
 
   ParticleAlu({
     required Logic operandA,
@@ -27,35 +19,26 @@ class ParticleAlu extends Module {
     required Logic aluOp,
     super.name = 'particle_alu',
   }) {
-    addInput('operandA', operandA, width: ParticleWidths.word);
-    addInput('operandB', operandB, width: ParticleWidths.word);
-    addInput('aluOp', aluOp, width: 5);
+    operandA = addInput('operandA', operandA, width: ParticleWidths.word);
+    operandB = addInput('operandB', operandB, width: ParticleWidths.word);
+    aluOp = addInput('aluOp', aluOp, width: 5);
 
     addOutput('result', width: ParticleWidths.word);
-    addOutput('zero');
-    addOutput('negative');
+    addOutput('isZero');
+    addOutput('isNegative');
 
     _build();
   }
 
   void _build() {
-    final res = Logic(name: 'alu_res', width: ParticleWidths.word);
+    final operandA = input('operandA');
+    final operandB = input('operandB');
+    final aluOp = input('aluOp');
+    final aluRes = Logic(name: 'alu_res', width: ParticleWidths.word);
+
     final shiftAmt5 = operandB.slice(4, 0);
-    final subVal = operandA - operandB;
 
-    // Bit manipulation helper
-    final bitMask = Const(1, width: ParticleWidths.word) << shiftAmt5;
-
-    // BEXTR helper: Position is operandB[4:0], Length is operandB[9:5]
-    final bextrPos = operandB.slice(4, 0);
-    final bextrLen = operandB.slice(9, 5);
-    final bextrShifted = operandA >>> bextrPos;
-    final bextrMask =
-        (Const(1, width: 33) << bextrLen.zeroExtend(6)).slice(31, 0) -
-            Const(1, width: ParticleWidths.word);
-    final bextrResult = bextrShifted & bextrMask;
-
-    // Relational comparisons
+    // Unsigned and Signed Less-Than Primitives
     final sltVal = mux(
       operandA.lt(operandB),
       Const(1, width: ParticleWidths.word),
@@ -66,74 +49,130 @@ class ParticleAlu extends Module {
     final signB = operandB.slice(31, 31);
     final ssltVal = mux(
       signA ^ signB,
-      mux(signA.eq(1), Const(1, width: ParticleWidths.word),
-          Const(0, width: ParticleWidths.word)),
+      mux(signA, Const(1, width: ParticleWidths.word), Const(0, width: ParticleWidths.word)),
       sltVal,
     );
 
-    // Count Leading Zeros (Combinational Priority Encoder)
-    final clzVal = Logic(name: 'clzVal', width: ParticleWidths.word);
+    // Unsigned and Signed Less-Than-or-Equal Primitives
+    final sleVal = mux(
+      operandA.lte(operandB),
+      Const(1, width: ParticleWidths.word),
+      Const(0, width: ParticleWidths.word),
+    );
 
-    // Width-matched rotate helpers (32 - shiftAmt5)
-    final shiftExt6 = shiftAmt5.zeroExtend(6);
-    final rotComplement = (Const(32, width: 6) - shiftExt6).slice(4, 0);
+    final ssleVal = mux(
+      signA ^ signB,
+      mux(signA, Const(1, width: ParticleWidths.word), Const(0, width: ParticleWidths.word)),
+      sleVal,
+    );
+
+    // Equality Primitives
+    final eqVal = mux(
+      operandA.eq(operandB),
+      Const(1, width: ParticleWidths.word),
+      Const(0, width: ParticleWidths.word),
+    );
+
+    final neVal = mux(
+      operandA.neq(operandB),
+      Const(1, width: ParticleWidths.word),
+      Const(0, width: ParticleWidths.word),
+    );
+
+    // Arithmetic Negate and 32-bit Byte Swap
+    final negVal = Const(0, width: ParticleWidths.word) - operandA;
+    final rev32Val = [
+      operandA.slice(7, 0),
+      operandA.slice(15, 8),
+      operandA.slice(23, 16),
+      operandA.slice(31, 24),
+    ].swizzle();
+
+    // Leading Zero Count
+    final clzList = <Logic>[];
+    for (var i = 0; i < 32; i++) {
+      clzList.add(operandA.slice(31 - i, 31 - i));
+    }
+    final clzVal = Logic(name: 'clz_val', width: ParticleWidths.word);
+    final clzCases = <CaseItem>[];
+    for (var i = 0; i < 32; i++) {
+      clzCases.add(CaseItem(clzList[i], [clzVal < Const(i, width: ParticleWidths.word)]));
+    }
 
     Combinational([
-      Case(
-        Const(1, width: 1),
-        [
-          for (int i = 31; i >= 0; i--)
-            CaseItem(operandA.slice(i, i), [
-              clzVal < Const(31 - i, width: ParticleWidths.word),
-            ]),
-        ],
-        defaultItem: [
-          clzVal < Const(32, width: ParticleWidths.word),
-        ],
-      ),
-      Case(aluOp, [
-        CaseItem(Const(AluOps.add, width: 5), [res < operandA + operandB]),
-        CaseItem(Const(AluOps.sub, width: 5), [res < subVal]),
-        CaseItem(Const(AluOps.and, width: 5), [res < (operandA & operandB)]),
-        CaseItem(Const(AluOps.or, width: 5), [res < (operandA | operandB)]),
-        CaseItem(Const(AluOps.xor, width: 5), [res < (operandA ^ operandB)]),
-        CaseItem(
-            Const(AluOps.shiftl, width: 5), [res < (operandA << shiftAmt5)]),
-        CaseItem(
-            Const(AluOps.shiftr, width: 5), [res < (operandA >>> shiftAmt5)]),
-        CaseItem(Const(AluOps.ashiftr, width: 5), [
-          res < (operandA.signExtend(64) >>> shiftAmt5).slice(31, 0),
-        ]),
-        CaseItem(Const(AluOps.rotl, width: 5), [
-          res < ((operandA << shiftAmt5) | (operandA >>> rotComplement)),
-        ]),
-        CaseItem(Const(AluOps.rotr, width: 5), [
-          res < ((operandA >>> shiftAmt5) | (operandA << rotComplement)),
-        ]),
-        CaseItem(Const(AluOps.clz, width: 5), [res < clzVal]),
-        CaseItem(Const(AluOps.bextr, width: 5), [res < bextrResult]),
-        CaseItem(Const(AluOps.bset, width: 5), [res < (operandA | bitMask)]),
-        CaseItem(Const(AluOps.bclr, width: 5), [res < (operandA & ~bitMask)]),
-        CaseItem(Const(AluOps.binv, width: 5), [res < (operandA ^ bitMask)]),
-        CaseItem(Const(AluOps.bget, width: 5), [
-          res <
-              ((operandA >>> shiftAmt5) & Const(1, width: ParticleWidths.word)),
-        ]),
-        CaseItem(Const(AluOps.slt, width: 5), [res < sltVal]),
-        CaseItem(Const(AluOps.sslt, width: 5), [res < ssltVal]),
-        CaseItem(Const(AluOps.not, width: 5), [res < ~operandA]),
-        CaseItem(Const(AluOps.nez, width: 5), [
-          res <
-              mux(operandA.neq(0), Const(1, width: ParticleWidths.word),
-                  Const(0, width: ParticleWidths.word)),
-        ]),
-      ], defaultItem: [
-        res < Const(0, width: ParticleWidths.word),
+      clzVal < Const(32, width: ParticleWidths.word),
+      Case(Const(1), clzCases, defaultItem: [
+        clzVal < Const(32, width: ParticleWidths.word),
       ]),
     ]);
 
-    result <= res;
-    zero <= res.eq(0);
-    negative <= res.slice(31, 31).eq(1);
+    Combinational([
+      Case(aluOp, [
+        // 0: ADD
+        CaseItem(Const(0, width: 5), [aluRes < (operandA + operandB)]),
+        // 1: SUB
+        CaseItem(Const(1, width: 5), [aluRes < (operandA - operandB)]),
+        // 2: AND
+        CaseItem(Const(2, width: 5), [aluRes < (operandA & operandB)]),
+        // 3: OR
+        CaseItem(Const(3, width: 5), [aluRes < (operandA | operandB)]),
+        // 4: XOR
+        CaseItem(Const(4, width: 5), [aluRes < (operandA ^ operandB)]),
+        // 5: SHIFTL
+        CaseItem(Const(5, width: 5), [aluRes < (operandA << shiftAmt5)]),
+        // 6: SHIFTR
+        CaseItem(Const(6, width: 5), [aluRes < (operandA >>> shiftAmt5)]),
+        // 7: ASHIFTR
+        CaseItem(Const(7, width: 5), [aluRes < (operandA >> shiftAmt5)]),
+        // 8: ROTL
+        CaseItem(Const(8, width: 5), [
+          aluRes < ((operandA << shiftAmt5) | (operandA >>> (Const(32, width: 6) - shiftAmt5.zeroExtend(6)).slice(4, 0))),
+        ]),
+        // 9: ROTR
+        CaseItem(Const(9, width: 5), [
+          aluRes < ((operandA >>> shiftAmt5) | (operandA << (Const(32, width: 6) - shiftAmt5.zeroExtend(6)).slice(4, 0))),
+        ]),
+        // 10: CLZ
+        CaseItem(Const(10, width: 5), [aluRes < clzVal]),
+        // 11: BEXTR
+        CaseItem(Const(11, width: 5), [aluRes < ((operandA >>> shiftAmt5) & Const(1, width: ParticleWidths.word))]),
+        // 12: BSET
+        CaseItem(Const(12, width: 5), [aluRes < (operandA | (Const(1, width: ParticleWidths.word) << shiftAmt5))]),
+        // 13: BCLR
+        CaseItem(Const(13, width: 5), [aluRes < (operandA & ~(Const(1, width: ParticleWidths.word) << shiftAmt5))]),
+        // 14: BINV
+        CaseItem(Const(14, width: 5), [aluRes < (operandA ^ (Const(1, width: ParticleWidths.word) << shiftAmt5))]),
+        // 15: BGET
+        CaseItem(Const(15, width: 5), [aluRes < ((operandA >>> shiftAmt5) & Const(1, width: ParticleWidths.word))]),
+        // 16: SLT
+        CaseItem(Const(16, width: 5), [aluRes < sltVal]),
+        // 17: SSLT
+        CaseItem(Const(17, width: 5), [aluRes < ssltVal]),
+        // 18: NOT
+        CaseItem(Const(18, width: 5), [aluRes < ~operandA]),
+        // 19: NEZ
+        CaseItem(Const(19, width: 5), [
+          aluRes < mux(operandA.neq(0), Const(1, width: ParticleWidths.word), Const(0, width: ParticleWidths.word)),
+        ]),
+        // 20: NEG
+        CaseItem(Const(20, width: 5), [aluRes < negVal]),
+        // 21: REV32
+        CaseItem(Const(21, width: 5), [aluRes < rev32Val]),
+        // 22: SEQ
+        CaseItem(Const(22, width: 5), [aluRes < eqVal]),
+        // 23: SNE
+        CaseItem(Const(23, width: 5), [aluRes < neVal]),
+        // 24: SLE
+        CaseItem(Const(24, width: 5), [aluRes < sleVal]),
+        // 25: SSLE
+        CaseItem(Const(25, width: 5), [aluRes < ssleVal]),
+      ], defaultItem: [
+        aluRes < Const(0, width: ParticleWidths.word),
+      ]),
+    ]);
+
+    output('result') <= aluRes;
+    output('isZero') <= aluRes.eq(0);
+    output('isNegative') <= aluRes.slice(31, 31);
   }
 }

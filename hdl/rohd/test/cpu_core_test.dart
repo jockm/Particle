@@ -88,5 +88,35 @@ void main() {
       // Vector 1 target: TRAP_TABLE_BASE (0x0100) + (1 * 64) = 0x0140 (320)
       expect(core.memPortAAddr.value.toInt(), equals(0x00000140));
     });
-  });
+  
+    test('ParticleCpuCore executes RBASE instructions correctly', () async {
+      // Cycle 1: Reset active
+      Simulator.registerAction(0, () => clk.put(0));
+      Simulator.registerAction(5, () => clk.put(1));
+      Simulator.registerAction(10, () => clk.put(0));
+
+      // Cycle 2: Release reset -> State Fetch (Fetch 0xD310: RBASE Imm4 = 16 or 0xD30F: RBASE Imm4 = 15)
+      Simulator.registerAction(12, () {
+        reset.put(0);
+        // Opcode 0xD3, Imm4 = 15 (0xD30F)
+        memARData.put((ParticleOpcodes.rbaseImm4 << 8) | 0x0F);
+      });
+      Simulator.registerAction(15, () => clk.put(1));
+      Simulator.registerAction(20, () => clk.put(0));
+
+      // Cycle 3: State Exec -> RBASE updates on this clock edge
+      Simulator.registerAction(25, () => clk.put(1));
+      Simulator.registerAction(30, () => clk.put(0));
+
+      reset.put(1);
+      memARData.put(0);
+      memBRData.put(0);
+      mboxStrobe.put(0);
+      mboxVector.put(0);
+
+      await Simulator.run();
+
+      expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
+    });
+});
 }

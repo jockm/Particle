@@ -8,6 +8,10 @@
 ._*
 **/._*
 
+# Build artifacts
+**/*.bin
+**/*.lst
+
 # ROHD-generated SystemVerilog top-level outputs
 hdl/rohd/particle_top.sv
 hdl/rohd/*.sv

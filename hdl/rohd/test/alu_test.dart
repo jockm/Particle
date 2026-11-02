@@ -180,5 +180,52 @@ void main() {
       Simulator.tick();
       expect(alu.result.value.toInt(), equals(1));
     });
-  });
+  
+    test('Extended ISA: NEG, REV32, SEQ, SNE, SLE, SSLE', () async {
+      final opA = Logic(name: 'opA', width: 32);
+      final opB = Logic(name: 'opB', width: 32);
+      final aluOp = Logic(name: 'aluOp', width: 5);
+      final alu = ParticleAlu(operandA: opA, operandB: opB, aluOp: aluOp);
+      await alu.build();
+
+      // NEG: 0 - 10 = -10 (0xFFFFFFF6)
+      opA.put(10);
+      opB.put(0);
+      aluOp.put(20);
+      expect(alu.result.value.toInt(), equals(0xFFFFFFF6));
+
+      // REV32: byte swap 0x12345678 -> 0x78563412
+      opA.put(0x12345678);
+      aluOp.put(21);
+      expect(alu.result.value.toInt(), equals(0x78563412));
+
+      // SEQ: 42 == 42 -> 1, 42 == 99 -> 0
+      opA.put(42);
+      opB.put(42);
+      aluOp.put(22);
+      expect(alu.result.value.toInt(), equals(1));
+      opB.put(99);
+      expect(alu.result.value.toInt(), equals(0));
+
+      // SNE: 42 != 99 -> 1, 42 != 42 -> 0
+      aluOp.put(23);
+      expect(alu.result.value.toInt(), equals(1));
+      opB.put(42);
+      expect(alu.result.value.toInt(), equals(0));
+
+      // SLE (unsigned): 15 <= 15 -> 1, 20 <= 15 -> 0
+      aluOp.put(24);
+      opA.put(15);
+      opB.put(15);
+      expect(alu.result.value.toInt(), equals(1));
+      opA.put(20);
+      expect(alu.result.value.toInt(), equals(0));
+
+      // SSLE (signed): -5 <= 5 -> 1
+      aluOp.put(25);
+      opA.put(0xFFFFFFFB); // -5
+      opB.put(5);
+      expect(alu.result.value.toInt(), equals(1));
+    });
+});
 }

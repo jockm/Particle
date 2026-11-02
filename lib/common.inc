@@ -79,3 +79,9 @@
     XCHGMOST
     JMP     R14, R0
 .endmacro
+
+; ------------------------------------------------------------------------------
+; Extended Native ISA Opcodes (NEG, REV32, SEQ, SNE, SLE, SSLE)
+; ------------------------------------------------------------------------------
+; Note: NEG is now a native 1-cycle instruction (0x48).
+; Legacy macro wrapper removed to ensure native instruction execution.

@@ -1,29 +1,56 @@
 // =============================================================================
 // File: hdl/rohd/lib/cpu_core.dart
-// Architecture: Particle 32-bit RISC Core
-// Description: Multi-stage execution engine, Direct Stride vector dispatch,
-//              branch evaluation, and instruction decoding in Intel ROHD.
+// Architecture: Particle 32-bit RISC
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
+import 'alu.dart';
 import 'constants.dart';
 import 'cpu_config.dart';
+import 'divider.dart';
 import 'register_file.dart';
+import 'multiplier.dart';
 
 class ParticleCpuCore extends Module {
   Logic get clk => input('clk');
   Logic get reset => input('reset');
-  Logic get memPortARData => input('memPortARData');
-  Logic get memPortBRData => input('memPortBRData');
-  Logic get mboxStrobeIn => input('mboxStrobeIn');
-  Logic get mboxVectorIn => input('mboxVectorIn');
 
+  // Memory Port A: Instruction Fetch (16-bit)
+  Logic get memPortARData => input('memPortARData');
   Logic get memPortAAddr => output('memPortAAddr');
+
+  // Memory Port B: Data Load/Store (32-bit)
+  Logic get memPortBRData => input('memPortBRData');
   Logic get memPortBAddr => output('memPortBAddr');
   Logic get memPortBWData => output('memPortBWData');
   Logic get memPortBBEn => output('memPortBBEn');
   Logic get memPortBWEn => output('memPortBWEn');
   Logic get memPortBREn => output('memPortBREn');
+
+  // Cross-Core Inbound Mailbox Strobe and Vector
+  Logic get mboxStrobeIn => input('mboxStrobeIn');
+  Logic get mboxVectorIn => input('mboxVectorIn');
+
+  // Cross-Core Outbound Mailbox Strobe and Vector
+  Logic get mboxStrobeOut => output('mboxStrobeOut');
+  Logic get mboxVectorOut => output('mboxVectorOut');
+
+  // Streaming FIFO Subsystem Interface
+  Logic get fifoChanSelect => output('fifoChanSelect');
+  Logic get fifoPushData => output('fifoPushData');
+  Logic get fifoPushEn => output('fifoPushEn');
+  Logic get fifoPopEn => output('fifoPopEn');
+  Logic get fifoPopData => input('fifoPopData');
+  Logic get fifoStatus => input('fifoStatus');
+
+  // Out-of-Band Shared Architectural Register Fabric (SARF)
+  Logic get sarfRs1Addr => output('sarfRs1Addr');
+  Logic get sarfRs2Addr => output('sarfRs2Addr');
+  Logic get sarfRs1Data => input('sarfRs1Data');
+  Logic get sarfRs2Data => input('sarfRs2Data');
+  Logic get sarfRdAddr => output('sarfRdAddr');
+  Logic get sarfRdData => output('sarfRdData');
+  Logic get sarfRdWe => output('sarfRdWe');
 
   final CpuConfig config;
 
@@ -34,6 +61,10 @@ class ParticleCpuCore extends Module {
     required Logic memPortBRData,
     required Logic mboxStrobeIn,
     required Logic mboxVectorIn,
+    Logic? fifoPopData,
+    Logic? fifoStatus,
+    Logic? sarfRs1Data,
+    Logic? sarfRs2Data,
     this.config = const CpuConfig(trapTableBase: 0x0100, trapStrideBytes: 64),
     super.name = 'particle_cpu_core',
   }) {
@@ -44,6 +75,11 @@ class ParticleCpuCore extends Module {
     addInput('mboxStrobeIn', mboxStrobeIn);
     addInput('mboxVectorIn', mboxVectorIn, width: ParticleWidths.trapVector);
 
+    addInput('fifoPopData', fifoPopData ?? Const(0, width: ParticleWidths.word), width: ParticleWidths.word);
+    addInput('fifoStatus', fifoStatus ?? Const(0, width: ParticleWidths.word), width: ParticleWidths.word);
+    addInput('sarfRs1Data', sarfRs1Data ?? Const(0, width: ParticleWidths.word), width: ParticleWidths.word);
+    addInput('sarfRs2Data', sarfRs2Data ?? Const(0, width: ParticleWidths.word), width: ParticleWidths.word);
+
     addOutput('memPortAAddr', width: ParticleWidths.word);
     addOutput('memPortBAddr', width: ParticleWidths.word);
     addOutput('memPortBWData', width: ParticleWidths.word);
@@ -51,19 +87,31 @@ class ParticleCpuCore extends Module {
     addOutput('memPortBWEn');
     addOutput('memPortBREn');
 
+    addOutput('mboxStrobeOut');
+    addOutput('mboxVectorOut', width: ParticleWidths.trapVector);
+
+    addOutput('fifoChanSelect', width: 2);
+    addOutput('fifoPushData', width: ParticleWidths.word);
+    addOutput('fifoPushEn');
+    addOutput('fifoPopEn');
+
+    addOutput('sarfRs1Addr', width: 5);
+    addOutput('sarfRs2Addr', width: 5);
+    addOutput('sarfRdAddr', width: 5);
+    addOutput('sarfRdData', width: ParticleWidths.word);
+    addOutput('sarfRdWe');
+
     _build();
   }
 
   void _build() {
+    const int stateFetch = 0;
+    const int stateExec = 1;
+    const int stateWait = 2;
+
     final pc = Logic(name: 'pc', width: ParticleWidths.word);
     final nextPc = Logic(name: 'nextPc', width: ParticleWidths.word);
-
-    // Synchronous PC update with asynchronous/synchronous reset to trapTableBase
-    Sequential(clk, reset: reset, resetValues: {
-      pc: Const(config.trapTableBase, width: 32)
-    }, [
-      pc < nextPc,
-    ]);
+    final state = Logic(name: 'state', width: 2);
 
     memPortAAddr <= pc;
 
@@ -74,10 +122,20 @@ class ParticleCpuCore extends Module {
     final imm4 = inst.slice(3, 0);
     final imm8 = inst.slice(7, 0);
 
-    // Register File instantiation
+    final imm4Val = imm4.zeroExtend(32);
+    final negImm4Val = Const(0, width: 32) - imm4Val;
+    final imm8Val = imm8.zeroExtend(32);
+    final negImm8Val = Const(0, width: 32) - imm8Val;
+
     final rfWEn = Logic(name: 'rfWEn');
     final rfWAddr = Logic(name: 'rfWAddr', width: 4);
     final rfWData = Logic(name: 'rfWData', width: 32);
+    final rfXchgEn = Logic(name: 'rfXchgEn');
+    final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
+    final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
+    final rfXchgRegIdx = Logic(name: 'rfXchgRegIdx', width: 4);
+    final rfRbaseEn = Logic(name: 'rfRbaseEn');
+    final rfRbaseIn = Logic(name: 'rfRbaseIn', width: 5);
 
     final rf = RegisterFile(
       clk: clk,
@@ -87,46 +145,258 @@ class ParticleCpuCore extends Module {
       wAddr: rfWAddr,
       wData: rfWData,
       wEn: rfWEn,
-      xchgEn: Const(0),
-      xchgAllEn: Const(0),
-      xchgMostEn: Const(0),
-      xchgRegIdx: rr,
+      xchgEn: rfXchgEn,
+      xchgAllEn: rfXchgAllEn,
+      xchgMostEn: rfXchgMostEn,
+      xchgRegIdx: rfXchgRegIdx,
+      rbaseEn: rfRbaseEn,
+      rbaseIn: rfRbaseIn,
     );
 
-    // Branch condition evaluation
+    final aluOp = Logic(name: 'aluOp', width: 5);
+    final aluOperandB = Logic(name: 'aluOperandB', width: 32);
+
+    Combinational([
+      aluOp < Const(AluOps.add, width: 5),
+      aluOperandB < rf.rDataB,
+      Case(opcode, [
+        // Arithmetic
+        CaseItem(Const(ParticleOpcodes.add, width: 8), [aluOp < Const(AluOps.add, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.sub, width: 8), [aluOp < Const(AluOps.sub, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.addImm4, width: 8), [aluOp < Const(AluOps.add, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.subImm4, width: 8), [aluOp < Const(AluOps.sub, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.saddImm4, width: 8), [aluOp < Const(AluOps.add, width: 5), aluOperandB < imm4.signExtend(32)]),
+        CaseItem(Const(ParticleOpcodes.ssubImm4, width: 8), [aluOp < Const(AluOps.sub, width: 5), aluOperandB < imm4.signExtend(32)]),
+
+        // Logic & Inversions
+        CaseItem(Const(ParticleOpcodes.notOp, width: 8), [aluOp < Const(AluOps.not, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.nezOp, width: 8), [aluOp < Const(AluOps.nez, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.andOp, width: 8), [aluOp < Const(AluOps.and, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.orOp, width: 8), [aluOp < Const(AluOps.or, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.xorOp, width: 8), [aluOp < Const(AluOps.xor, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.andImm4, width: 8), [aluOp < Const(AluOps.and, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.orImm4, width: 8), [aluOp < Const(AluOps.or, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.xorImm4, width: 8), [aluOp < Const(AluOps.xor, width: 5), aluOperandB < imm4Val]),
+
+        // Shifts & Rotates
+        CaseItem(Const(ParticleOpcodes.shiftL, width: 8), [aluOp < Const(AluOps.shiftl, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.shiftR, width: 8), [aluOp < Const(AluOps.shiftr, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.ashiftR, width: 8), [aluOp < Const(AluOps.ashiftr, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.rotL, width: 8), [aluOp < Const(AluOps.rotl, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.rotR, width: 8), [aluOp < Const(AluOps.rotr, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.shiftLImm4, width: 8), [aluOp < Const(AluOps.shiftl, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.shiftRImm4, width: 8), [aluOp < Const(AluOps.shiftr, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.ashiftRImm4, width: 8), [aluOp < Const(AluOps.ashiftr, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.rotLImm4, width: 8), [aluOp < Const(AluOps.rotl, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.rotRImm4, width: 8), [aluOp < Const(AluOps.rotr, width: 5), aluOperandB < imm4Val]),
+
+        // Relational Comparisons
+        CaseItem(Const(ParticleOpcodes.slt, width: 8), [aluOp < Const(AluOps.slt, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.sltImm4, width: 8), [aluOp < Const(AluOps.slt, width: 5), aluOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.sltNegImm4, width: 8), [aluOp < Const(AluOps.slt, width: 5), aluOperandB < negImm4Val]),
+        CaseItem(Const(ParticleOpcodes.sltR14Imm8, width: 8), [aluOp < Const(AluOps.slt, width: 5), aluOperandB < imm8Val]),
+        CaseItem(Const(ParticleOpcodes.sltR14NegImm8, width: 8), [aluOp < Const(AluOps.slt, width: 5), aluOperandB < negImm8Val]),
+        CaseItem(Const(ParticleOpcodes.sslt, width: 8), [aluOp < Const(AluOps.sslt, width: 5)]),
+        CaseItem(Const(ParticleOpcodes.ssltImm4, width: 8), [aluOp < Const(AluOps.sslt, width: 5), aluOperandB < imm4.signExtend(32)]),
+        CaseItem(Const(ParticleOpcodes.ssltNegImm4, width: 8), [aluOp < Const(AluOps.sslt, width: 5), aluOperandB < negImm4Val]),
+        CaseItem(Const(ParticleOpcodes.ssltR14Imm8, width: 8), [aluOp < Const(AluOps.sslt, width: 5), aluOperandB < imm8.signExtend(32)]),
+        CaseItem(Const(ParticleOpcodes.ssltR14NegImm8, width: 8), [aluOp < Const(AluOps.sslt, width: 5), aluOperandB < negImm8Val]),
+      ]),
+    ]);
+
+    final alu = ParticleAlu(
+      operandA: rf.rDataA,
+      operandB: aluOperandB,
+      aluOp: aluOp,
+    );
+
+    final mulMode = Logic(name: 'mulMode', width: 2);
+    final mulOperandB = Logic(name: 'mulOperandB', width: 32);
+
+    Combinational([
+      mulMode < Const(0, width: 2),
+      mulOperandB < rf.rDataB,
+      Case(opcode, [
+        CaseItem(Const(ParticleOpcodes.mull, width: 8), [mulMode < Const(0, width: 2)]),
+        CaseItem(Const(ParticleOpcodes.mulh, width: 8), [mulMode < Const(1, width: 2)]),
+        CaseItem(Const(ParticleOpcodes.smulh, width: 8), [mulMode < Const(2, width: 2)]),
+        CaseItem(Const(ParticleOpcodes.mulhsu, width: 8), [mulMode < Const(3, width: 2)]),
+        CaseItem(Const(ParticleOpcodes.mullImm4, width: 8), [mulMode < Const(0, width: 2), mulOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.mulhImm4, width: 8), [mulMode < Const(1, width: 2), mulOperandB < imm4Val]),
+        CaseItem(Const(ParticleOpcodes.smulhImm4, width: 8), [mulMode < Const(2, width: 2), mulOperandB < imm4.signExtend(32)]),
+        CaseItem(Const(ParticleOpcodes.mulhsuImm4, width: 8), [mulMode < Const(3, width: 2), mulOperandB < imm4Val]),
+      ]),
+    ]);
+
+    final mul = ParticleMultiplier(
+      operandA: rf.rDataA,
+      operandB: mulOperandB,
+      mulMode: mulMode,
+    );
+
+    memPortBAddr <= rf.rDataA;
+    memPortBWData <= rf.rDataB;
+    memPortBBEn <= Const(0xF, width: 4);
+    memPortBWEn <= Const(0);
+    memPortBREn <= Const(0);
+
+    rfWAddr <= mux(
+      opcode.eq(Const(ParticleOpcodes.sltR14Imm8, width: 8)) |
+      opcode.eq(Const(ParticleOpcodes.sltR14NegImm8, width: 8)) |
+      opcode.eq(Const(ParticleOpcodes.ssltR14Imm8, width: 8)) |
+      opcode.eq(Const(ParticleOpcodes.ssltR14NegImm8, width: 8)),
+      Const(14, width: 4),
+      rr,
+    );
+    rfXchgRegIdx <= rr;
+
+    // Out-of-Band SARF default port connections
+    sarfRs1Addr <= rr.zeroExtend(5);
+    sarfRs2Addr <= rl.zeroExtend(5);
+    sarfRdAddr  <= rr.zeroExtend(5);
+    sarfRdData  <= rf.rDataA;
+
+    // Streaming FIFO default port connections
+    fifoChanSelect <= rl.slice(1, 0);
+    fifoPushData   <= rf.rDataA;
+    mboxVectorOut  <= rl.slice(3, 0);
+
+    final inExec = state.eq(stateExec);
+
+    final outMboxStrobe = Logic(name: 'outMboxStrobe');
+    final outFifoPushEn = Logic(name: 'outFifoPushEn');
+    final outFifoPopEn  = Logic(name: 'outFifoPopEn');
+    final outSarfRdWe   = Logic(name: 'outSarfRdWe');
+
+    final fifoEmpty = fifoStatus.slice(0, 0);
+    final isFifoRead = opcode.eq(Const(ParticleOpcodes.fifoR, width: 8));
+    final fifoReadStall = inExec & isFifoRead & fifoEmpty;
+
+    mboxStrobeOut <= outMboxStrobe;
+    fifoPushEn    <= outFifoPushEn;
+    fifoPopEn     <= outFifoPopEn;
+    sarfRdWe      <= outSarfRdWe;
+
+    Combinational([
+      // Defaults
+      rfWData < alu.result,
+      rfWEn < Const(0),
+      rfXchgEn < Const(0),
+      rfXchgAllEn < Const(0),
+      rfXchgMostEn < Const(0),
+      rfRbaseEn < Const(0),
+      rfRbaseIn < Const(0, width: 5),
+      outMboxStrobe < Const(0),
+      outFifoPushEn < Const(0),
+      outFifoPopEn < Const(0),
+      outSarfRdWe < Const(0),
+
+      Case(opcode, [
+        // Arithmetic
+        CaseItem(Const(ParticleOpcodes.add, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.sub, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.addImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.subImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.saddImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ssubImm4, width: 8), [rfWEn < inExec]),
+
+        // Logic & Inversions
+        CaseItem(Const(ParticleOpcodes.notOp, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.nezOp, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.andOp, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.orOp, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.xorOp, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.andImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.orImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.xorImm4, width: 8), [rfWEn < inExec]),
+
+        // Shifts & Rotates
+        CaseItem(Const(ParticleOpcodes.shiftL, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.shiftR, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ashiftR, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.rotL, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.rotR, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.shiftLImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.shiftRImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ashiftRImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.rotLImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.rotRImm4, width: 8), [rfWEn < inExec]),
+
+        // Multiplications
+        CaseItem(Const(ParticleOpcodes.mull, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.mulh, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.smulh, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.mulhsu, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.mullImm4, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.mulhImm4, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.smulhImm4, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.mulhsuImm4, width: 8), [rfWData < mul.result, rfWEn < inExec]),
+
+        // Relational Comparisons
+        CaseItem(Const(ParticleOpcodes.slt, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.sltImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.sltNegImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.sltR14Imm8, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.sltR14NegImm8, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.sslt, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ssltImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ssltNegImm4, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ssltR14Imm8, width: 8), [rfWEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.ssltR14NegImm8, width: 8), [rfWEn < inExec]),
+
+        // Context Exchange & RBASE
+        CaseItem(Const(ParticleOpcodes.xchg, width: 8), [rfXchgEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.xchgAll, width: 8), [rfXchgAllEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.rbaseImm4, width: 8), [rfRbaseIn < imm8.slice(4, 0), rfRbaseEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.rbaseR, width: 8), [rfRbaseIn < rf.rDataA.slice(4, 0), rfRbaseEn < inExec]),
+        CaseItem(Const(ParticleOpcodes.xchgMost, width: 8), [rfXchgMostEn < inExec]),
+
+        // Hardware Streaming FIFOs & Mailbox
+        CaseItem(Const(ParticleOpcodes.fifoR, width: 8), [
+          rfWData < fifoPopData,
+          rfWEn < inExec & ~fifoEmpty,
+          outFifoPopEn < inExec & ~fifoEmpty,
+        ]),
+        CaseItem(Const(ParticleOpcodes.fifoW, width: 8), [
+          outFifoPushEn < inExec,
+        ]),
+        CaseItem(Const(ParticleOpcodes.fifoStat, width: 8), [
+          rfWData < fifoStatus,
+          rfWEn < inExec,
+        ]),
+        CaseItem(Const(ParticleOpcodes.mbox, width: 8), [
+          outMboxStrobe < inExec,
+        ]),
+      ]),
+    ]);
+
+    // Next PC & Branch / Table Jump Calculation
     final rValA = rf.rDataA;
     final isZero = rValA.eq(0);
     final isNegative = rValA.slice(31, 31).eq(1);
     final isPositive = (~isNegative) & (~isZero);
     final isNotZero = ~isZero;
 
-    // Displacements (in bytes, shifted by 1 bit)
     final dispImm4 = imm4.zeroExtend(32) << 1;
     final dispImm8 = imm8.zeroExtend(32) << 1;
     final signedRegDisp = (rValA.signExtend(32)) << 1;
-
-    // Direct Stride MBOX vector computation: TRAP_TABLE_BASE + (vector * 64)
-    final mboxTargetAddr = Const(config.trapTableBase, width: 32) +
-        (mboxVectorIn.zeroExtend(32) << 6);
 
     final branchNextPc = Logic(name: 'branchNextPc', width: 32);
 
     Combinational([
       Case(opcode, [
-        // BRANCH Rr (0xA4)
+        CaseItem(Const(ParticleOpcodes.jtbl, width: 8), [
+          branchNextPc < (pc + Const(2, width: 32) + (rValA << 1)),
+        ]),
         CaseItem(Const(ParticleOpcodes.branch, width: 8), [
           branchNextPc < (pc + signedRegDisp),
         ]),
-
-        // Unconditional Branches
         CaseItem(Const(ParticleOpcodes.fbraImm8, width: 8), [
           branchNextPc < (pc + dispImm8),
         ]),
         CaseItem(Const(ParticleOpcodes.bbraImm8, width: 8), [
           branchNextPc < (pc - dispImm8),
         ]),
-
-        // Forward Conditional Branches
         CaseItem(Const(ParticleOpcodes.fbraZImm4, width: 8), [
           branchNextPc < mux(isZero, pc + dispImm4, pc + 2),
         ]),
@@ -151,8 +421,6 @@ class ParticleCpuCore extends Module {
         CaseItem(Const(ParticleOpcodes.fbraNZImm8, width: 8), [
           branchNextPc < mux(isNotZero, pc + dispImm8, pc + 2),
         ]),
-
-        // Backward Conditional Branches
         CaseItem(Const(ParticleOpcodes.bbraZImm4, width: 8), [
           branchNextPc < mux(isZero, pc - dispImm4, pc + 2),
         ]),
@@ -177,27 +445,46 @@ class ParticleCpuCore extends Module {
         CaseItem(Const(ParticleOpcodes.bbraNZImm8, width: 8), [
           branchNextPc < mux(isNotZero, pc - dispImm8, pc + 2),
         ]),
-
-        // Indirect Jump
         CaseItem(Const(ParticleOpcodes.jmp, width: 8), [
           branchNextPc < rValA,
+        ]),
+        CaseItem(Const(ParticleOpcodes.rjump, width: 8), [
+          branchNextPc < (pc + signedRegDisp),
         ]),
       ], defaultItem: [
         branchNextPc < pc + 2,
       ]),
     ]);
 
-    // Top-level PC Arbitration: MBOX interrupt has highest priority over regular branch
+    final mboxTargetAddr = Const(config.trapTableBase, width: 32) +
+        (mboxVectorIn.zeroExtend(32) << 6);
+
     nextPc <= mux(mboxStrobeIn, mboxTargetAddr, branchNextPc);
 
-    // Data port & control defaults
-    memPortBAddr <= Const(0, width: 32);
-    memPortBWData <= Const(0, width: 32);
-    memPortBBEn <= Const(0, width: 4);
-    memPortBWEn <= Const(0);
-    memPortBREn <= Const(0);
-    rfWEn <= Const(0);
-    rfWAddr <= Const(0, width: 4);
-    rfWData <= Const(0, width: 32);
+    Sequential(clk, reset: reset, resetValues: {
+      pc: Const(config.trapTableBase, width: 32),
+      state: Const(stateFetch, width: 2),
+    }, [
+      If(mboxStrobeIn, then: [
+        pc < mboxTargetAddr,
+        state < Const(stateFetch, width: 2),
+      ], orElse: [
+        Case(state, [
+          CaseItem(Const(stateFetch, width: 2), [
+            state < Const(stateExec, width: 2),
+          ]),
+          CaseItem(Const(stateExec, width: 2), [
+            If(fifoReadStall, then: [
+              pc < pc,
+              state < Const(stateExec, width: 2),
+            ], orElse: [
+              pc < nextPc,
+              state < Const(stateFetch, width: 2),
+            ]),
+          ]),
+          CaseItem(Const(stateWait, width: 2), []),
+        ]),
+      ]),
+    ]);
   }
 }

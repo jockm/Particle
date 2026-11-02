@@ -45,6 +45,12 @@ abstract class AluOps {
   static const int sslt = 17;
   static const int not = 18;
   static const int nez = 19;
+  static const int neg = 20;
+  static const int rev32 = 21;
+  static const int seq = 22;
+  static const int sne = 23;
+  static const int sle = 24;
+  static const int ssle = 25;
 }
 
 abstract class ParticleOpcodes {
@@ -100,6 +106,7 @@ abstract class ParticleOpcodes {
   static const int subImm4 = 0x45;
   static const int divImm4 = 0x46;
   static const int modImm4 = 0x47;
+  static const int neg = 0x48;
 
   static const int sadd = 0x50;
   static const int ssub = 0x51;
@@ -155,6 +162,7 @@ abstract class ParticleOpcodes {
   static const int bget = 0x89;
   static const int bgetImm4 = 0x8A;
   static const int tas = 0x8B;
+  static const int rev32 = 0x8C;
 
   // 4.7 Relational Comparisons (0x90 - 0x99)
   static const int slt = 0x90;
@@ -163,6 +171,10 @@ abstract class ParticleOpcodes {
   static const int sltR14Imm8 = 0x93;
   static const int sltR14NegImm8 = 0x94;
   static const int sslt = 0x95;
+  static const int seq = 0x9A;
+  static const int sne = 0x9B;
+  static const int sle = 0x9C;
+  static const int ssle = 0x9D;
   static const int ssltImm4 = 0x96;
   static const int ssltNegImm4 = 0x97;
   static const int ssltR14Imm8 = 0x98;
@@ -207,6 +219,8 @@ abstract class ParticleOpcodes {
   static const int xchg = 0xD0;
   static const int xchgAll = 0xD1;
   static const int xchgMost = 0xD2;
+  static const int rbaseImm4 = 0xD3;
+  static const int rbaseR = 0xD4;
 
   // 4.12 Hardware Streaming FIFOs & Mailbox (0xE0 - 0xE9)
   static const int fifoR = 0xE0;

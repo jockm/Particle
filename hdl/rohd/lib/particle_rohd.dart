@@ -10,3 +10,7 @@ export 'cpu_core.dart';
 export 'constants.dart';
 export 'sdram_controller.dart';
 export 'uart.dart';
+
+export 'shared_reg_fabric.dart';
+
+export 'particle_multi_core.dart';

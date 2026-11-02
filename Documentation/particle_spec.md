@@ -1,55 +1,194 @@
-# Particle Processor Architecture Specification
+# Particle Processor Architecture & System Engineering Specification
 
-## 1. System Overview
-Particle is a 32-bit load/store RISC processor architecture utilizing compact, fixed-width 16-bit instructions, implemented purely in Intel ROHD (Dart sdk >= 3.0.0).
-
----
-
-## 2. Register Model
-* `R0`: Hardwired Constant Zero.
-* `R1`–`R4`: Function argument passing and return value registers.
-* `R5`–`R10`: Preserved callee-saved general registers.
-* `R11`–`R13`: Scratchpad caller-saved registers.
-* `R14`: Subroutine link register (`RCALL`/`RRET`), immediate accumulator, and wide branch register.
-* `R15` (`SP`): Architectural stack pointer (full-descending, 4-byte aligned).
+## 1. Overview
+Particle is a high-efficiency 32-bit load/store RISC processor architecture utilizing compact, fixed-width 16-bit instructions, inspired by the Hitachi SH-2, ARM Thumb, and MiniRISC4 architectures. It is implemented in pure Intel ROHD (Rapid Open Hardware Development in Dart) without legacy Verilog codebases, synthesizing directly to SystemVerilog for modern FPGA platforms (such as Lattice ECP5 on the ULX3S).
 
 ---
 
-## 3. Control Flow & Relative Branch Instructions
+## 2. Register & Execution Architecture
+* **Registers**: 16 native 32-bit general-purpose registers:
+  * `R0`: Hardwired Constant Zero. Reads return `0x00000000`; writes are safely discarded.
+  * `R1`–`R4`: Function argument passing and return value registers (Caller-saved).
+  * `R5`–`R10`: Preserved general-purpose registers (Callee-saved).
+  * `R11`–`R13`: Scratchpad / temporary registers (Caller-saved).
+  * `R14`: Subroutine link register (`RCALL`/`RRET`), immediate accumulator, and trap link register.
+  * `R15` (`SP`): Architectural stack pointer (full-descending, 4-byte aligned).
+* **Hardware Shadow Register Bank**:
+  * 16 duplicate 32-bit shadow registers (`S0`–`S15`).
+  * Single-cycle exchange operations:
+    * `XCHG Rr`: Swaps active `Rr` with `Sr`.
+    * `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
+    * `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
+* **Flagless Design**: No traditional ALU condition code flags. Branching evaluates registers directly (`FBRA.Z`, `FBRA.P`, `BBRA.Z`, etc.), while relational evaluations yield integer boolean results (`0` or `1`) directly in destination registers.
 
-### 3.1 Control Flow (0xA0 - 0xAF)
-* `0xA0`: `JMP Rr, Rl` — Indirect jump and link ($Rl \leftarrow PC + 2; PC \leftarrow Rr$)
-* `0xA1`: `RJUMP Rr, Rl` — Relative jump and link ($Rl \leftarrow PC + 2; PC \leftarrow PC + (Rr \times 2)$)
-* `0xA2`: `TRAP Rr` — Software trap on register vector
-* `0xA3`: `TRAP Imm4` — Software trap on immediate vector
-* `0xA4`: **`BRANCH Rr`** — Arbitrary relative branch forward or backward without linking. $Rr$ is treated as a signed 32-bit integer representing 16-bit word offset ($PC \leftarrow PC + (\text{signed}(Rr) \times 2)$).
+---
 
-### 3.2 Forward Branches (0xB0 - 0xBB)
-All offsets represent 16-bit halfwords added to the current PC ($PC \leftarrow PC + (\text{offset} \times 2)$).
+## 3. Direct Stride Vector Table
+Vectors are computed without indirect pointer memory fetches using a direct 64-byte (32-instruction) stride:
+$$\text{Target} = \text{TRAP\_TABLE\_BASE} + (\text{Vector} \times 64)$$
 
-| Opcode | Mnemonic & Syntax | Format | Reach | Condition |
-| :--- | :--- | :--- | :--- | :--- |
-| `0xB0` | `FBRA <label>` | Imm8 | 0..255 halfwords | Unconditional |
-| `0xB4` | `FBRA.Z Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr == 0$ |
-| `0xB5` | `FBRA.N Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr < 0$ |
-| `0xB6` | `FBRA.P Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr > 0$ |
-| `0xBA` | `FBRA.NZ Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr \ne 0$ |
-| `0xB7` | `FBRA.Z R14, <label>` | Imm8 | 0..255 halfwords | If $R14 == 0$ |
-| `0xB8` | `FBRA.N R14, <label>` | Imm8 | 0..255 halfwords | If $R14 < 0$ |
-| `0xB9` | `FBRA.P R14, <label>` | Imm8 | 0..255 halfwords | If $R14 > 0$ |
-| `0xBB` | `FBRA.NZ R14, <label>` | Imm8 | 0..255 halfwords | If $R14 \ne 0$ |
+* Base Address: `0x00000100`
+* Stride: 64 bytes (`0x40`)
+  * Vector 0 (`0x00000100`): Cold Power-On Reset
+  * Vector 1 (`0x00000140`): Inbound MBOX / FIFO Strobe Notification
+  * Vectors 2–13 (`0x00000180`–`0x0000047F`): Software & User-defined Traps
+  * Vector 14 (`0x00000480`): Memory Bus Misalignment Fault
+  * Vector 15 (`0x000004C0`): Undefined / Illegal Opcode Decoded
 
-### 3.3 Backward Branches (0xC0 - 0xCB)
-All offsets represent 16-bit halfwords subtracted from current PC ($PC \leftarrow PC - (\text{offset} \times 2)$).
+---
 
-| Opcode | Mnemonic & Syntax | Format | Reach | Condition |
-| :--- | :--- | :--- | :--- | :--- |
-| `0xC0` | `BBRA <label>` | Imm8 | 0..255 halfwords | Unconditional |
-| `0xC4` | `BBRA.Z Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr == 0$ |
-| `0xC5` | `BBRA.N Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr < 0$ |
-| `0xC6` | `BBRA.P Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr > 0$ |
-| `0xCA` | `BBRA.NZ Rr, <label>` | R-Imm4 | 0..15 halfwords | If $Rr \ne 0$ |
-| `0xC7` | `BBRA.Z R14, <label>` | Imm8 | 0..255 halfwords | If $R14 == 0$ |
-| `0xC8` | `BBRA.N R14, <label>` | Imm8 | 0..255 halfwords | If $R14 < 0$ |
-| `0xC9` | `BBRA.P R14, <label>` | Imm8 | 0..255 halfwords | If $R14 > 0$ |
-| `0xCB` | `BBRA.NZ R14, <label>` | Imm8 | 0..255 halfwords | If $R14 \ne 0$ |
+## 4. Complete Instruction Set Architecture (ISA) Map
+Instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`.
+
+### 4.1 Loads & Immediates (0x00 - 0x06)
+* `0x00`: `LD Rr, Rl` — $Rr \leftarrow Rl$
+* `0x01`: `LD Rr, Imm4` — $Rr \leftarrow \text{zero\_ext}(Imm4)$
+* `0x02`: `LD R14, Imm8` — $R14 \leftarrow \text{zero\_ext}(Imm8)$
+* `0x03`: `LD Rr, -Imm4` — $Rr \leftarrow -Imm4$
+* `0x04`: `LD R14, -Imm8` — $R14 \leftarrow -Imm8$
+* `0x05`: `PUSH4 Rr, Imm4` — $Rr \leftarrow (Rr \ll 4) \mid Imm4$
+* `0x06`: `PUSH8 R14, Imm8` — $R14 \leftarrow (R14 \ll 8) \mid Imm8$
+
+### 4.2 Memory Loads & Stores (0x10 - 0x39)
+* `0x10`: `LD8 Rr, (Rl)` — $Rr \leftarrow \text{zero\_ext}(\text{Mem8}[Rl])$
+* `0x11`: `ST8 (Rr), Rl` — $\text{Mem8}[Rr] \leftarrow Rl[7:0]$
+* `0x12`: `LD8 Rr, (Rl++)` — Post-increment load byte
+* `0x13`: `ST8 (Rr++), Rl` — Post-increment store byte
+* `0x14`: `LD8 Rr, (--Rl)` — Pre-decrement load byte
+* `0x15`: `ST8 (--Rr), Rl` — Pre-decrement store byte
+* `0x16`: `LD8 Rr, (Rl + Imm4)` — Base + offset load byte
+* `0x17`: `ST8 (Rr + Imm4), Rl` — Base + offset store byte
+* `0x18`: `LD8 Rr, (SP + Imm4)` — Stack-relative load byte
+* `0x19`: `ST8 (SP + Imm4), Rl` — Stack-relative store byte
+
+* `0x20`: `LD16 Rr, (Rl)` — $Rr \leftarrow \text{zero\_ext}(\text{Mem16}[Rl])$
+* `0x21`: `ST16 (Rr), Rl` — $\text{Mem16}[Rr] \leftarrow Rl[15:0]$
+* `0x22`: `LD16 Rr, (Rl++)` — Post-increment load halfword
+* `0x23`: `ST16 (Rr++), Rl` — Post-increment store halfword
+* `0x24`: `LD16 Rr, (--Rl)` — Pre-decrement load halfword
+* `0x25`: `ST16 (--Rr), Rl` — Pre-decrement store halfword
+* `0x26`: `LD16 Rr, (Rl + Imm4)` — Base + offset load halfword
+* `0x27`: `ST16 (Rr + Imm4), Rl` — Base + offset store halfword
+* `0x28`: `LD16 Rr, (SP + Imm4)` — Stack-relative load halfword
+* `0x29`: `ST16 (SP + Imm4), Rl` — Stack-relative store halfword
+
+* `0x30`: `LD32 Rr, (Rl)` — $Rr \leftarrow \text{Mem32}[Rl]$
+* `0x31`: `ST32 (Rr), Rl` — $\text{Mem32}[Rr] \leftarrow Rl$
+* `0x32`: `LD32 Rr, (Rl++)` — Post-increment load word
+* `0x33`: `ST32 (Rr++), Rl` — Post-increment store word
+* `0x34`: `LD32 Rr, (--Rl)` — Pre-decrement load word
+* `0x35`: `ST32 (--Rr), Rl` — Pre-decrement store word
+* `0x36`: `LD32 Rr, (Rl + Imm4)` — Base + offset load word
+* `0x37`: `ST32 (Rr + Imm4), Rl` — Base + offset store word
+* `0x38`: `LD32 Rr, (SP + Imm4)` — Stack-relative load word
+* `0x39`: `ST32 (SP + Imm4), Rl` — Stack-relative store word
+
+### 4.3 Unsigned & Signed Arithmetic (0x40 - 0x57)
+* `0x40`: `ADD Rr, Rl` — $Rr \leftarrow Rr + Rl$
+* `0x41`: `SUB Rr, Rl` — $Rr \leftarrow Rr - Rl$
+* `0x42`: `DIV Rr, Rl` — $Rr \leftarrow Rr / Rl$ (Unsigned integer divide)
+* `0x43`: `MOD Rr, Rl` — $Rr \leftarrow Rr \pmod{Rl}$ (Unsigned remainder)
+* `0x44`: `ADD Rr, Imm4` — $Rr \leftarrow Rr + Imm4$
+* `0x45`: `SUB Rr, Imm4` — $Rr \leftarrow Rr - Imm4$
+* `0x46`: `DIV Rr, Imm4` — $Rr \leftarrow Rr / Imm4$
+* `0x47`: `MOD Rr, Imm4` — $Rr \leftarrow Rr \pmod{Imm4}$
+* `0x48`: **`NEG Rr`** — Unary arithmetic negate: $Rr \leftarrow 0 - Rr$
+* `0x50`: `SADD Rr, Rl` — Signed addition
+* `0x51`: `SSUB Rr, Rl` — Signed subtraction
+* `0x52`: `SDIV Rr, Rl` — Signed integer division
+* `0x53`: `SMOD Rr, Rl` — Signed modulus remainder
+* `0x54`: `SADD Rr, Imm4` — Signed addition with immediate
+* `0x55`: `SSUB Rr, Imm4` — Signed subtraction with immediate
+* `0x56`: `SDIV Rr, Imm4` — Signed division with immediate
+* `0x57`: `SMOD Rr, Imm4` — Signed modulus with immediate
+
+### 4.4 Logic, Shifts, Sign-Extension & Inversions (0x60 - 0x77)
+* `0x60`: `SHIFTL Rr, Rl` — Logical left shift: $Rr \leftarrow Rr \ll (Rl \ \& \ 0x1F)$
+* `0x61`: `SEXT8 Rr` — Sign extend byte: $Rr \leftarrow \text{sign\_ext8}(Rr[7:0])$
+* `0x62`: `SHIFTR Rr, Rl` — Logical right shift: $Rr \leftarrow Rr \gg (Rl \ \& \ 0x1F)$
+* `0x63`: `ASHIFTR Rr, Rl` — Arithmetic right shift: $Rr \leftarrow Rr \ggg (Rl \ \& \ 0x1F)$
+* `0x64`: `ROTL Rr, Rl` — Rotate left
+* `0x65`: `ROTR Rr, Rl` — Rotate right
+* `0x66`: `AND Rr, Rl` — $Rr \leftarrow Rr \ \& \ Rl$
+* `0x67`: `OR Rr, Rl` — $Rr \leftarrow Rr \mid Rl$
+* `0x68`: `XOR Rr, Rl` — $Rr \leftarrow Rr \oplus Rl$
+* `0x69`: `SHIFTL Rr, Imm4` — Logical left shift by immediate: $Rr \leftarrow Rr \ll Imm4$
+* `0x6A`: `SEXT16 Rr` — Sign extend halfword: $Rr \leftarrow \text{sign\_ext16}(Rr[15:0])$
+* `0x6B`: `SHIFTR Rr, Imm4` — Logical right shift by immediate: $Rr \leftarrow Rr \gg Imm4$
+* `0x6C`: `ASHIFTR Rr, Imm4` — Arithmetic right shift by immediate: $Rr \leftarrow Rr \ggg Imm4$
+* `0x6D`: `ROTL Rr, Imm4` — Rotate left by immediate
+* `0x6E`: `ROTR Rr, Imm4` — Rotate right by immediate
+* `0x6F`: `AND Rr, Imm4` — $Rr \leftarrow Rr \ \& \ Imm4$
+* `0x70`: `OR Rr, Imm4` — $Rr \leftarrow Rr \mid Imm4$
+* `0x71`: `XOR Rr, Imm4` — $Rr \leftarrow Rr \oplus Imm4$
+* `0x72`: **`NOT Rr`** — Bitwise NOT / Inversion: $Rr \leftarrow \sim Rr$
+* `0x73`: **`NEZ Rr`** — Set on Not Equal Zero: $Rr \leftarrow (Rr \ne 0) \ ? \ 1 : 0$
+
+### 4.5 Multipliers (0x78 - 0x7F)
+* `0x78`: `MULL Rr, Rl` — Unsigned $32 \times 32 \to \text{Lower } 32$ bits
+* `0x79`: `MULH Rr, Rl` — Unsigned $32 \times 32 \to \text{Upper } 32$ bits
+* `0x7A`: `SMULH Rr, Rl` — Signed $32 \times 32 \to \text{Upper } 32$ bits
+* `0x7B`: `MULHSU Rr, Rl` — Signed $\times$ Unsigned $32 \times 32 \to \text{Upper } 32$ bits
+* `0x7C`: `MULL Rr, Imm4` — Lower 32-bit multiply by immediate
+* `0x7D`: `MULH Rr, Imm4` — Unsigned high multiply by immediate
+* `0x7E`: `SMULH Rr, Imm4` — Signed high multiply by immediate
+* `0x7F`: `MULHSU Rr, Imm4` — Signed $\times$ Unsigned high multiply by immediate
+
+### 4.6 Bit Manipulation, System Operations & Endian Swapping (0x80 - 0x8C)
+* `0x80`: `BEXTR Rr, Rl` — Bit extract: $Rr \leftarrow (Rr \gg (Rl \ \& \ 0x1F)) \ \& \ 1$
+* `0x81`: `JTBL Rr, Rl` — Jump table dispatch: $PC \leftarrow (PC + 2) + (Rr \times 2)$
+* `0x82`: `CLZ Rr, Rl` — Count leading zeros of $Rr$
+* `0x83`: `BSET Rr, Rl` — Bit set: $Rr \leftarrow Rr \mid (1 \ll (Rl \ \& \ 0x1F))$
+* `0x84`: `BSET Rr, Imm4` — Bit set by immediate: $Rr \leftarrow Rr \mid (1 \ll Imm4)$
+* `0x85`: `BCLR Rr, Rl` — Bit clear: $Rr \leftarrow Rr \ \& \ \sim(1 \ll (Rl \ \& \ 0x1F))$
+* `0x86`: `BCLR Rr, Imm4` — Bit clear by immediate: $Rr \leftarrow Rr \ \& \ \sim(1 \ll Imm4)$
+* `0x87`: `BINV Rr, Rl` — Bit invert: $Rr \leftarrow Rr \oplus (1 \ll (Rl \ \& \ 0x1F))$
+* `0x88`: `BINV Rr, Imm4` — Bit invert by immediate: $Rr \leftarrow Rr \oplus (1 \ll Imm4)$
+* `0x89`: `BGET Rr, Rl` — Bit get: $Rr \leftarrow (Rr \gg (Rl \ \& \ 0x1F)) \ \& \ 1$
+* `0x8A`: `BGET Rr, Imm4` — Bit get by immediate: $Rr \leftarrow (Rr \gg Imm4) \ \& \ 1$
+* `0x8B`: `TAS (Rr), Rl` — Atomic Test-and-Set / Swap: $\text{Old} \leftarrow \text{Mem32}[Rr]; \text{Mem32}[Rr] \leftarrow Rl; Rl \leftarrow \text{Old}$
+* `0x8C`: **`REV32 Rr`** — Endianness byte-swap: $Rr \leftarrow \{Rr[7:0], Rr[15:8], Rr[23:16], Rr[31:24]\}$
+
+### 4.7 Relational Comparisons (0x90 - 0x9D)
+* `0x90`: `SLT Rr, Rl` — Unsigned less than: $Rr \leftarrow (Rr_{\text{unsigned}} < Rl_{\text{unsigned}}) \ ? \ 1 : 0$
+* `0x91`: `SLT Rr, Imm4` — Unsigned less than immediate
+* `0x92`: `SLT Rr, -Imm4` — Unsigned less than negative immediate
+* `0x93`: `SLT R14, Imm8` — Unsigned less than 8-bit immediate
+* `0x94`: `SLT R14, -Imm8` — Unsigned less than negative 8-bit immediate
+* `0x95`: `SSLT Rr, Rl` — Signed less than: $Rr \leftarrow (Rr_{\text{signed}} < Rl_{\text{signed}}) \ ? \ 1 : 0$
+* `0x96`: `SSLT Rr, Imm4` — Signed less than immediate
+* `0x97`: `SSLT Rr, -Imm4` — Signed less than negative immediate
+* `0x98`: `SSLT R14, Imm8` — Signed less than 8-bit immediate
+* `0x99`: `SSLT R14, -Imm8` — Signed less than negative 8-bit immediate
+* `0x9A`: **`SEQ Rr, Rl`** — Set on Equal: $Rr \leftarrow (Rr == Rl) \ ? \ 1 : 0$
+* `0x9B`: **`SNE Rr, Rl`** — Set on Not Equal: $Rr \leftarrow (Rr \ne Rl) \ ? \ 1 : 0$
+* `0x9C`: **`SLE Rr, Rl`** — Set on Less/Equal (Unsigned): $Rr \leftarrow (Rr_{\text{unsigned}} \le Rl_{\text{unsigned}}) \ ? \ 1 : 0$
+* `0x9D`: **`SSLE Rr, Rl`** — Set on Less/Equal (Signed): $Rr \leftarrow (Rr_{\text{signed}} \le Rl_{\text{signed}}) \ ? \ 1 : 0$
+
+### 4.8 Control Flow & Hardware Synchronization (0xA0 - 0xA4)
+* `0xA0`: `JMP Rr, Rl` — Indirect Jump and Link ($Rl \leftarrow PC + 2; PC \leftarrow Rr$)
+* `0xA1`: `RJUMP Rr, Rl` — Relative Jump and Link ($Rl \leftarrow PC + 2; PC \leftarrow PC + (Rr \times 2)$)
+* `0xA2`: `TRAP Rr` — Enter trap vector indexed by $Rr$
+* `0xA3`: `TRAP Imm4` — Enter trap vector indexed by immediate
+* `0xA4`: **`WAIT`** — Halts execution pipeline until inbound MBOX strobe asserts (`mboxStrobeIn == 1`)
+
+### 4.9 Branches & Shadow Context Operations (0xB0 - 0xE9)
+* `0xB0`: `FBRA Label` — Unconditional Forward Branch ($PC \leftarrow PC + (\text{Offset} \times 2)$)
+* `0xB1`: `FBRA.Z Rr, Label` — Branch Forward if $Rr == 0$
+* `0xB2`: `FBRA.NZ Rr, Label` — Branch Forward if $Rr \ne 0$
+* `0xB3`: `FBRA.N Rr, Label` — Branch Forward if $Rr < 0$ (Bit 31 is 1)
+* `0xB4`: `FBRA.P Rr, Label` — Branch Forward if $Rr > 0$ (Signed positive)
+* `0xC0`: `BBRA Label` — Unconditional Backward Branch ($PC \leftarrow PC - (\text{Offset} \times 2)$)
+* `0xC1`: `BBRA.Z Rr, Label` — Branch Backward if $Rr == 0$
+* `0xC2`: `BBRA.NZ Rr, Label` — Branch Backward if $Rr \ne 0$
+* `0xC3`: `BBRA.N Rr, Label` — Branch Backward if $Rr < 0$ (Bit 31 is 1)
+* `0xC4`: `BBRA.P Rr, Label` — Branch Backward if $Rr > 0$ (Signed positive)
+* `0xD0`: `XCHG Rr` — Exchange active $Rr$ with shadow $Sr$
+* `0xD1`: `XCHGALL` — Full context switch: swap $R1$–$R15$ with $S1$–$S15$
+* `0xD2`: `XCHGMOST` — Fast interrupt context switch: swap $R1$–$R14$ with $S1$–$S14$ (preserving $SP$)
+* `0xE0`: `FIFO.R Rr` — Read blocking from channel FIFO
+* `0xE1`: `FIFO.W Rr` — Write blocking to channel FIFO
+* `0xE2`: `FIFO.STAT Rr` — Read channel FIFO status flags
+* `0xE3`: `FIFO.TRYR Rr` — Non-blocking read from channel FIFO
+* `0xE4`: `FIFO.TRYW Rr` — Non-blocking write to channel FIFO
+* `0xE5`: `MBOX Rr` — Emit inter-core hardware interrupt strobe to Target Core $Rr$

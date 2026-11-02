@@ -375,15 +375,21 @@ class ParticleAssembler:
 
         def get_v(idx):
             if idx >= len(ops):
-                raise AssemblerError(f"Missing immediate or label operand {idx+1}", fname, lno)
+                raise AssemblerError(f"Missing immediate or labelif operand {idx+1}", fname, lno)
             return self.prep.parse_expr(ops[idx], self.symbols)
 
-        # ---------------- Control Flow: BRANCH Rr (0xA4) ----------------
+        # ---------------- Control Flow: BRANCH & JTBL ----------------
         if mnem == 'BRANCH':
             if len(ops) != 1:
                 raise AssemblerError("BRANCH expects 1 operand: BRANCH Rr", fname, lno)
             rr = get_r(0)
             return (0xA4 << 8) | (rr << 4)
+
+        if mnem == 'JTBL':
+            if len(ops) != 1:
+                raise AssemblerError("JTBL expects 1 operand: JTBL Rr", fname, lno)
+            rr = get_r(0)
+            return (0x81 << 8) | (rr << 4)
 
         # ---------------- Forward / Backward Branches ----------------
         for branch_pfx, is_backward in (('FBRA', False), ('BBRA', True)):
@@ -503,6 +509,37 @@ class ParticleAssembler:
             v = get_v(1)
             return (0x06 << 8) | (v & 0xFF)
 
+        # ---------------- Multipliers (0x78 - 0x7F) ----------------
+        elif mnem in ('MULL', 'MULH', 'SMULH', 'MULHSU'):
+            rr = get_r(0)
+            base_lut = {'MULL': 0x78, 'MULH': 0x79, 'SMULH': 0x7A, 'MULHSU': 0x7B}
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (base_lut[mnem] << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                if not (0 <= v <= 15):
+                    raise AssemblerError(f"Immediate multiplier {v} out of 4-bit unsigned range (0-15)", fname, lno)
+                return ((base_lut[mnem] + 4) << 8) | (rr << 4) | (v & 0xF)
+
+        # ---------------- Bit Operations & Bitfield (0x80 - 0x8A) ----------------
+        elif mnem == 'BEXTR':
+            rr = get_r(0)
+            rl = self.parse_reg(ops[1], fname, lno)
+            return (0x80 << 8) | (rr << 4) | rl
+        elif mnem in ('BSET', 'BCLR', 'BINV', 'BGET'):
+            rr = get_r(0)
+            reg_lut = {'BSET': 0x83, 'BCLR': 0x85, 'BINV': 0x87, 'BGET': 0x89}
+            imm_lut = {'BSET': 0x84, 'BCLR': 0x86, 'BINV': 0x88, 'BGET': 0x8A}
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (reg_lut[mnem] << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                if not (0 <= v <= 15):
+                    raise AssemblerError(f"Bit index {v} out of 4-bit immediate range (0-15)", fname, lno)
+                return (imm_lut[mnem] << 8) | (rr << 4) | (v & 0xF)
+
         # ---------------- Arithmetic & Logic ----------------
         elif mnem == 'ADD':
             rr = get_r(0)
@@ -520,6 +557,54 @@ class ParticleAssembler:
             except AssemblerError:
                 v = get_v(1)
                 return (0x45 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'DIV':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x42 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x46 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'MOD':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x43 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x47 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SADD':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x50 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x54 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SSUB':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x51 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x55 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SDIV':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x52 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x56 << 8) | (rr << 4) | (v & 0xF)
+        elif mnem == 'SMOD':
+            rr = get_r(0)
+            try:
+                rl = self.parse_reg(ops[1], fname, lno)
+                return (0x53 << 8) | (rr << 4) | rl
+            except AssemblerError:
+                v = get_v(1)
+                return (0x57 << 8) | (rr << 4) | (v & 0xF)
         elif mnem == 'AND':
             rr = get_r(0)
             try:
@@ -609,6 +694,15 @@ class ParticleAssembler:
             rl = self.parse_reg(ops[1], fname, lno)
             return (0x8B << 8) | (rr << 4) | rl
 
+        # ---------------- Extended Native ISA ----------------
+        elif mnem == 'NEG':
+            return (0x48 << 8) | (get_r(0) << 4)
+        elif mnem == 'REV32':
+            return (0x8C << 8) | (get_r(0) << 4)
+        elif mnem in ('SEQ', 'SNE', 'SLE', 'SSLE'):
+            lut = {'SEQ': 0x9A, 'SNE': 0x9B, 'SLE': 0x9C, 'SSLE': 0x9D}
+            return (lut[mnem] << 8) | (get_r(0) << 4) | get_r(1)
+
         # ---------------- Control Flow: JMP, RJUMP, TRAP ----------------
         elif mnem == 'JMP':
             rr = get_r(0)
@@ -634,18 +728,31 @@ class ParticleAssembler:
             return 0xD100
         elif mnem == 'XCHGMOST':
             return 0xD200
+        elif mnem == 'RBASE':
+            # Support both immediate offset (RBASE <imm8>) and register (RBASE <Rr>)
+            op0 = ops[0].strip().lower()
+            if op0 in REG_MAP:
+                rr = get_r(0)
+                return (0xD4 << 8) | ((rr & 0xF) << 4)
+            else:
+                imm = get_v(0)
+                return (0xD3 << 8) | (imm & 0xFF)
 
-        # ---------------- FIFOs ----------------
-        if mnem == 'FIFO.W':
+        # ---------------- FIFOs & MBOX ----------------
+        elif mnem == 'FIFO.W':
             rr = get_r(0)
-            chan = int(ops[1], 0) if len(ops) > 1 else 0
+            chan = 0
+            if len(ops) > 1:
+                op1 = ops[1].strip().lower()
+                chan = REG_MAP[op1] if op1 in REG_MAP else int(ops[1], 0)
             return (0xE1 << 8) | (rr << 4) | (chan & 0x0F)
-
-        if mnem == 'FIFO.R':
+        elif mnem == 'FIFO.R':
             rr = get_r(0)
-            chan = int(ops[1], 0) if len(ops) > 1 else 0
-            return (0xE0 << 8) | (rr << 4) | (chan & 0x0F)        
-        
+            chan = 0
+            if len(ops) > 1:
+                op1 = ops[1].strip().lower()
+                chan = REG_MAP[op1] if op1 in REG_MAP else int(ops[1], 0)
+            return (0xE0 << 8) | (rr << 4) | (chan & 0x0F)
         elif mnem == 'FIFO.STAT':
             rr = get_r(0)
             return (0xE2 << 8) | (rr << 4)
@@ -659,10 +766,16 @@ class ParticleAssembler:
             return (0xE4 << 8) | (rr << 4) | rl
         elif mnem == 'MBOX':
             rr = get_r(0)
-            return (0xE5 << 8) | (rr << 4)
+            vec = 0
+            if len(ops) > 1:
+                op1 = ops[1].strip().lower()
+                if op1 in REG_MAP:
+                    vec = self.parse_reg(ops[1], fname, lno)
+                else:
+                    vec = int(ops[1], 0)
+            return (0xE5 << 8) | (rr << 4) | (vec & 0x0F)
 
         raise AssemblerError(f"Unimplemented instruction mnemonic '{mnem}'", fname, lno)
-
 
 def main():
     parser = argparse.ArgumentParser(description="Particle Two-Pass Macro Assembler")
@@ -677,13 +790,26 @@ def main():
     for d in args.define:
         if '=' in d:
             k, v = d.split('=', 1)
-            defines[k] = int(v, 0)
+            try:
+                defines[k] = int(v, 0)
+            except ValueError:
+                defines[k] = v
         else:
             defines[d] = 1
 
-    prep = Preprocessor(include_dirs=args.include, defines=defines)
-    asm = ParticleAssembler(prep)
-    bin_data, max_addr, listing_lines = asm.assemble(args.source)
+    try:
+        prep = Preprocessor(include_dirs=args.include, defines=defines)
+        asm = ParticleAssembler(prep)
+        bin_data, max_addr, listing_lines = asm.assemble(args.source)
+    except AssemblerError as e:
+        sys.stderr.write(f"\n[ERROR] {e}\n\n")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        sys.stderr.write(f"\n[ERROR] File not found: {e}\n\n")
+        sys.exit(1)
+    except Exception as e:
+        sys.stderr.write(f"\n[INTERNAL ERROR] {e}\n\n")
+        sys.exit(1)
 
     start_addr = 0x00000100
     size = max(0, max_addr - start_addr)
@@ -713,7 +839,6 @@ def main():
             f.write(f"; {sym:<32} = 0x{addr:08X}\n")
 
     print(f"Assembly succeeded: {len(out_bytes)} bytes emitted [{start_addr:08X}..{max_addr:08X}]. Listing emitted to: {lst_path}")
-
 
 if __name__ == "__main__":
     main()
