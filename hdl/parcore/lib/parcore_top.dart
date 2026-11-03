@@ -130,10 +130,18 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     // Core 0: IF & UART
     // -------------------------------------------------------------------------
-    final c0MemARData = Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c0MemBRData = Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
+    final c0MemARData =
+        Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c0MemBRData =
+        Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
     final c0MboxStrobe = Logic(name: 'c0_mbox_strobe');
     final c0MboxVector = Logic(name: 'c0_mbox_vector', width: 4);
+
+    final c0FifoPopData =
+        Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
+    final c0FifoStatus =
+        Logic(name: 'c0_fifo_status', width: ParticleWidths.word);
+    final c0FifoPopEn = Logic(name: 'c0_fifo_pop_en');
 
     final core0 = ParticleCpuCore(
       clk: clk,
@@ -142,6 +150,8 @@ class ParcoreTop extends Module {
       memPortBRData: c0MemBRData,
       mboxStrobeIn: c0MboxStrobe,
       mboxVectorIn: c0MboxVector,
+      fifoPopData: c0FifoPopData,
+      fifoStatus: c0FifoStatus,
       config: ParcoreConfig.core0If,
       name: 'core0_if',
     );
@@ -160,27 +170,49 @@ class ParcoreTop extends Module {
       initialBytes: core0Binary,
     );
 
-    ifToIdPush <= core0.fifoPushEn & core0.fifoChanSelect.eq(Const(1, width: 2));
+    ifToIdPush <=
+        core0.fifoPushEn & core0.fifoChanSelect.eq(Const(1, width: 2));
     ifToIdData <= core0.fifoPushData;
 
-    final uartTxValid = core0.fifoPushEn & core0.fifoChanSelect.eq(Const(0, width: 2));
+    final uartTxValid =
+        core0.fifoPushEn & core0.fifoChanSelect.eq(Const(0, width: 2));
+    c0FifoPopEn <=
+        core0.fifoPopEn & core0.fifoChanSelect.eq(Const(0, width: 2));
+
     final ftdiUart = ParticleUartTransceiver(
       clk: clk,
       reset: reset,
       rxPin: uartRx,
       txData: core0.fifoPushData.slice(7, 0),
       txValid: uartTxValid,
-      rxReady: Const(1),
+      rxReady: c0FifoPopEn,
       baudDivisor: Const(8, width: 16),
       name: 'parcore_ftdi_uart',
     );
     uartTx <= ftdiUart.output('txPin');
 
+    // Core 0 Channel 0 status: bit 0 = empty (~rxValid)
+    c0FifoStatus <=
+        mux(
+          core0.fifoChanSelect.eq(Const(0, width: 2)),
+          [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
+          Const(0, width: ParticleWidths.word),
+        );
+
+    // Channel 0 pop data: zero-extend 8-bit UART RX data to 32 bits
+    c0FifoPopData <=
+        [
+          Const(0, width: 24),
+          ftdiUart.output('rxData'),
+        ].swizzle();
+
     // -------------------------------------------------------------------------
     // Core 1: ID & Register Scoreboard
     // -------------------------------------------------------------------------
-    final c1MemARData = Logic(name: 'c1_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c1MemBRData = Logic(name: 'c1_mem_b_rdata', width: ParticleWidths.word);
+    final c1MemARData =
+        Logic(name: 'c1_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c1MemBRData =
+        Logic(name: 'c1_mem_b_rdata', width: ParticleWidths.word);
 
     final c1ChanSelect = Logic(name: 'c1ChanSelect', width: 2);
     final c1PopData = Logic(name: 'c1PopData', width: 32);
@@ -190,16 +222,18 @@ class ParcoreTop extends Module {
     ifToIdPop <= c1PopEn & c1ChanSelect.eq(Const(0, width: 2));
     memToWbPop <= c1PopEn & c1ChanSelect.eq(Const(2, width: 2));
 
-    c1PopData <= mux(
-      c1ChanSelect.eq(Const(2, width: 2)),
-      interconnect.memToWbOut,
-      interconnect.ifToIdOut,
-    );
-    c1FifoStatus <= mux(
-      c1ChanSelect.eq(Const(2, width: 2)),
-      interconnect.memToWbStatus,
-      interconnect.ifToIdStatus,
-    );
+    c1PopData <=
+        mux(
+          c1ChanSelect.eq(Const(2, width: 2)),
+          interconnect.memToWbOut,
+          interconnect.ifToIdOut,
+        );
+    c1FifoStatus <=
+        mux(
+          c1ChanSelect.eq(Const(2, width: 2)),
+          interconnect.memToWbStatus,
+          interconnect.ifToIdStatus,
+        );
 
     final core1 = ParticleCpuCore(
       clk: clk,
@@ -231,14 +265,17 @@ class ParcoreTop extends Module {
       initialBytes: core1Binary,
     );
 
-    idToExPush <= core1.fifoPushEn & core1.fifoChanSelect.eq(Const(1, width: 2));
+    idToExPush <=
+        core1.fifoPushEn & core1.fifoChanSelect.eq(Const(1, width: 2));
     idToExData <= core1.fifoPushData;
 
     // -------------------------------------------------------------------------
     // Core 2: EX & Branch Resolution
     // -------------------------------------------------------------------------
-    final c2MemARData = Logic(name: 'c2_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c2MemBRData = Logic(name: 'c2_mem_b_rdata', width: ParticleWidths.word);
+    final c2MemARData =
+        Logic(name: 'c2_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c2MemBRData =
+        Logic(name: 'c2_mem_b_rdata', width: ParticleWidths.word);
 
     final core2 = ParticleCpuCore(
       clk: clk,
@@ -269,7 +306,8 @@ class ParcoreTop extends Module {
       initialBytes: core2Binary,
     );
 
-    exToMemPush <= core2.fifoPushEn & core2.fifoChanSelect.eq(Const(1, width: 2));
+    exToMemPush <=
+        core2.fifoPushEn & core2.fifoChanSelect.eq(Const(1, width: 2));
     exToMemData <= core2.fifoPushData;
 
     c0MboxStrobe <= core2.mboxStrobeOut;
@@ -281,8 +319,10 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     // Core 3: MEM & Alignment
     // -------------------------------------------------------------------------
-    final c3MemARData = Logic(name: 'c3_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c3MemBRData = Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
+    final c3MemARData =
+        Logic(name: 'c3_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c3MemBRData =
+        Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
 
     final core3 = ParticleCpuCore(
       clk: clk,
@@ -313,7 +353,8 @@ class ParcoreTop extends Module {
       initialBytes: core3Binary,
     );
 
-    memToWbPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
+    memToWbPush <=
+        core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
     memToWbData <= core3.fifoPushData;
   }
 }

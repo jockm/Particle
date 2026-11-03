@@ -1,3 +1,4 @@
+import "dart:async";
 import "dart:io";
 import "dart:typed_data";
 import "package:rohd/rohd.dart";
@@ -5,6 +6,16 @@ import "package:test/test.dart";
 import "../lib/constants.dart";
 import "../lib/cpu_config.dart";
 import "../lib/particle_multi_core.dart";
+
+Uint8List _loadBinary(List<String> candidatePaths) {
+  for (final path in candidatePaths) {
+    final file = File(path);
+    if (file.existsSync()) {
+      return file.readAsBytesSync();
+    }
+  }
+  throw Exception('Unable to locate binary in candidates: $candidatePaths');
+}
 
 void main() {
   tearDown(() async {
@@ -26,13 +37,12 @@ void main() {
     int currentTimestamp = 0;
 
     void stepClock() {
-      // Half-cycle before posedge: feed memory combinatorially based on current address
+      // Feed memory half-cycle before posedge
       Simulator.registerAction(currentTimestamp + 2, () {
         if (multiCore.c0MemPortAAddr.value.isValid) {
           final pc0 = multiCore.c0MemPortAAddr.value.toInt();
           final off0 = pc0 - 0x00000100;
           if (off0 >= 0 && off0 + 1 < c0StimulusBytes.length) {
-            // Particle binary: [off] = operands (low byte), [off+1] = opcode (high byte)
             c0MemARData
                 .put((c0StimulusBytes[off0 + 1] << 8) | c0StimulusBytes[off0]);
           } else {
@@ -44,7 +54,6 @@ void main() {
           final pc1 = multiCore.c1MemPortAAddr.value.toInt();
           final off1 = pc1 - 0x00000100;
           if (off1 >= 0 && off1 + 1 < c1FirmwareBytes.length) {
-            // Particle binary: [off] = operands (low byte), [off+1] = opcode (high byte)
             c1MemARData
                 .put((c1FirmwareBytes[off1 + 1] << 8) | c1FirmwareBytes[off1]);
           } else {
@@ -70,14 +79,18 @@ void main() {
       c1MemARData = Logic(name: 'c1MemARData', width: ParticleWidths.halfWord);
       c1MemBRData = Logic(name: 'c1MemBRData', width: ParticleWidths.word);
 
-      final c1Bin = File("../../firmware/parcore/riscv/core1_dispatch.bin");
-      expect(c1Bin.existsSync(), isTrue,
-          reason: "core1_dispatch.bin must exist");
-      c1FirmwareBytes = await c1Bin.readAsBytes();
+      c1FirmwareBytes = _loadBinary([
+        '../../build/parcore/riscv/core1_dispatch.bin',
+        'build/parcore/riscv/core1_dispatch.bin',
+        '../../firmware/parcore/riscv/core1_dispatch.bin',
+        'firmware/parcore/riscv/core1_dispatch.bin',
+      ]);
 
-      final c0Bin = File("build/c0_stimulus.bin");
-      expect(c0Bin.existsSync(), isTrue, reason: "c0_stimulus.bin must exist");
-      c0StimulusBytes = await c0Bin.readAsBytes();
+      c0StimulusBytes = _loadBinary([
+        'build/c0_stimulus.bin',
+        '../../build/c0_stimulus.bin',
+        'hdl/rohd/build/c0_stimulus.bin',
+      ]);
 
       multiCore = ParticleMultiCore(
         clk: clk,
@@ -105,13 +118,10 @@ void main() {
         stepClock();
       }
 
-      // Deassert reset
       Simulator.registerAction(currentTimestamp + 2, () => reset.put(0));
     });
 
     test("Core 1 boots and stalls on FIFO.R waiting for token", () async {
-      // Step 8 cycles post-reset: enough to execute 0x0100 and settle into FIFO.R stall at 0x0102
-      // without giving Core 0 enough cycles to emit a FIFO.W push.
       for (int i = 0; i < 8; i++) {
         stepClock();
       }
@@ -121,13 +131,10 @@ void main() {
       expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000102));
     });
 
-    test(
-        "Branch TAKEN: Core 0 pushes tokens -> Core 1 evaluates BEQ and strobes MBOX",
-        () async {
+    test("Branch TAKEN: Core 0 pushes tokens -> Core 1 evaluates BEQ and strobes MBOX", () async {
       bool mboxStrobeSeen = false;
       int mboxVector = 0;
 
-      // Register listener before stepping the clock
       multiCore.c0MboxStrobeIn.changed.listen((event) {
         if (multiCore.c0MboxStrobeIn.value.isValid &&
             multiCore.c0MboxStrobeIn.value.toInt() == 1) {
@@ -144,8 +151,7 @@ void main() {
 
       await Simulator.run();
 
-      expect(mboxStrobeSeen, isTrue,
-          reason: "Taken branch must strobe Core 0 MBOX");
+      expect(mboxStrobeSeen, isTrue, reason: "Taken branch must strobe Core 0 MBOX");
       expect(mboxVector, equals(1), reason: "Branch redirect vector is 1");
     });
   });

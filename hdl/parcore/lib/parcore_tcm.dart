@@ -23,6 +23,7 @@ class ParcoreTcm extends Module {
 
   final int depthWords;
   final List<int>? initialBytes;
+  final int loadOffset;
 
   ParcoreTcm({
     required Logic clk,
@@ -34,6 +35,7 @@ class ParcoreTcm extends Module {
     required Logic rEnB,
     this.depthWords = 4096,
     this.initialBytes,
+    this.loadOffset = 0x00000100,
     super.name = 'parcore_tcm',
   }) {
     addInput('clk', clk);
@@ -55,9 +57,11 @@ class ParcoreTcm extends Module {
     final mem = List<int>.filled(totalBytes, 0);
 
     if (initialBytes != null) {
-      final copyLen = initialBytes!.length > totalBytes ? totalBytes : initialBytes!.length;
-      for (int i = 0; i < copyLen; i++) {
-        mem[i] = initialBytes![i];
+      for (int i = 0; i < initialBytes!.length; i++) {
+        final target = loadOffset + i;
+        if (target < totalBytes) {
+          mem[target] = initialBytes![i];
+        }
       }
     }
 

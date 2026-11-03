@@ -70,32 +70,32 @@ _op_table:
 _exec_beq:
     SUB     R14, R5, R6
     FBRA.Z  R14, _branch_taken
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 _exec_bne:
     SUB     R14, R5, R6
     FBRA.NZ R14, _branch_taken
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 _exec_blt:
     SSLT    R14, R5, R6         ; R14 = (Rs1 < Rs2) signed
     FBRA.NZ R14, _branch_taken
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 _exec_bge:
     SSLT    R14, R5, R6
     FBRA.Z  R14, _branch_taken  ; Taken if !(Rs1 < Rs2)
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 _exec_bltu:
     SLT     R14, R5, R6         ; R14 = (Rs1 < Rs2) unsigned
     FBRA.NZ R14, _branch_taken
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 _exec_bgeu:
     SLT     R14, R5, R6
     FBRA.Z  R14, _branch_taken  ; Taken if !(Rs1 < Rs2)
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 ; ------------------------------------------------------------------------------
 ; Branch Taken Handler: Compute Target & Notify Core 0 via MBOX
@@ -104,7 +104,7 @@ _branch_taken:
     ADD     R11, R8, R7         ; Target PC = Current PC + Imm Offset
     FIFO.W  R11, 1              ; Stream resolved PC back to Core 0
     MBOX    R11, 1              ; Strobe Core 0 with Trap Vector 1 (Branch Redirect)
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 ; ------------------------------------------------------------------------------
 ; Jump & Link Handlers
@@ -114,7 +114,7 @@ _exec_jal:
     FIFO.W  R10, 1              ; Commit writeback
     ADD     R11, R8, R7         ; Target PC = Current PC + Imm Offset
     MBOX    R11, 1              ; Redirect Core 0
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
 
 _exec_jalr:
     ADD     R10, R8, 4          ; Link register Rd = PC + 4
@@ -122,4 +122,4 @@ _exec_jalr:
     ADD     R11, R5, R7         ; Target PC = (Rs1 + Imm) & ~1
     AND     R11, 0xFFFFFFFE
     MBOX    R11, 1              ; Redirect Core 0
-    FBRA    _dispatch_loop
+    BBRA    _dispatch_loop
