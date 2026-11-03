@@ -34,14 +34,17 @@ _dispatch_loop:
 
     ; Unpack Rd (Bits 23..16)
     SHIFTR  R4, R2, 16
-    AND     R4, 0xFF            ; R4 = Rd index
+    SHIFTL  R4, 24
+    SHIFTR  R4, 24              ; R4 = Rd index
 
     ; Unpack Rs1 (Bits 15..8)
     SHIFTR  R5, R2, 8
-    AND     R5, 0xFF            ; R5 = Rs1 index
+    SHIFTL  R5, 24
+    SHIFTR  R5, 24              ; R5 = Rs1 index / value
 
     ; Unpack Rs2 (Bits 7..0)
-    AND     R6, R2, 0xFF        ; R6 = Rs2 index
+    SHIFTL  R6, R2, 24
+    SHIFTR  R6, 24              ; R6 = Rs2 index / value
 
     ; Pop Payload 1 (Immediate / Offset)
     FIFO.R  R7, 0               ; R7 = Imm32 / Offset
@@ -50,6 +53,7 @@ _dispatch_loop:
     FIFO.R  R8, 0               ; R8 = Current Guest PC
 
     ; Route via Opcode Table Jump
+    ; Opcode 1..8 mapped to dispatch table
     SUB     R9, R3, 1
     LOAD16  R14, _op_table
     JTBL    R9
@@ -65,7 +69,7 @@ _op_table:
     FBRA    _exec_jalr          ; 8: JALR
 
 ; ------------------------------------------------------------------------------
-; Branch Condition Handlers (Evaluate into R14 for wide 8-bit branch reach)
+; Branch Condition Handlers
 ; ------------------------------------------------------------------------------
 _exec_beq:
     SUB     R14, R5, R6
@@ -119,7 +123,7 @@ _exec_jal:
 _exec_jalr:
     ADD     R10, R8, 4          ; Link register Rd = PC + 4
     FIFO.W  R10, 1
-    ADD     R11, R5, R7         ; Target PC = (Rs1 + Imm) & ~1
+    ADD     R11, R5, R7
     AND     R11, 0xFFFFFFFE
     MBOX    R11, 1              ; Redirect Core 0
     BBRA    _dispatch_loop
