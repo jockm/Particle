@@ -117,6 +117,130 @@ void main() {
       await Simulator.run();
 
       expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
+    });    test('Trap 14 is triggered on unaligned LD32 address', () async {
+      // Pulse 1 (t=5): Reset active
+      Simulator.registerAction(0, () => clk.put(0));
+      Simulator.registerAction(5, () => clk.put(1));
+      Simulator.registerAction(10, () => clk.put(0));
+
+      // Pulse 2 (t=15): Fetch ADD_IMM4 R2, 1 (0x0621)
+      Simulator.registerAction(12, () {
+        reset.put(0);
+        memARData.put((ParticleOpcodes.addImm4 << 8) | 0x21);
+      });
+      Simulator.registerAction(15, () => clk.put(1));
+      Simulator.registerAction(20, () => clk.put(0));
+
+      // Pulse 3 (t=25): Exec ADD_IMM4 (R2 becomes 1) -> PC latches 0x0102, transitions to stateFetch
+      Simulator.registerAction(25, () => clk.put(1));
+      Simulator.registerAction(30, () => clk.put(0));
+
+      // Pulse 4 (t=35): Fetch LD32 R1, (R2) -> transitions to stateExec
+      Simulator.registerAction(32, () {
+        memARData.put((ParticleOpcodes.ld32 << 8) | 0x12);
+      });
+      Simulator.registerAction(35, () => clk.put(1));
+      Simulator.registerAction(40, () => clk.put(0));
+
+      // Pulse 5 (t=45): Exec LD32 -> Trap 14 fires, next PC latches 0x0480
+      Simulator.registerAction(45, () => clk.put(1));
+      Simulator.registerAction(50, () => clk.put(0));
+
+      reset.put(1);
+      memARData.put(0);
+      memBRData.put(0);
+      mboxStrobe.put(0);
+      mboxVector.put(0);
+
+      await Simulator.run();
+
+      // Trap 14 target: 0x0100 + (14 * 64) = 0x0480 (1152)
+      expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
+
+      // Memory Read/Write strobes must be suppressed during alignment trap
+      expect(core.memPortBREn.value.toInt(), equals(0));
+      expect(core.memPortBWEn.value.toInt(), equals(0));
     });
-});
+
+    test('Trap 14 is triggered on unaligned LD16 address', () async {
+      // Pulse 1 (t=5): Reset active
+      Simulator.registerAction(0, () => clk.put(0));
+      Simulator.registerAction(5, () => clk.put(1));
+      Simulator.registerAction(10, () => clk.put(0));
+
+      // Pulse 2 (t=15): Fetch ADD_IMM4 R2, 1 (0x0621)
+      Simulator.registerAction(12, () {
+        reset.put(0);
+        memARData.put((ParticleOpcodes.addImm4 << 8) | 0x21);
+      });
+      Simulator.registerAction(15, () => clk.put(1));
+      Simulator.registerAction(20, () => clk.put(0));
+
+      // Pulse 3 (t=25): Exec ADD_IMM4 (R2 becomes 1) -> PC latches 0x0102
+      Simulator.registerAction(25, () => clk.put(1));
+      Simulator.registerAction(30, () => clk.put(0));
+
+      // Pulse 4 (t=35): Fetch LD16 R1, (R2) -> opcode 0x20, Rr = 1, Rl = 2
+      Simulator.registerAction(32, () {
+        memARData.put((ParticleOpcodes.ld16 << 8) | 0x12);
+      });
+      Simulator.registerAction(35, () => clk.put(1));
+      Simulator.registerAction(40, () => clk.put(0));
+
+      // Pulse 5 (t=45): Exec LD16 -> Trap 14 fires due to odd address (1)
+      Simulator.registerAction(45, () => clk.put(1));
+      Simulator.registerAction(50, () => clk.put(0));
+
+      reset.put(1);
+      memARData.put(0);
+      memBRData.put(0);
+      mboxStrobe.put(0);
+      mboxVector.put(0);
+
+      await Simulator.run();
+
+      expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
+      expect(core.memPortBREn.value.toInt(), equals(0));
+    });
+
+    test('Trap 14 is triggered on unaligned branch/jump target', () async {
+      // Pulse 1 (t=5): Reset active
+      Simulator.registerAction(0, () => clk.put(0));
+      Simulator.registerAction(5, () => clk.put(1));
+      Simulator.registerAction(10, () => clk.put(0));
+
+      // Pulse 2 (t=15): Fetch ADD_IMM4 R1, 1 (0x0611) -> R1 becomes 1 (odd jump target)
+      Simulator.registerAction(12, () {
+        reset.put(0);
+        memARData.put((ParticleOpcodes.addImm4 << 8) | 0x11);
+      });
+      Simulator.registerAction(15, () => clk.put(1));
+      Simulator.registerAction(20, () => clk.put(0));
+
+      // Pulse 3 (t=25): Exec ADD_IMM4 -> R1 becomes 1, PC latches 0x0102
+      Simulator.registerAction(25, () => clk.put(1));
+      Simulator.registerAction(30, () => clk.put(0));
+
+      // Pulse 4 (t=35): Fetch JMP R1, R0 -> opcode 0xA0, Rr = 1, Rl = 0
+      Simulator.registerAction(32, () {
+        memARData.put((ParticleOpcodes.jmp << 8) | 0x10);
+      });
+      Simulator.registerAction(35, () => clk.put(1));
+      Simulator.registerAction(40, () => clk.put(0));
+
+      // Pulse 5 (t=45): Exec JMP -> branch target bit 0 is set -> Trap 14 fires
+      Simulator.registerAction(45, () => clk.put(1));
+      Simulator.registerAction(50, () => clk.put(0));
+
+      reset.put(1);
+      memARData.put(0);
+      memBRData.put(0);
+      mboxStrobe.put(0);
+      mboxVector.put(0);
+
+      await Simulator.run();
+
+      expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
+    });
+  });
 }

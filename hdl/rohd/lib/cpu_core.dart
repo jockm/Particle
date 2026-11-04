@@ -322,11 +322,13 @@ class ParticleCpuCore extends Module {
       mulMode: mulMode,
     );
 
+    final trap14Strobe = Logic(name: 'trap14Strobe');
+
     memPortBAddr <= outMemBAddr;
     memPortBWData <= outMemBWData;
     memPortBBEn <= outMemBBEn;
-    memPortBWEn <= outMemBWEn;
-    memPortBREn <= outMemBREn;
+    memPortBWEn <= outMemBWEn & ~trap14Strobe;
+    memPortBREn <= outMemBREn & ~trap14Strobe;
 
     final isR14Dest = opcode.eq(Const(ParticleOpcodes.ldImm8, width: 8)) |
         opcode.eq(Const(ParticleOpcodes.ldNegImm8, width: 8)) |
@@ -339,7 +341,7 @@ class ParticleCpuCore extends Module {
 
     rfWAddr <=
         mux(
-          isR14Dest,
+          trap14Strobe | isR14Dest,
           Const(14, width: 4),
           mux(opcode.eq(Const(ParticleOpcodes.tas, width: 8)), rl, rr),
         );
@@ -374,8 +376,8 @@ class ParticleCpuCore extends Module {
 
     Combinational([
       // Defaults
-      rfWData < alu.result,
-      rfWEn < Const(0),
+      rfWData < mux(trap14Strobe, pc + 2, alu.result),
+      rfWEn < mux(trap14Strobe, inExec, Const(0)),
       rfXchgEn < Const(0),
       rfXchgAllEn < Const(0),
       rfXchgMostEn < Const(0),
@@ -734,10 +736,44 @@ class ParticleCpuCore extends Module {
       ]),
     ]);
 
+    // Trap 14 Alignment Error Detection
+    final is16BitMemOp = opcode.eq(Const(ParticleOpcodes.ld16, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.ld16PostInc, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st16, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st16PostInc, width: 8));
+
+    final is32BitMemOp = opcode.eq(Const(ParticleOpcodes.ld32, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.ld32PostInc, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st32, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st32PostInc, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.tas, width: 8));
+
+    final isStoreOp = opcode.eq(Const(ParticleOpcodes.st8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st8PostInc, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st16, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st16PostInc, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st32, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.st32PostInc, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.tas, width: 8));
+
+    final memTargetAddr = mux(isStoreOp, rf.rDataA, rf.rDataB);
+    final unaligned16 = is16BitMemOp & memTargetAddr.slice(0, 0).eq(1);
+    final unaligned32 = is32BitMemOp & (memTargetAddr.slice(0, 0).eq(1) | memTargetAddr.slice(1, 1).eq(1));
+    final alignMemTrap = unaligned16 | unaligned32;
+    final unalignedPcTrap = branchNextPc.slice(0, 0).eq(1);
+
+    trap14Strobe <= inExec & (alignMemTrap | unalignedPcTrap);
+
+    final trap14TargetAddr = Const(config.trapTableBase + 0x0380, width: 32);
+
     final mboxTargetAddr = Const(config.trapTableBase, width: 32) +
         (mboxVectorIn.zeroExtend(32) << 6);
 
-    nextPc <= mux(mboxStrobeIn, mboxTargetAddr, branchNextPc);
+    nextPc <= mux(
+      mboxStrobeIn,
+      mboxTargetAddr,
+      mux(trap14Strobe, trap14TargetAddr, branchNextPc),
+    );
 
     Sequential(clk, reset: reset, resetValues: {
       pc: Const(config.trapTableBase, width: 32),
