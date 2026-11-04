@@ -755,7 +755,8 @@ class ParticleAssembler:
             return (0xE0 << 8) | (rr << 4) | (chan & 0x0F)
         elif mnem == 'FIFO.STAT':
             rr = get_r(0)
-            return (0xE2 << 8) | (rr << 4)
+            rl = self.parse_reg(ops[1], fname, lno) if len(ops) > 1 else 0
+            return (0xE2 << 8) | (rr << 4) | rl
         elif mnem == 'FIFO.TRYR':
             rr = get_r(0)
             rl = self.parse_reg(ops[1], fname, lno) if len(ops) > 1 else 0

@@ -28,12 +28,15 @@ _mem_main_loop:
 
 _process_mem_packet:
     ; Extract Rd index: Control Word [15:8]
-    SHIFTR  R4, R10, 8
+    LD      R4, R10
+    SHIFTR  R4, 8
     LOAD16  R5, 0x1F
     AND     R4, R5              ; R4 = Rd index
 
     ; Inspect Memory Operation Type: Control Word [19:16]
-    SHIFTR  R3, R10, 16
+    LD      R3, R10
+    SHIFTR  R3, 12
+    SHIFTR  R3, 4
     LD      R5, 0x0F
     AND     R3, R5
     FBRA.Z  R3, _route_alu_wb   ; Non-memory instruction -> direct writeback
@@ -53,52 +56,60 @@ _route_alu_wb:
 _dispatch_mem_op:
     ; Check Stores (8..10)
     LOAD16  R5, 8
-    SUB     R6, R3, R5
+    LD      R6, R3
+    SUB     R6, R5
     FBRA.NZ R6, _chk_sh
     LOAD16  R14, _do_sb
     JMP     R14, R0
 
 _chk_sh:
     LOAD16  R5, 9
-    SUB     R6, R3, R5
+    LD      R6, R3
+    SUB     R6, R5
     FBRA.NZ R6, _chk_sw
     LOAD16  R14, _do_sh
     JMP     R14, R0
 
 _chk_sw:
     LOAD16  R5, 10
-    SUB     R6, R3, R5
+    LD      R6, R3
+    SUB     R6, R5
     FBRA.NZ R6, _chk_loads
     LOAD16  R14, _do_sw
     JMP     R14, R0
 
 _chk_loads:
     ; Check Loads (1: LB, 2: LH, 3: LW, 4: LBU, 5: LHU)
-    SUB     R6, R3, 1
+    LD      R6, R3
+    SUB     R6, 1
     FBRA.NZ R6, _chk_lh
     LOAD16  R14, _do_lb
     JMP     R14, R0
 
 _chk_lh:
-    SUB     R6, R3, 2
+    LD      R6, R3
+    SUB     R6, 2
     FBRA.NZ R6, _chk_lw
     LOAD16  R14, _do_lh
     JMP     R14, R0
 
 _chk_lw:
-    SUB     R6, R3, 3
+    LD      R6, R3
+    SUB     R6, 3
     FBRA.NZ R6, _chk_lbu
     LOAD16  R14, _do_lw
     JMP     R14, R0
 
 _chk_lbu:
-    SUB     R6, R3, 4
+    LD      R6, R3
+    SUB     R6, 4
     FBRA.NZ R6, _chk_lhu
     LOAD16  R14, _do_lbu
     JMP     R14, R0
 
 _chk_lhu:
-    SUB     R6, R3, 5
+    LD      R6, R3
+    SUB     R6, 5
     FBRA.NZ R6, _mem_drop
     LOAD16  R14, _do_lhu
     JMP     R14, R0
@@ -134,14 +145,14 @@ _do_sw:
 _do_lb:
     ; Signed byte load
     LD8     R11, (R12)
-    SEXT8   R11, R11            ; Sign-extend byte to 32 bits
+    SEXT8   R11            ; Sign-extend byte to 32 bits
     LOAD16  R14, _emit_writeback
     JMP     R14, R0
 
 _do_lh:
     ; Signed halfword load
     LD16    R11, (R12)
-    SEXT16  R11, R11            ; Sign-extend halfword to 32 bits
+    SEXT16  R11            ; Sign-extend halfword to 32 bits
     LOAD16  R14, _emit_writeback
     JMP     R14, R0
 

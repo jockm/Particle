@@ -36,22 +36,25 @@ _id_main_loop:
     ; --------------------------------------------------------------------------
     ; 1. Service Retiring Writebacks (Non-blocking check)
     ; --------------------------------------------------------------------------
-    FIFO.TRYR R4, R3            ; Try to read Rd index from WB FIFO (Channel 2: memToWb)
-    FBRA.NZ   R4, _handle_wb_commit
+    FIFO.STAT R4, R3            ; Poll WB channel status (R3 = channel 2)
+    AND       R4, 1             ; Bit 0: empty
+    FBRA.Z    R4, _do_wb_read   ; If !empty (0), service writeback
     LOAD16    R14, _poll_fetch_queue
     JMP       R14, R0
 
-_handle_wb_commit:
-    FIFO.R    R5, 2             ; Read committed 32-bit writeback data
+_do_wb_read:
+    FIFO.R    R4, R3            ; Read Rd index
+    FIFO.R    R5, R3            ; Read committed 32-bit data
 
-    ; Check if Rd == 0 (x0 is hardwired zero; discard commit)
+    ; Check if Rd == 0 (x0 is hardwired zero; skip write to register file)
     FBRA.Z    R4, _clear_wb_scoreboard
 
     ; Commit to local architectural register: REG_BASE + (Rd << 2)
-    LOAD16  R6, REG_BASE
-    SHIFTL  R7, R4, 2
-    ADD     R6, R7
-    ST32    (R6), R5            ; Store committed value
+    LOAD16    R6, REG_BASE
+    LD        R7, R4
+    SHIFTL    R7, 2
+    ADD       R6, R7
+    ST32      (R6), R5          ; Store committed value
 
 _clear_wb_scoreboard:
     ; Clear bit in scoreboard: mask &= ~(1 << Rd)
@@ -65,9 +68,12 @@ _clear_wb_scoreboard:
 
 _poll_fetch_queue:
     ; --------------------------------------------------------------------------
-    ; 2. Pop Next Instruction Packet from Core 0 [PC, Inst]
+    ; 2. Check if Instruction Packet Available from Core 0
     ; --------------------------------------------------------------------------
-    FIFO.R  R10, R1             ; Pop PC
+    FIFO.STAT R4, R1            ; Poll Fetch channel status
+    AND       R4, 1             ; Bit 0: empty
+    FBRA.NZ   R4, _fetch_empty  ; If empty, loop back to check writebacks
+    FIFO.R    R10, R1           ; Pop PC
     LOAD32  R6, 0xFFFFFFFF      ; Check for pipeline flush sentinel (-1)
     SUB     R7, R10, R6
     FBRA.Z  R7, _drain_flush_token
@@ -75,6 +81,10 @@ _poll_fetch_queue:
     FIFO.R  R11, R1             ; Pop Instruction Word
     LOAD16  R14, _decode_fields
     JMP     R14, R0
+
+_fetch_empty:
+    LOAD16    R14, _id_main_loop
+    JMP       R14, R0
 
 _drain_flush_token:
     FIFO.R  R11, R1             ; Discard instruction word
@@ -89,32 +99,43 @@ _decode_fields:
     ; --------------------------------------------------------------------------
     ; 3. Bitfield Extractions
     ; --------------------------------------------------------------------------
-    ; Opcode = inst[6:0]
-    LOAD16  R14, 0x7F
-    AND     R12, R11, R14       ; R12 = Opcode
+    ; Build 5-bit mask (0x1F = 31) into R6 without touching R14 scratch
+    LD      R6, 15
+    SHIFTL  R6, 1
+    OR      R6, 1               ; R6 = 0x1F
+
+    ; Opcode = inst[6:0] (0x7F = 127)
+    LD      R12, R11
+    LD      R5, 15
+    SHIFTL  R5, 3
+    OR      R5, 7               ; R5 = 0x7F
+    AND     R12, R5             ; R12 = Opcode
 
     ; Rd = inst[11:7]
-    SHIFTR  R13, R11, 7
-    LOAD16  R14, 0x1F
-    AND     R13, R14            ; R13 = Rd
-
-    ; funct3 = inst[14:12]
-    SHIFTR  R14, R11, 12
-    LD      R15, 0x07
-    AND     R14, R15            ; R14 = funct3
+    LD      R13, R11
+    SHIFTR  R13, 7
+    AND     R13, R6             ; R13 = Rd
 
     ; Rs1 = inst[19:15]
-    SHIFTR  R15, R11, 15
-    LOAD16  R7, 0x1F
-    AND     R15, R7             ; R15 = Rs1
+    LD      R15, R11
+    SHIFTR  R15, 15
+    AND     R15, R6             ; R15 = Rs1
 
     ; Rs2 = inst[24:20]
-    SHIFTR  R7, R11, 20
-    LOAD16  R8, 0x1F
-    AND     R7, R8              ; R7 = Rs2
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 5
+    AND     R7, R6              ; R7 = Rs2
 
     ; funct7 = inst[31:25]
-    SHIFTR  R8, R11, 25         ; R8 = funct7
+    LD      R8, R11
+    SHIFTR  R8, 15
+    SHIFTR  R8, 10              ; R8 = funct7
+
+    ; funct3 = inst[14:12] (extracted last so R14 is preserved)
+    LD      R14, R11
+    SHIFTR  R14, 12
+    AND     R14, 7              ; R14 = funct3
 
     ; --------------------------------------------------------------------------
     ; 4. Data Hazard Interlocking (Scoreboard Resolution)
@@ -151,19 +172,20 @@ _do_stall_wait:
 
     FBRA.Z  R4, _clear_stalled_bit
     LOAD16  R6, REG_BASE
-    SHIFTL  R7, R4, 2
-    ADD     R6, R7
+    LD      R8, R4
+    SHIFTL  R8, 2
+    ADD     R6, R8
     ST32    (R6), R5            ; Update register table
 
 _clear_stalled_bit:
-    LD      R7, 1
-    SHIFTL  R7, R4
-    NOT     R7, R7
+    LD      R8, 1
+    SHIFTL  R8, R4
+    NOT     R8, R8
     LOAD16  R6, SCOREBOARD_MASK
-    LD32    R8, (R6)
-    AND     R8, R7
-    ST32    (R6), R8
-    LOAD16  R14, _check_hazard  ; Re-evaluate hazard state
+    LD32    R9, (R6)
+    AND     R9, R8
+    ST32    (R6), R9
+    LOAD16  R14, _check_hazard  ; Re-evaluate hazard state (R7/Rs2 preserved)
     JMP     R14, R0
 
 _hazard_clear:
@@ -174,7 +196,8 @@ _hazard_clear:
     LD      R5, 0               ; x0 is hardwired to 0
     FBRA.Z  R15, _read_rs2
     LOAD16  R6, REG_BASE
-    SHIFTL  R9, R15, 2
+    LD      R9, R15
+    SHIFTL  R9, 2
     ADD     R6, R9
     LD32    R5, (R6)            ; R5 = Rs1 Value
 
@@ -182,21 +205,25 @@ _read_rs2:
     ; Read OpB (Rs2)
     LD      R6, 0               ; x0 is hardwired to 0
     FBRA.Z  R7, _decode_immediates
-    LOAD16  R8, REG_BASE
-    SHIFTL  R9, R7, 2
-    ADD     R8, R9
-    LD32    R6, (R8)            ; R6 = Rs2 Value
+    LOAD16  R14, REG_BASE
+    LD      R9, R7
+    SHIFTL  R9, 2
+    ADD     R14, R9
+    LD32    R6, (R14)           ; R6 = Rs2 Value
 
     ; --------------------------------------------------------------------------
     ; 6. Immediate Field Decoders & Format Steering
     ; --------------------------------------------------------------------------
 _decode_immediates:
     ; Default I-Type sign extension: inst[31:20]
-    ASHIFTR R9, R11, 20         ; R9 = Sign-extended I-Immediate
+    LD      R9, R11
+    ASHIFTR R9, 15
+    ASHIFTR R9, 5               ; R9 = Sign-extended I-Immediate
 
     ; OP-IMM (0x13): ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI
     LOAD16  R14, 0x13
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_op_reg
     LOAD16  R14, _emit_op_imm
     JMP     R14, R0
@@ -204,7 +231,8 @@ _decode_immediates:
 _check_op_reg:
     ; OP (0x33): Register-Register ALU / M-Extension / Zbb
     LOAD16  R14, 0x33
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_load
     LOAD16  R14, _emit_op_reg
     JMP     R14, R0
@@ -212,7 +240,8 @@ _check_op_reg:
 _check_load:
     ; LOAD (0x03): LB, LH, LW, LBU, LHU
     LOAD16  R14, 0x03
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_store
     LOAD16  R14, _emit_load
     JMP     R14, R0
@@ -220,7 +249,8 @@ _check_load:
 _check_store:
     ; STORE (0x23): SB, SH, SW
     LOAD16  R14, 0x23
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_branch
     LOAD16  R14, _emit_store
     JMP     R14, R0
@@ -228,7 +258,8 @@ _check_store:
 _check_branch:
     ; BRANCH (0x63): BEQ, BNE, BLT, BGE, BLTU, BGEU
     LOAD16  R14, 0x63
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_lui
     LOAD16  R14, _emit_branch
     JMP     R14, R0
@@ -236,7 +267,8 @@ _check_branch:
 _check_lui:
     ; LUI (0x37)
     LOAD16  R14, 0x37
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_auipc
     LOAD16  R14, _emit_lui
     JMP     R14, R0
@@ -244,7 +276,8 @@ _check_lui:
 _check_auipc:
     ; AUIPC (0x17)
     LOAD16  R14, 0x17
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_jal
     LOAD16  R14, _emit_auipc
     JMP     R14, R0
@@ -252,7 +285,8 @@ _check_auipc:
 _check_jal:
     ; JAL (0x6F)
     LOAD16  R14, 0x6F
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _check_jalr
     LOAD16  R14, _emit_jal
     JMP     R14, R0
@@ -260,7 +294,8 @@ _check_jal:
 _check_jalr:
     ; JALR (0x67)
     LOAD16  R14, 0x67
-    SUB     R4, R12, R14
+    LD      R4, R12
+    SUB     R4, R14
     FBRA.NZ R4, _drop_unrecognized
     LOAD16  R14, _emit_jalr
     JMP     R14, R0
@@ -273,10 +308,19 @@ _drop_unrecognized:
     ; 7. Micro-Op Assembly & Dispatch Handlers
     ; --------------------------------------------------------------------------
 _emit_op_imm:
-    SHIFTL  R4, R14, 24         ; Micro-op = funct3
-    SHIFTL  R8, R13, 8          ; Pack Rd into bits [15:8]
-    OR      R4, R8
-    OR      R4, 1               ; Bit 0 = valid
+    ; Extract funct3 from R11[14:12]
+    LD      R4, R11
+    SHIFTR  R4, 12
+    AND     R4, 7
+    ; Shift funct3 into bits [31:24]
+    LD      R8, 12
+    SHIFTL  R8, 1               ; R8 = 24
+    SHIFTL  R4, R8              ; R4 = funct3 << 24
+    ; Pack Rd into bits [15:8]
+    LD      R8, R13             ; R8 = Rd
+    SHIFTL  R8, 8               ; R8 = Rd << 8
+    OR      R4, R8              ; Pack Rd
+    OR      R4, 1               ; Valid bit
 _dispatch_packet:
     ; If Rd != 0, set destination reservation in scoreboard
     FBRA.Z  R13, _push_to_ex
@@ -296,49 +340,84 @@ _push_to_ex:
     JMP     R14, R0
 
 _emit_op_reg:
-    LD      R4, 0
-    SUB     R7, R8, 1           ; Check if M-extension (funct7 == 1)
-    FBRA.NZ R7, _std_op
-    LOAD16  R4, 0x20            ; Mark M-extension prefix
-    OR      R4, R14
-    FBRA    _pack_reg_ctrl
+    ; Extract funct3 directly from R11[14:12] into R4
+    LD      R4, R11
+    SHIFTR  R4, 12
+    AND     R4, 7               ; R4 = funct3
+
+    ; Extract funct7 directly from R11[31:25] into R8
+    LD      R8, R11
+    SHIFTR  R8, 15
+    SHIFTR  R8, 10              ; R8 = funct7
+
+    LD      R9, R8              ; R9 = funct7
+    SUB     R9, 1               ; Check if M-extension (funct7 == 1)
+    FBRA.NZ R9, _std_op
+    LOAD16  R9, 0x20            ; Mark M-extension prefix
+    OR      R4, R9
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
 _std_op:
-    LD      R4, R14             ; Base ALU uop from funct3
-    LOAD16  R14, 0x20
-    AND     R7, R8, R14         ; Check funct7 bit 5 (SUB / SRA / Zbb bit ops)
-    FBRA.Z  R7, _pack_reg_ctrl
-    LOAD16  R14, 0x10           ; Alternate operation flag
-    OR      R4, R14
+    LOAD16  R9, 0x20
+    AND     R9, R8              ; Check funct7 bit 5 (SUB / SRA / Zbb bit ops)
+    FBRA.Z  R9, _pack_reg_ctrl
+    LOAD16  R9, 0x10            ; Alternate operation flag (e.g. SUB / SRA)
+    OR      R4, R9
 _pack_reg_ctrl:
-    SHIFTL  R4, 24
-    SHIFTL  R7, R13, 8
-    OR      R4, R7
-    OR      R4, 1
+    SHIFTL  R4, 12
+    SHIFTL  R4, 12              ; R4 = uop << 24
+    LD      R8, R13             ; R8 = Rd
+    SHIFTL  R8, 8               ; R8 = Rd << 8
+    OR      R4, R8              ; Pack Rd into bits [15:8]
+    OR      R4, 1               ; Valid bit
     LD      R9, R6              ; OpB = Rs2 value
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
 
 _emit_load:
-    ADD     R4, R14, 1          ; uop ID for load
-    SHIFTL  R4, 16
-    SHIFTL  R7, R13, 8
-    OR      R4, R7
-    OR      R4, 1
+    ; Extract funct3 from R11[14:12]
+    LD      R4, R11
+    SHIFTR  R4, 12
+    AND     R4, 7               ; R4 = funct3 (0: LB, 1: LH, 2: LW, 4: LBU, 5: LHU)
+    LD      R8, R4
+    SUB     R8, 3
+    SSLT    R8, 0               ; R8 = (funct3 < 3) ? 1 : 0
+    ADD     R4, R8              ; mem_op: 1=LB, 2=LH, 3=LW, 4=LBU, 5=LHU
+    SHIFTL  R4, 8
+    SHIFTL  R4, 8               ; R4 = mem_op << 16
+    LD      R8, R13             ; R8 = Rd
+    SHIFTL  R8, 8               ; R8 = Rd << 8
+    OR      R4, R8              ; Pack Rd into bits [15:8]
+    OR      R4, 1               ; Valid bit
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
 
 _emit_store:
     ; S-Type immediate: {inst[31:25], inst[11:7]}
-    ASHIFTR R4, R11, 25
-    SHIFTL  R4, 5
-    OR      R4, R13             ; R4 = S-Immediate offset
-    ADD     R7, R14, 8          ; Store uop ID
-    SHIFTL  R7, 16
-    OR      R7, 1
-    FIFO.W  R7, R2              ; Control Word
-    FIFO.W  R5, R2              ; Base Address (Rs1)
-    FIFO.W  R4, R2              ; Offset Immediate
-    FIFO.W  R6, R2              ; Store Data (Rs2)
+    LD      R9, R11
+    ASHIFTR R9, 15
+    ASHIFTR R9, 10              ; Sign-extended inst[31:25]
+    SHIFTL  R9, 5
+    LD      R8, R11
+    SHIFTR  R8, 7
+    LOAD16  R14, 0x1F
+    AND     R8, R14
+    OR      R9, R8              ; R9 = Sign-extended S-Immediate offset
+
+    ; Extract funct3 from R11[14:12] for store mem_op (8: SB, 9: SH, 10: SW)
+    LD      R4, R11
+    SHIFTR  R4, 12
+    AND     R4, 7               ; R4 = funct3 (0: SB, 1: SH, 2: SW)
+    ADD     R4, 8               ; mem_op = funct3 + 8
+    SHIFTL  R4, 8
+    SHIFTL  R4, 8               ; R4 = mem_op << 16
+    OR      R4, 1               ; Valid bit (Rd = 0)
+
+    ; Send 4-word token packet to Core 2 (idToEx)
+    FIFO.W  R4, R2              ; Word 0: Control Word (mem_op in [19:16], Rd=0)
+    FIFO.W  R5, R2              ; Word 1: Base Address (Rs1)
+    FIFO.W  R9, R2              ; Word 2: Offset Immediate
+    FIFO.W  R6, R2              ; Word 3: Store Data (Rs2)
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -363,10 +442,10 @@ _emit_branch:
     ADD     R7, R14, 1          ; Branch uop
     SHIFTL  R7, 20
     OR      R7, 1
-    FIFO.W  R7, R2              ; Control Word
-    FIFO.W  R5, R2              ; Rs1 Value
-    FIFO.W  R6, R2              ; Rs2 Value
-    FIFO.W  R4, R2              ; Target Offset
+    FIFO.W  R7, 1              ; Control Word
+    FIFO.W  R5, 1              ; Rs1 Value
+    FIFO.W  R6, 1              ; Rs2 Value
+    FIFO.W  R4, 1              ; Target Offset
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -417,10 +496,10 @@ _emit_jal:
     SHIFTL  R8, R13, 8
     OR      R7, R8
     OR      R7, 1
-    FIFO.W  R7, R2              ; Control Word
-    FIFO.W  R10, R2             ; Link PC
-    FIFO.W  R4, R2              ; Jump Offset
-    FIFO.W  R10, R2             ; Base PC
+    FIFO.W  R7, 1              ; Control Word
+    FIFO.W  R10, 1             ; Link PC
+    FIFO.W  R4, 1              ; Jump Offset
+    FIFO.W  R10, 1             ; Base PC
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -430,9 +509,9 @@ _emit_jalr:
     SHIFTL  R8, R13, 8
     OR      R7, R8
     OR      R7, 1
-    FIFO.W  R7, R2              ; Control Word
-    FIFO.W  R5, R2              ; Base Register (Rs1)
-    FIFO.W  R9, R2              ; I-Immediate Offset
-    FIFO.W  R10, R2             ; Link PC
+    FIFO.W  R7, 1              ; Control Word
+    FIFO.W  R5, 1              ; Base Register (Rs1)
+    FIFO.W  R9, 1              ; I-Immediate Offset
+    FIFO.W  R10, 1             ; Link PC
     LOAD16  R14, _id_main_loop
     JMP     R14, R0

@@ -542,25 +542,35 @@ class ParticleCpuCore extends Module {
           rfWEn < inExec,
         ]),
 
-        // Memory Stores (Port B: Address in Rl/rDataB, Data in Rr/rDataA)
+        // Memory Stores (Port B: Address in Rr/rDataA, Data in Rl/rDataB matching pasm/psim)
         CaseItem(Const(ParticleOpcodes.st8, width: 8), [
           outMemBWEn < inExec,
+          outMemBAddr < rf.rDataA,
+          outMemBWData < rf.rDataB,
           outMemBBEn < Const(0x1, width: 4),
         ]),
         CaseItem(Const(ParticleOpcodes.st8PostInc, width: 8), [
           outMemBWEn < inExec,
+          outMemBAddr < rf.rDataA,
+          outMemBWData < rf.rDataB,
           outMemBBEn < Const(0x1, width: 4),
         ]),
         CaseItem(Const(ParticleOpcodes.st16, width: 8), [
           outMemBWEn < inExec,
+          outMemBAddr < rf.rDataA,
+          outMemBWData < rf.rDataB,
           outMemBBEn < Const(0x3, width: 4),
         ]),
         CaseItem(Const(ParticleOpcodes.st16PostInc, width: 8), [
           outMemBWEn < inExec,
+          outMemBAddr < rf.rDataA,
+          outMemBWData < rf.rDataB,
           outMemBBEn < Const(0x3, width: 4),
         ]),
         CaseItem(Const(ParticleOpcodes.st32, width: 8), [
           outMemBWEn < inExec,
+          outMemBAddr < rf.rDataA,
+          outMemBWData < rf.rDataB,
           outMemBBEn < Const(0xF, width: 4),
         ]),
         // Atomic Test-And-Set / Swap: Old <- Mem32[Rr]; Mem32[Rr] <- Rl; Rl <- Old
@@ -576,6 +586,8 @@ class ParticleCpuCore extends Module {
 
         CaseItem(Const(ParticleOpcodes.st32PostInc, width: 8), [
           outMemBWEn < inExec,
+          outMemBAddr < rf.rDataA,
+          outMemBWData < rf.rDataB,
           outMemBBEn < Const(0xF, width: 4),
         ]),
 
