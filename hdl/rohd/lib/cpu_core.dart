@@ -513,23 +513,39 @@ class ParticleCpuCore extends Module {
         // Memory Loads (Port B: Address in Rl/rDataB, Target in Rr/rfWData)
         CaseItem(Const(ParticleOpcodes.ld8, width: 8), [
           outMemBREn < inExec,
-          rfWData < memPortBRData.slice(7, 0).zeroExtend(32),
           rfWEn < inExec,
+          Case(rf.rDataB.slice(1, 0), [
+            CaseItem(Const(0, width: 2), [rfWData < memPortBRData.slice(7, 0).zeroExtend(32)]),
+            CaseItem(Const(1, width: 2), [rfWData < memPortBRData.slice(15, 8).zeroExtend(32)]),
+            CaseItem(Const(2, width: 2), [rfWData < memPortBRData.slice(23, 16).zeroExtend(32)]),
+            CaseItem(Const(3, width: 2), [rfWData < memPortBRData.slice(31, 24).zeroExtend(32)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.ld8PostInc, width: 8), [
           outMemBREn < inExec,
-          rfWData < memPortBRData.slice(7, 0).zeroExtend(32),
           rfWEn < inExec,
+          Case(rf.rDataB.slice(1, 0), [
+            CaseItem(Const(0, width: 2), [rfWData < memPortBRData.slice(7, 0).zeroExtend(32)]),
+            CaseItem(Const(1, width: 2), [rfWData < memPortBRData.slice(15, 8).zeroExtend(32)]),
+            CaseItem(Const(2, width: 2), [rfWData < memPortBRData.slice(23, 16).zeroExtend(32)]),
+            CaseItem(Const(3, width: 2), [rfWData < memPortBRData.slice(31, 24).zeroExtend(32)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.ld16, width: 8), [
           outMemBREn < inExec,
-          rfWData < memPortBRData.slice(15, 0).zeroExtend(32),
           rfWEn < inExec,
+          Case(rf.rDataB.slice(1, 1), [
+            CaseItem(Const(0, width: 1), [rfWData < memPortBRData.slice(15, 0).zeroExtend(32)]),
+            CaseItem(Const(1, width: 1), [rfWData < memPortBRData.slice(31, 16).zeroExtend(32)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.ld16PostInc, width: 8), [
           outMemBREn < inExec,
-          rfWData < memPortBRData.slice(15, 0).zeroExtend(32),
           rfWEn < inExec,
+          Case(rf.rDataB.slice(1, 1), [
+            CaseItem(Const(0, width: 1), [rfWData < memPortBRData.slice(15, 0).zeroExtend(32)]),
+            CaseItem(Const(1, width: 1), [rfWData < memPortBRData.slice(31, 16).zeroExtend(32)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.ld32, width: 8), [
           outMemBREn < inExec,
@@ -546,26 +562,42 @@ class ParticleCpuCore extends Module {
         CaseItem(Const(ParticleOpcodes.st8, width: 8), [
           outMemBWEn < inExec,
           outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          outMemBBEn < Const(0x1, width: 4),
+          outMemBWData < [rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0)].rswizzle(),
+          Case(rf.rDataA.slice(1, 0), [
+            CaseItem(Const(0, width: 2), [outMemBBEn < Const(0x1, width: 4)]),
+            CaseItem(Const(1, width: 2), [outMemBBEn < Const(0x2, width: 4)]),
+            CaseItem(Const(2, width: 2), [outMemBBEn < Const(0x4, width: 4)]),
+            CaseItem(Const(3, width: 2), [outMemBBEn < Const(0x8, width: 4)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.st8PostInc, width: 8), [
           outMemBWEn < inExec,
           outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          outMemBBEn < Const(0x1, width: 4),
+          outMemBWData < [rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0)].rswizzle(),
+          Case(rf.rDataA.slice(1, 0), [
+            CaseItem(Const(0, width: 2), [outMemBBEn < Const(0x1, width: 4)]),
+            CaseItem(Const(1, width: 2), [outMemBBEn < Const(0x2, width: 4)]),
+            CaseItem(Const(2, width: 2), [outMemBBEn < Const(0x4, width: 4)]),
+            CaseItem(Const(3, width: 2), [outMemBBEn < Const(0x8, width: 4)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.st16, width: 8), [
           outMemBWEn < inExec,
           outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          outMemBBEn < Const(0x3, width: 4),
+          outMemBWData < [rf.rDataB.slice(15, 0), rf.rDataB.slice(15, 0)].rswizzle(),
+          Case(rf.rDataA.slice(1, 1), [
+            CaseItem(Const(0, width: 1), [outMemBBEn < Const(0x3, width: 4)]),
+            CaseItem(Const(1, width: 1), [outMemBBEn < Const(0xC, width: 4)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.st16PostInc, width: 8), [
           outMemBWEn < inExec,
           outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          outMemBBEn < Const(0x3, width: 4),
+          outMemBWData < [rf.rDataB.slice(15, 0), rf.rDataB.slice(15, 0)].rswizzle(),
+          Case(rf.rDataA.slice(1, 1), [
+            CaseItem(Const(0, width: 1), [outMemBBEn < Const(0x3, width: 4)]),
+            CaseItem(Const(1, width: 1), [outMemBBEn < Const(0xC, width: 4)]),
+          ]),
         ]),
         CaseItem(Const(ParticleOpcodes.st32, width: 8), [
           outMemBWEn < inExec,

@@ -88,7 +88,7 @@ void main() {
       int pops = 0;
 
       // Sample first 150 cycles to observe IF -> ID handshake
-      for (int cycle = 0; cycle < 6000; cycle++) {
+      for (int cycle = 0; cycle < 15000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) {
           pushes++;
@@ -127,6 +127,7 @@ void main() {
 
       const int regBase = 0x0600;
 
+      // Increase cycle timeout to 12000 for longer sequence if needed
       final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
       final x1 = c1Tcm.readWord(regBase + 1 * 4);
       final x2 = c1Tcm.readWord(regBase + 2 * 4);
@@ -135,23 +136,41 @@ void main() {
       final x5 = c1Tcm.readWord(regBase + 5 * 4);
       final x6 = c1Tcm.readWord(regBase + 6 * 4);
       final x7 = c1Tcm.readWord(regBase + 7 * 4);
+      final x8 = c1Tcm.readWord(regBase + 8 * 4);
+      final x9 = c1Tcm.readWord(regBase + 9 * 4);
+      final x10 = c1Tcm.readWord(regBase + 10 * 4);
+      final x11 = c1Tcm.readWord(regBase + 11 * 4);
+      final x12 = c1Tcm.readWord(regBase + 12 * 4);
+      final x13 = c1Tcm.readWord(regBase + 13 * 4);
+      final x14 = c1Tcm.readWord(regBase + 14 * 4);
+      final x15 = c1Tcm.readWord(regBase + 15 * 4);
+      final x16 = c1Tcm.readWord(regBase + 16 * 4);
+      final x17 = c1Tcm.readWord(regBase + 17 * 4);
 
       print("Architectural Registers in Core 1 TCM:");
-      print("  x1=0x${x1.toRadixString(16)} ($x1)");
-      print("  x2=0x${x2.toRadixString(16)} ($x2)");
-      print("  x3=0x${x3.toRadixString(16)} ($x3)");
-      print("  x4=0x${x4.toRadixString(16)} ($x4) [lbu 0(x1)]");
-      print("  x5=0x${x5.toRadixString(16)} ($x5) [lb 0(x1)]");
-      print("  x6=0x${x6.toRadixString(16)} ($x6) [lhu 4(x1)]");
-      print("  x7=0x${x7.toRadixString(16)} ($x7) [lh 4(x1)]");
+      print("  x1=0x${x1.toRadixString(16)} (base=100)");
+      print("  x6=0x${x6.toRadixString(16)} [lw 0(x1), expected 0xddccbbaa]");
+      print("  x7=0x${x7.toRadixString(16)} [lbu 1(x1), expected 0xbb]");
+      print("  x8=0x${x8.toRadixString(16)} [lb 1(x1), expected 0xffffffbb]");
+      print("  x9=0x${x9.toRadixString(16)} [lbu 2(x1), expected 0xcc]");
+      print("  x10=0x${x10.toRadixString(16)} [lb 2(x1), expected 0xffffffcc]");
+      print("  x11=0x${x11.toRadixString(16)} [lbu 3(x1), expected 0xdd]");
+      print("  x12=0x${x12.toRadixString(16)} [lb 3(x1), expected 0xffffffdd]");
+      print("  x15=0x${x15.toRadixString(16)} [lw 4(x1), expected 0x89ab1234]");
+      print("  x16=0x${x16.toRadixString(16)} [lhu 6(x1), expected 0x89ab]");
+      print("  x17=0x${x17.toRadixString(16)} [lh 6(x1), expected 0xffff89ab]");
 
       expect(x1, equals(100), reason: "x1 should be 100");
-      expect(x2, equals(0x12345678), reason: "x2 should be 0x12345678");
-      expect(x3 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x3 should be 0xFFFFFFF4 (-12)");
-      expect(x4, equals(0xF4), reason: "x4 should be 0x000000F4 (244) from lbu");
-      expect(x5 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x5 should be 0xFFFFFFF4 from sign-extended lb");
-      expect(x6, equals(0xFFF4), reason: "x6 should be 0x0000FFF4 (65524) from lhu");
-      expect(x7 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x7 should be 0xFFFFFFF4 from sign-extended lh");
+      expect(x6 & 0xFFFFFFFF, equals(0xDDCCBBAA), reason: "x6 should be 0xDDCCBBAA");
+      expect(x7, equals(0xBB), reason: "x7 should be 0xBB from lbu 1(x1)");
+      expect(x8 & 0xFFFFFFFF, equals(0xFFFFFFBB), reason: "x8 should be 0xFFFFFFBB from lb 1(x1)");
+      expect(x9, equals(0xCC), reason: "x9 should be 0xCC from lbu 2(x1)");
+      expect(x10 & 0xFFFFFFFF, equals(0xFFFFFFCC), reason: "x10 should be 0xFFFFFFCC from lb 2(x1)");
+      expect(x11, equals(0xDD), reason: "x11 should be 0xDD from lbu 3(x1)");
+      expect(x12 & 0xFFFFFFFF, equals(0xFFFFFFDD), reason: "x12 should be 0xFFFFFFDD from lb 3(x1)");
+      expect(x15 & 0xFFFFFFFF, equals(0x89AB1234), reason: "x15 should be 0x89AB1234");
+      expect(x16, equals(0x89AB), reason: "x16 should be 0x89AB from lhu 6(x1)");
+      expect(x17 & 0xFFFFFFFF, equals(0xFFFF89AB), reason: "x17 should be 0xFFFF89AB from lh 6(x1)");
 
       await Simulator.endSimulation();
     });

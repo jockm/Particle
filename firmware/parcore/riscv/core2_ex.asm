@@ -219,9 +219,9 @@ _dispatch_alu:
     FBRA.Z  R4, _run_alu_lookup
 
     ; Effective memory address calculation: Base (Rs1) + Offset (Imm)
+    LOAD16  R4, _forward_to_mem
     LD      R14, R11
     ADD     R14, R12
-    LOAD16  R4, _forward_to_mem
     JMP     R4, R0
 
 _run_alu_lookup:
