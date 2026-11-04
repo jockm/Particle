@@ -88,7 +88,7 @@ void main() {
       int pops = 0;
 
       // Sample first 150 cycles to observe IF -> ID handshake
-      for (int cycle = 0; cycle < 4000; cycle++) {
+      for (int cycle = 0; cycle < 6000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) {
           pushes++;
@@ -134,15 +134,24 @@ void main() {
       final x4 = c1Tcm.readWord(regBase + 4 * 4);
       final x5 = c1Tcm.readWord(regBase + 5 * 4);
       final x6 = c1Tcm.readWord(regBase + 6 * 4);
+      final x7 = c1Tcm.readWord(regBase + 7 * 4);
 
-      print("Architectural Registers in Core 1 TCM: x1=$x1, x2=$x2, x3=$x3, x4=$x4, x5=$x5, x6=$x6");
+      print("Architectural Registers in Core 1 TCM:");
+      print("  x1=0x${x1.toRadixString(16)} ($x1)");
+      print("  x2=0x${x2.toRadixString(16)} ($x2)");
+      print("  x3=0x${x3.toRadixString(16)} ($x3)");
+      print("  x4=0x${x4.toRadixString(16)} ($x4) [lbu 0(x1)]");
+      print("  x5=0x${x5.toRadixString(16)} ($x5) [lb 0(x1)]");
+      print("  x6=0x${x6.toRadixString(16)} ($x6) [lhu 4(x1)]");
+      print("  x7=0x${x7.toRadixString(16)} ($x7) [lh 4(x1)]");
 
-      expect(x1, equals(10), reason: "x1 should be 10 (0x0A)");
-      expect(x2, equals(20), reason: "x2 should be 20 (0x14)");
-      expect(x3, equals(30), reason: "x3 should be 30 (0x1E)");
-      expect(x4, equals(120), reason: "x4 should be 120 (0x78)");
-      expect(x5, equals(110), reason: "x5 should be 110 (0x6E)");
-      expect(x6, equals(120), reason: "x6 should be 120 from lw 16(x1)");
+      expect(x1, equals(100), reason: "x1 should be 100");
+      expect(x2, equals(0x12345678), reason: "x2 should be 0x12345678");
+      expect(x3 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x3 should be 0xFFFFFFF4 (-12)");
+      expect(x4, equals(0xF4), reason: "x4 should be 0x000000F4 (244) from lbu");
+      expect(x5 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x5 should be 0xFFFFFFF4 from sign-extended lb");
+      expect(x6, equals(0xFFF4), reason: "x6 should be 0x0000FFF4 (65524) from lhu");
+      expect(x7 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x7 should be 0xFFFFFFF4 from sign-extended lh");
 
       await Simulator.endSimulation();
     });

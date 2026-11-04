@@ -451,26 +451,34 @@ _emit_branch:
 
 _emit_lui:
     ; U-Type immediate: inst[31:12] << 12
+    LD      R9, R11
     LOAD32  R7, 0xFFFFF000
-    AND     R9, R11, R7
+    AND     R9, R7              ; R9 = inst & 0xFFFFF000
     LOAD16  R4, 0x30            ; LUI uop
-    SHIFTL  R4, 24
-    SHIFTL  R7, R13, 8
+    LD      R8, 12
+    SHIFTL  R8, 1               ; R8 = 24
+    SHIFTL  R4, R8              ; R4 = uop << 24
+    LD      R7, R13
+    SHIFTL  R7, 8               ; R7 = Rd << 8
     OR      R4, R7
-    OR      R4, 1
+    OR      R4, 1               ; Valid bit
     LD      R5, 0               ; OpA = 0
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
 
 _emit_auipc:
     ; U-Type immediate: inst[31:12] << 12
+    LD      R9, R11
     LOAD32  R7, 0xFFFFF000
-    AND     R9, R11, R7
+    AND     R9, R7              ; R9 = inst & 0xFFFFF000
     LOAD16  R4, 0x31            ; AUIPC uop
-    SHIFTL  R4, 24
-    SHIFTL  R7, R13, 8
+    LD      R8, 12
+    SHIFTL  R8, 1               ; R8 = 24
+    SHIFTL  R4, R8              ; R4 = uop << 24
+    LD      R7, R13
+    SHIFTL  R7, 8               ; R7 = Rd << 8
     OR      R4, R7
-    OR      R4, 1
+    OR      R4, 1               ; Valid bit
     LD      R5, R10             ; OpA = Current PC
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0

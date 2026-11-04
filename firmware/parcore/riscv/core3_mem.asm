@@ -145,14 +145,18 @@ _do_sw:
 _do_lb:
     ; Signed byte load
     LD8     R11, (R12)
-    SEXT8   R11            ; Sign-extend byte to 32 bits
+    LOAD16  R5, 24
+    SHIFTL  R11, R5
+    ASHIFTR R11, R5        ; Sign-extend byte to 32 bits
     LOAD16  R14, _emit_writeback
     JMP     R14, R0
 
 _do_lh:
     ; Signed halfword load
     LD16    R11, (R12)
-    SEXT16  R11            ; Sign-extend halfword to 32 bits
+    LOAD16  R5, 16
+    SHIFTL  R11, R5
+    ASHIFTR R11, R5        ; Sign-extend halfword to 32 bits
     LOAD16  R14, _emit_writeback
     JMP     R14, R0
 
