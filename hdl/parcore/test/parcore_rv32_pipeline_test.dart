@@ -1,10 +1,11 @@
+import 'package:parcore_rohd/parcore_tcm.dart';
 import "dart:async";
 import "dart:io";
 import "dart:typed_data";
 import "package:rohd/rohd.dart";
 import "package:test/test.dart";
 import "../../rohd/test/test_helpers.dart";
-import "../lib/parcore_top.dart";
+import "package:parcore_rohd/parcore_top.dart";
 
 List<int> loadBinary(String path) {
   final file = File(path);
@@ -84,7 +85,7 @@ void main() {
       int pops = 0;
 
       // Sample first 150 cycles to observe IF -> ID handshake
-      for (int cycle = 0; cycle < 150; cycle++) {
+      for (int cycle = 0; cycle < 2000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) {
           pushes++;
@@ -98,6 +99,25 @@ void main() {
 
       print("Summary: Total C0 Pushes = $pushes, Total C1 Pops = $pops");
       print("Final C0 PC = 0x${c0Pc.value.toInt().toRadixString(16)}, C1 PC = 0x${c1Pc.value.toInt().toRadixString(16)}");
+
+      expect(pops, greaterThan(0), reason: "Core 1 should pop instructions from IF FIFO");
+
+      final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
+      const int regBase = 0x0600;
+
+      final x1 = c1Tcm.readWord(regBase + 1 * 4);
+      final x2 = c1Tcm.readWord(regBase + 2 * 4);
+      final x3 = c1Tcm.readWord(regBase + 3 * 4);
+      final x4 = c1Tcm.readWord(regBase + 4 * 4);
+      final x5 = c1Tcm.readWord(regBase + 5 * 4);
+
+      print("Architectural Registers in Core 1 TCM: x1=$x1, x2=$x2, x3=$x3, x4=$x4, x5=$x5");
+
+      expect(x1, equals(10), reason: "x1 should be 10 (0x0A)");
+      expect(x2, equals(20), reason: "x2 should be 20 (0x14)");
+      expect(x3, equals(30), reason: "x3 should be 30 (0x1E)");
+      expect(x4, equals(120), reason: "x4 should be 120 (0x78)");
+      expect(x5, equals(110), reason: "x5 should be 110 (0x6E)");
 
       await Simulator.endSimulation();
     });

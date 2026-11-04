@@ -20,7 +20,8 @@ _ex_main_loop:
     FIFO.R  R13, R1             ; Word 3: Base PC
 
     ; Test valid bit (bit 0)
-    AND     R3, R10, 1
+    LD      R3, R10
+    AND     R3, 1
     FBRA.NZ R3, _have_valid_packet
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0

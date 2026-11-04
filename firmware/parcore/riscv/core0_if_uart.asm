@@ -30,11 +30,9 @@ _if_main_loop:
     ; If instruction word is 0 (end of guest code / uninitialized), skip pushing
     FBRA.Z  R5, ._loop_back
 
-    ; Advance PC pointer
-    ADD     R10, 4
-
     ; 3. Push Fetch Packet to ID Core via FIFO Channel 1 [PC, Instruction]
-    SUB     R6, R10, 4          ; Original instruction PC
+    LD      R6, R10             ; Original instruction PC
+    ADD     R10, 4              ; Advance PC pointer
     FIFO.W  R6, R1              ; Word 0: PC
     FIFO.W  R5, R1              ; Word 1: Instruction Word
 

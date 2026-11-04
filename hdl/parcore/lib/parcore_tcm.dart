@@ -52,9 +52,20 @@ class ParcoreTcm extends Module {
     _build();
   }
 
+  late final List<int> _mem;
+
+  int readWord(int byteAddr) {
+    final b0 = _mem[byteAddr];
+    final b1 = _mem[byteAddr + 1];
+    final b2 = _mem[byteAddr + 2];
+    final b3 = _mem[byteAddr + 3];
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+  }
+
   void _build() {
     final totalBytes = depthWords * 4;
     final mem = List<int>.filled(totalBytes, 0);
+    _mem = mem;
 
     if (initialBytes != null) {
       for (int i = 0; i < initialBytes!.length; i++) {
@@ -76,7 +87,7 @@ class ParcoreTcm extends Module {
         final byteAddrA = (addrA.value.toInt() << 1) % totalBytes;
         final b0 = mem[byteAddrA];
         final b1 = mem[(byteAddrA + 1) % totalBytes];
-        internalRDataA.put(b0 | (b1 << 8));
+        internalRDataA.put((b1 << 8) | b0);
       } else {
         internalRDataA.put(0);
       }
@@ -112,5 +123,8 @@ class ParcoreTcm extends Module {
     addrA.changed.listen((_) => updateReads());
     addrB.changed.listen((_) => updateReads());
     rEnB.changed.listen((_) => updateReads());
+
+    // Initial combinational evaluation
+    updateReads();
   }
 }

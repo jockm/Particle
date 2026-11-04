@@ -5,8 +5,8 @@
 ; ==============================================================================
 .include "lib/common.inc"
 
-.define REG_BASE        0x0200  ; Local TCM base for x0..x31 (32 words = 128 bytes)
-.define SCOREBOARD_MASK 0x0280  ; Local TCM address for 32-bit in-flight bitmask
+.define REG_BASE        0x0600  ; Local TCM base for x0..x31 (32 words = 128 bytes)
+.define SCOREBOARD_MASK 0x0680  ; Local TCM address for 32-bit in-flight bitmask
 
 .org 0x00000100
 _reset_vector:
@@ -23,7 +23,7 @@ _reset_vector:
 _init_rf_loop:
     LD32    (R4++), R5          ; Clear register word
     SUB     R6, 1
-    BBRA.P  R6, _init_rf_loop
+    BBRA.NZ R6, _init_rf_loop
 
     ; Clear Scoreboard mask (no registers in flight)
     LOAD16  R4, SCOREBOARD_MASK
@@ -36,13 +36,13 @@ _id_main_loop:
     ; --------------------------------------------------------------------------
     ; 1. Service Retiring Writebacks (Non-blocking check)
     ; --------------------------------------------------------------------------
-    FIFO.TRYR R4, R3            ; Try to read Rd index from WB FIFO
+    FIFO.TRYR R4, R3            ; Try to read Rd index from WB FIFO (Channel 2: memToWb)
     FBRA.NZ   R4, _handle_wb_commit
     LOAD16    R14, _poll_fetch_queue
     JMP       R14, R0
 
 _handle_wb_commit:
-    FIFO.R    R5, R3            ; Read committed 32-bit writeback data
+    FIFO.R    R5, 2             ; Read committed 32-bit writeback data
 
     ; Check if Rd == 0 (x0 is hardwired zero; discard commit)
     FBRA.Z    R4, _clear_wb_scoreboard
@@ -51,7 +51,7 @@ _handle_wb_commit:
     LOAD16  R6, REG_BASE
     SHIFTL  R7, R4, 2
     ADD     R6, R7
-    LD32    (R6), R5            ; Store committed value
+    ST32    (R6), R5            ; Store committed value
 
 _clear_wb_scoreboard:
     ; Clear bit in scoreboard: mask &= ~(1 << Rd)
@@ -61,7 +61,7 @@ _clear_wb_scoreboard:
     LOAD16  R6, SCOREBOARD_MASK
     LD32    R8, (R6)
     AND     R8, R7
-    LD32    (R6), R8
+    ST32    (R6), R8
 
 _poll_fetch_queue:
     ; --------------------------------------------------------------------------
@@ -73,14 +73,15 @@ _poll_fetch_queue:
     FBRA.Z  R7, _drain_flush_token
 
     FIFO.R  R11, R1             ; Pop Instruction Word
-    FBRA    _decode_fields
+    LOAD16  R14, _decode_fields
+    JMP     R14, R0
 
 _drain_flush_token:
     FIFO.R  R11, R1             ; Discard instruction word
     ; Pipeline bubble: clear scoreboard mask on flush
     LOAD16  R6, SCOREBOARD_MASK
     LD      R7, 0
-    LD32    (R6), R7
+    ST32    (R6), R7
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -152,7 +153,7 @@ _do_stall_wait:
     LOAD16  R6, REG_BASE
     SHIFTL  R7, R4, 2
     ADD     R6, R7
-    LD32    (R6), R5            ; Update register table
+    ST32    (R6), R5            ; Update register table
 
 _clear_stalled_bit:
     LD      R7, 1
@@ -161,7 +162,7 @@ _clear_stalled_bit:
     LOAD16  R6, SCOREBOARD_MASK
     LD32    R8, (R6)
     AND     R8, R7
-    LD32    (R6), R8
+    ST32    (R6), R8
     LOAD16  R14, _check_hazard  ; Re-evaluate hazard state
     JMP     R14, R0
 
@@ -284,7 +285,7 @@ _dispatch_packet:
     LD      R14, 1
     SHIFTL  R14, R13
     OR      R8, R14
-    LD32    (R7), R8
+    ST32    (R7), R8
 
 _push_to_ex:
     FIFO.W  R4, R2              ; Word 0: Control Word [uop:8 | funct:8 | Rd:8 | flags:8]

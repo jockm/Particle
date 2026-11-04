@@ -147,10 +147,14 @@ class ParticleCpuCore extends Module {
     final rfRbaseEn = Logic(name: 'rfRbaseEn');
     final rfRbaseIn = Logic(name: 'rfRbaseIn', width: 5);
 
+    final isPushAccum = opcode.eq(Const(ParticleOpcodes.push4, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.push8, width: 8));
+    final effRAddrA = mux(isPushAccum, Const(14, width: 4), rr);
+
     final rf = RegisterFile(
       clk: clk,
       reset: reset,
-      rAddrA: rr,
+      rAddrA: effRAddrA,
       rAddrB: rl,
       wAddr: rfWAddr,
       wData: rfWData,
@@ -324,12 +328,18 @@ class ParticleCpuCore extends Module {
     memPortBWEn <= outMemBWEn;
     memPortBREn <= outMemBREn;
 
+    final isR14Dest = opcode.eq(Const(ParticleOpcodes.ldImm8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.ldNegImm8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.push4, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.push8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.sltR14Imm8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.sltR14NegImm8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.ssltR14Imm8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.ssltR14NegImm8, width: 8));
+
     rfWAddr <=
         mux(
-          opcode.eq(Const(ParticleOpcodes.sltR14Imm8, width: 8)) |
-              opcode.eq(Const(ParticleOpcodes.sltR14NegImm8, width: 8)) |
-              opcode.eq(Const(ParticleOpcodes.ssltR14Imm8, width: 8)) |
-              opcode.eq(Const(ParticleOpcodes.ssltR14NegImm8, width: 8)),
+          isR14Dest,
           Const(14, width: 4),
           mux(opcode.eq(Const(ParticleOpcodes.tas, width: 8)), rl, rr),
         );
@@ -342,7 +352,7 @@ class ParticleCpuCore extends Module {
     sarfRdData <= rf.rDataA;
 
     // Streaming FIFO default port connections
-    fifoChanSelect <= rl.slice(1, 0);
+    fifoChanSelect <= rf.rDataB.slice(1, 0);
     fifoPushData <= rf.rDataA;
     mboxVectorOut <= rl.slice(3, 0);
 

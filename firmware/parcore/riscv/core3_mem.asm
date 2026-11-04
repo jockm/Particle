@@ -8,7 +8,7 @@
 .org 0x00000100
 _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 2 (EX)
-    LD      R2, 1               ; FIFO Ch1: Outbound Writeback to Core 1 (ID: [Rd, Data])
+    LD      R2, 1               ; FIFO Ch1: Outbound WB to Core 1 (memToWb)
 
 ; ==============================================================================
 ; Main Memory Pipeline Loop
@@ -20,7 +20,8 @@ _mem_main_loop:
     FIFO.R  R13, R1             ; Word 3: Store Data (Rs2 Value)
 
     ; Test valid bit (bit 0)
-    AND     R3, R10, 1
+    LD      R3, R10
+    AND     R3, 1
     FBRA.NZ R3, _process_mem_packet
     LOAD16  R14, _mem_main_loop
     JMP     R14, R0
