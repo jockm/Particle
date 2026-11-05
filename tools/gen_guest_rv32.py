@@ -62,6 +62,16 @@ def srl(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 5, rd, 0x33)
 def sra(rd, rs1, rs2): return encode_r(0x20, rs2, rs1, 5, rd, 0x33)
 def or_(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 6, rd, 0x33)
 def and_(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 7, rd, 0x33)
+
+# RV32M Extension
+def mul(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 0, rd, 0x33)
+def mulh(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 1, rd, 0x33)
+def mulhsu(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 2, rd, 0x33)
+def mulhu(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 3, rd, 0x33)
+def div(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 4, rd, 0x33)
+def divu(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 5, rd, 0x33)
+def rem(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 6, rd, 0x33)
+def remu(rd, rs1, rs2): return encode_r(0x01, rs2, rs1, 7, rd, 0x33)
 def lui(rd, imm20): return encode_u(imm20, rd, 0x37)
 
 # Branches
@@ -209,6 +219,42 @@ instructions += [
     sra(17, 1, 2),              # x17 = 0xFFFFFFF0 >>> 4 = 0xFFFFFFFF
     or_(18, 1, 2),              # x18 = 0xFFFFFFF0 | 4 = 0xFFFFFFF4
     and_(19, 1, 2),             # x19 = 0xFFFFFFF0 & 4 = 0x00000000
+
+    nop(),
+    nop(),
+    nop()
+]
+
+
+# ==============================================================================
+# Section 4: RV32M Multiply & Divide Extension
+# ==============================================================================
+instructions += [
+    # Use x20, x21, x22 as operands so x1..x19 remain intact
+    addi(20, 0, 20),            # x20 = 20
+    addi(21, 0, 3),             # x21 = 3
+    addi(22, 0, 0),             # x22 = 0 (for div-by-zero checks)
+
+    # 1. MUL: lower 32 bits (20 * 3 = 60 = 0x3C)
+    mul(23, 20, 21),            # x23 = 60
+
+    # 2. MULHU: unsigned * unsigned upper 32 bits
+    # 0x80000000 * 2 = 0x1_00000000 -> upper = 1
+    addi(24, 0, 1),
+    slli(24, 24, 31),           # x24 = 0x80000000
+    addi(25, 0, 2),             # x25 = 2
+    mulhu(26, 24, 25),          # x26 = 1
+
+    # 3. DIV / DIVU
+    div(27, 20, 21),            # x27 = 20 / 3 = 6
+    divu(28, 20, 21),           # x28 = 20 / 3 = 6
+
+    # 4. REM / REMU
+    rem(29, 20, 21),            # x29 = 20 % 3 = 2
+    remu(30, 20, 21),           # x30 = 20 % 3 = 2
+
+    # 5. Division / Remainder by zero
+    div(31, 20, 22),            # x31 = 20 / 0 = 0xFFFFFFFF (-1)
 
     nop(),
     nop(),

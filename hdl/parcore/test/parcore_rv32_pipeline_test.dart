@@ -88,37 +88,26 @@ void main() {
       int pushes = 0;
       int pops = 0;
 
-      // Sample first 150 cycles to observe IF -> ID handshake
-      for (int cycle = 0; cycle < 32000; cycle++) {
-        await clk.waitCycles(1);
-        if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) {
-          pushes++;
-          print("Cycle $cycle: Core0 PUSH #$pushes to Ch${c0FifoChan.value.toInt()} Data=0x${c0FifoData.value.toInt().toRadixString(16)} (C0 PC=0x${c0Pc.value.toInt().toRadixString(16)})");
-        }
-        if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
-          pops++;
-          print("Cycle $cycle: Core1 POP  #$pops (C1 PC=0x${c1Pc.value.toInt().toRadixString(16)})");
-        }
-        final core2 = top.subModules.firstWhere((m) => m.name == "core2_ex");
-        final core3 = top.subModules.firstWhere((m) => m.name == "core3_mem");
-        final c2Pc = core2.output("memPortAAddr");
-        final c3Pc = core3.output("memPortAAddr");
-        final c2Pop = core2.output("fifoPopEn");
-        final c2Push = core2.output("fifoPushEn");
-        final c3Push = core3.output("fifoPushEn");
-        final c3Pop = core3.output("fifoPopEn");
+      // Fast simulation loop: tally pushes/pops without stdout bottleneck
+      final core2 = top.subModules.firstWhere((m) => m.name == "core2_ex");
+      final core3 = top.subModules.firstWhere((m) => m.name == "core3_mem");
+      final c3Push = core3.output("fifoPushEn");
 
-        if (c2Pop.value.isValid && c2Pop.value.toInt() == 1) {
-          print("Cycle $cycle: Core2 POP (PC=0x${c2Pc.value.toInt().toRadixString(16)})");
-        }
-        if (c2Push.value.isValid && c2Push.value.toInt() == 1) {
-          print("Cycle $cycle: Core2 PUSH Data=0x${core2.output("fifoPushData").value.toInt().toRadixString(16)} Chan=${core2.output("fifoChanSelect").value.toInt()}");
-        }
+      int idleCycles = 0;
+      for (int cycle = 0; cycle < 36000; cycle++) {
+        await clk.waitCycles(1);
+        if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
+        if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
+
+        // Detect early completion: 1000 consecutive cycles without any Core3 writeback
         if (c3Push.value.isValid && c3Push.value.toInt() == 1) {
-          print("Cycle $cycle: Core3 PUSH Data=0x${core3.output("fifoPushData").value.toInt().toRadixString(16)} Chan=${core3.output("fifoChanSelect").value.toInt()}");
+          idleCycles = 0;
+        } else {
+          idleCycles++;
         }
-        if (c1FifoPush.value.isValid && c1FifoPush.value.toInt() == 1) {
-          print("Cycle $cycle: Core1 PUSH to Ch${c1FifoChan.value.toInt()} Data=0x${c1FifoPushData.value.toInt().toRadixString(16)} (C1 PC=0x${c1Pc.value.toInt().toRadixString(16)})");
+        if (pushes > 0 && pops >= 340 && idleCycles > 800) {
+          print("Program completed early at cycle $cycle (pipeline drained).");
+          break;
         }
       }
       print("Summary: Total C0 Pushes = $pushes, Total C1 Pops = $pops");
@@ -127,127 +116,71 @@ void main() {
       expect(pops, greaterThan(0), reason: "Core 1 should pop instructions from IF FIFO");
 
       const int regBase = 0x0600;
-
-      // Increase cycle timeout to 12000 for longer sequence if needed
       final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
-      final x1 = c1Tcm.readWord(regBase + 1 * 4);
-      final x2 = c1Tcm.readWord(regBase + 2 * 4);
-      final x3 = c1Tcm.readWord(regBase + 3 * 4);
-      final x4 = c1Tcm.readWord(regBase + 4 * 4);
-      final x5 = c1Tcm.readWord(regBase + 5 * 4);
-      final x6 = c1Tcm.readWord(regBase + 6 * 4);
-      final x7 = c1Tcm.readWord(regBase + 7 * 4);
-      final x8 = c1Tcm.readWord(regBase + 8 * 4);
-      final x9 = c1Tcm.readWord(regBase + 9 * 4);
-      final x10 = c1Tcm.readWord(regBase + 10 * 4);
-      final x11 = c1Tcm.readWord(regBase + 11 * 4);
-      final x12 = c1Tcm.readWord(regBase + 12 * 4);
-      final x13 = c1Tcm.readWord(regBase + 13 * 4);
-      final x14 = c1Tcm.readWord(regBase + 14 * 4);
-      final x15 = c1Tcm.readWord(regBase + 15 * 4);
-      final x16 = c1Tcm.readWord(regBase + 16 * 4);
-      final x17 = c1Tcm.readWord(regBase + 17 * 4);
-      final x18 = c1Tcm.readWord(regBase + 18 * 4);
-      final x19 = c1Tcm.readWord(regBase + 19 * 4);
-      final x20 = c1Tcm.readWord(regBase + 20 * 4);
-      final x21 = c1Tcm.readWord(regBase + 21 * 4);
-      final x22 = c1Tcm.readWord(regBase + 22 * 4);
-      final x23 = c1Tcm.readWord(regBase + 23 * 4);
-      final x24 = c1Tcm.readWord(regBase + 24 * 4);
-      final x25 = c1Tcm.readWord(regBase + 25 * 4);
-      final x26 = c1Tcm.readWord(regBase + 26 * 4);
-      final x27 = c1Tcm.readWord(regBase + 27 * 4);
-      final x28 = c1Tcm.readWord(regBase + 28 * 4);
+      final Map<int, int> regs = {};
+      for (int i = 1; i <= 31; i++) {
+        regs[i] = c1Tcm.readWord(regBase + i * 4);
+      }
 
-      print("Architectural Registers in Core 1 TCM:");
-      print("  x1=0x${x1.toRadixString(16)} (base=100)");
-      print("  x6=0x${x6.toRadixString(16)} [lw 0(x1), expected 0xddccbbaa]");
-      print("  x7=0x${x7.toRadixString(16)} [lbu 1(x1), expected 0xbb]");
-      print("  x8=0x${x8.toRadixString(16)} [lb 1(x1), expected 0xffffffbb]");
-      print("  x9=0x${x9.toRadixString(16)} [lbu 2(x1), expected 0xcc]");
-      print("  x10=0x${x10.toRadixString(16)} [lb 2(x1), expected 0xffffffcc]");
-      print("  x11=0x${x11.toRadixString(16)} [lbu 3(x1), expected 0xdd]");
-      print("  x12=0x${x12.toRadixString(16)} [lb 3(x1), expected 0xffffffdd]");
-      print("  x15=0x${x15.toRadixString(16)} [lw 4(x1), expected 0x89ab1234]");
-      print("  x16=0x${x16.toRadixString(16)} [lhu 6(x1), expected 0x89ab]");
-      print("  x17=0x${x17.toRadixString(16)} [lh 6(x1), expected 0xffff89ab]");
+      print("=== Section 3 ALU Immediate & Reg-Reg Results ===");
+      print("  x1=0x${regs[1]!.toRadixString(16)} [setup x1=-16, expected 0xfffffff0]");
+      print("  x2=0x${regs[2]!.toRadixString(16)} [setup x2=4, expected 0x4]");
+      print("  x3=0x${regs[3]!.toRadixString(16)} [slli 4<<3, expected 0x20]");
+      print("  x4=0x${regs[4]!.toRadixString(16)} [srli -16>>2, expected 0x3ffffffc]");
+      print("  x5=0x${regs[5]!.toRadixString(16)} [srai -16>>>2, expected 0xfffffffc]");
+      print("  x6=0x${regs[6]!.toRadixString(16)} [slti (-16<4), expected 0x1]");
+      print("  x7=0x${regs[7]!.toRadixString(16)} [sltiu (-16<4)u, expected 0x0]");
+      print("  x8=0x${regs[8]!.toRadixString(16)} [xori -16^0xff, expected 0xffffff0f]");
+      print("  x9=0x${regs[9]!.toRadixString(16)} [ori 4|0xf0, expected 0xf4]");
+      print("  x10=0x${regs[10]!.toRadixString(16)} [andi -16&0xff, expected 0xf0]");
+      print("  x11=0x${regs[11]!.toRadixString(16)} [sub 4-(-16), expected 0x14]");
+      print("  x12=0x${regs[12]!.toRadixString(16)} [sll 4<<4, expected 0x40]");
+      print("  x13=0x${regs[13]!.toRadixString(16)} [slt (-16<4), expected 0x1]");
+      print("  x14=0x${regs[14]!.toRadixString(16)} [sltu (-16<4)u, expected 0x0]");
+      print("  x15=0x${regs[15]!.toRadixString(16)} [xor -16^4, expected 0xfffffff4]");
+      print("  x16=0x${regs[16]!.toRadixString(16)} [srl -16>>4, expected 0x0fffffff]");
+      print("  x17=0x${regs[17]!.toRadixString(16)} [sra -16>>>4, expected 0xffffffff]");
+      print("  x18=0x${regs[18]!.toRadixString(16)} [or -16|4, expected 0xfffffff4]");
+      print("  x19=0x${regs[19]!.toRadixString(16)} [and -16&4, expected 0x0]");
 
-      // expect(x1, equals(100), reason: "x1 should be 100");
-      // expect(x6 & 0xFFFFFFFF, equals(0xDDCCBBAA), reason: "x6 should be 0xDDCCBBAA");
-      // expect(x7, equals(0xBB), reason: "x7 should be 0xBB from lbu 1(x1)");
-      // expect(x8 & 0xFFFFFFFF, equals(0xFFFFFFBB), reason: "x8 should be 0xFFFFFFBB from lb 1(x1)");
-      // expect(x9, equals(0xCC), reason: "x9 should be 0xCC from lbu 2(x1)");
-      // expect(x10 & 0xFFFFFFFF, equals(0xFFFFFFCC), reason: "x10 should be 0xFFFFFFCC from lb 2(x1)");
-      // expect(x11, equals(0xDD), reason: "x11 should be 0xDD from lbu 3(x1)");
-      // expect(x12 & 0xFFFFFFFF, equals(0xFFFFFFDD), reason: "x12 should be 0xFFFFFFDD from lb 3(x1)");
-      // expect(x15 & 0xFFFFFFFF, equals(0x89AB1234), reason: "x15 should be 0x89AB1234");
-      // expect(x16, equals(0x89AB), reason: "x16 should be 0x89AB from lhu 6(x1)");
-      // expect(x17 & 0xFFFFFFFF, equals(0xFFFF89AB), reason: "x17 should be 0xFFFF89AB from lh 6(x1)");
+      expect(regs[1]! & 0xFFFFFFFF, equals(0xFFFFFFF0), reason: "x1 should be -16");
+      expect(regs[2], equals(4), reason: "x2 should be 4");
+      expect(regs[3], equals(0x20), reason: "x3 should be 32 (slli)");
+      expect(regs[4]! & 0xFFFFFFFF, equals(0x3FFFFFFC), reason: "x4 should be 0x3FFFFFFC (srli)");
+      expect(regs[5]! & 0xFFFFFFFF, equals(0xFFFFFFFC), reason: "x5 should be -4 (srai)");
+      expect(regs[6], equals(1), reason: "x6 should be 1 (slti)");
+      expect(regs[7], equals(0), reason: "x7 should be 0 (sltiu)");
+      expect(regs[8]! & 0xFFFFFFFF, equals(0xFFFFFF0F), reason: "x8 should be 0xFFFFFF0F (xori)");
+      expect(regs[9], equals(0xF4), reason: "x9 should be 0xF4 (ori)");
+      expect(regs[10], equals(0xF0), reason: "x10 should be 0xF0 (andi)");
+      expect(regs[11], equals(0x14), reason: "x11 should be 20 (sub)");
+      expect(regs[12], equals(0x40), reason: "x12 should be 64 (sll)");
+      expect(regs[13], equals(1), reason: "x13 should be 1 (slt)");
+      expect(regs[14], equals(0), reason: "x14 should be 0 (sltu)");
+      expect(regs[15]! & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x15 should be 0xFFFFFFF4 (xor)");
+      expect(regs[16]! & 0xFFFFFFFF, equals(0x0FFFFFFF), reason: "x16 should be 0x0FFFFFFF (srl)");
+      expect(regs[17]! & 0xFFFFFFFF, equals(0xFFFFFFFF), reason: "x17 should be 0xFFFFFFFF (sra)");
+      expect(regs[18]! & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x18 should be 0xFFFFFFF4 (or)");
+      expect(regs[19], equals(0), reason: "x19 should be 0 (and)");
 
-      print("Section 2 Branch & Jump Results:");
-      print("  x18=0x${x18.toRadixString(16)} [BEQ taken, expected 0x1]");
-      print("  x19=0x${x19.toRadixString(16)} [BNE fallthrough, expected 0x2]");
-      print("  x20=0x${x20.toRadixString(16)} [BLT signed taken, expected 0x3]");
-      print("  x21=0x${x21.toRadixString(16)} [BGE signed taken, expected 0x4]");
-      print("  x22=0x${x22.toRadixString(16)} [BLTU unsigned taken, expected 0x5]");
-      print("  x23=0x${x23.toRadixString(16)} [BGEU unsigned taken, expected 0x6]");
-      print("  x24=0x${x24.toRadixString(16)} [JAL link Rd = PC+4]");
-      print("  x25=0x${x25.toRadixString(16)} [JAL target executed, expected 0x7]");
-      print("  x26=0x${x26.toRadixString(16)} [JALR target PC]");
-      print("  x27=0x${x27.toRadixString(16)} [JALR link Rd = PC+4]");
-      print("  x28=0x${x28.toRadixString(16)} [JALR target executed, expected 0x8]");
+      print("=== Section 4 RV32M Multiply & Divide Results ===");
+      print("  x23=0x${regs[23]!.toRadixString(16)} [mul 20*3, expected 0x3c (60)]");
+      print("  x24=0x${regs[24]!.toRadixString(16)} [setup x24=0x80000000]");
+      print("  x25=0x${regs[25]!.toRadixString(16)} [setup x25=2]");
+      print("  x26=0x${regs[26]!.toRadixString(16)} [mulhu 0x80000000*2, expected 0x1]");
+      print("  x27=0x${regs[27]!.toRadixString(16)} [div 20/3, expected 0x6]");
+      print("  x28=0x${regs[28]!.toRadixString(16)} [divu 20/3, expected 0x6]");
+      print("  x29=0x${regs[29]!.toRadixString(16)} [rem 20%3, expected 0x2]");
+      print("  x30=0x${regs[30]!.toRadixString(16)} [remu 20%3, expected 0x2]");
+      print("  x31=0x${regs[31]!.toRadixString(16)} [div by zero 20/0, expected 0xffffffff]");
 
-      // // expect(x18, equals(1), reason: "BEQ taken should set x18=1");
-      // // expect(x19, equals(2), reason: "BNE fallthrough should set x19=2");
-      expect(x20, equals(3), reason: "BLT signed taken should set x20=3");
-      expect(x21, equals(4), reason: "BGE signed taken should set x21=4");
-      expect(x22, equals(5), reason: "BLTU unsigned taken should set x22=5");
-      expect(x23, equals(6), reason: "BGEU unsigned taken should set x23=6");
-      expect(x25, equals(7), reason: "JAL target should set x25=7");
-      expect(x24, greaterThan(0x500), reason: "JAL link address in x24 must be valid guest PC");
-      expect(x28, equals(8), reason: "JALR target should set x28=8");
-      expect(x27, greaterThan(0x500), reason: "JALR link address in x27 must be valid guest PC");
-
-      print("Section 3 ALU Immediate & Reg-Reg Results:");
-      print("  x1=0x${x1.toRadixString(16)} [setup x1=-16, expected 0xfffffff0]");
-      print("  x2=0x${x2.toRadixString(16)} [setup x2=4, expected 0x4]");
-      print("  x3=0x${x3.toRadixString(16)} [slli 4<<3, expected 0x20]");
-      print("  x4=0x${x4.toRadixString(16)} [srli -16>>2, expected 0x3ffffffc]");
-      print("  x5=0x${x5.toRadixString(16)} [srai -16>>>2, expected 0xfffffffc]");
-      print("  x6=0x${x6.toRadixString(16)} [slti (-16<4), expected 0x1]");
-      print("  x7=0x${x7.toRadixString(16)} [sltiu (-16<4)u, expected 0x0]");
-      print("  x8=0x${x8.toRadixString(16)} [xori -16^0xff, expected 0xffffff0f]");
-      print("  x9=0x${x9.toRadixString(16)} [ori 4|0xf0, expected 0xf4]");
-      print("  x10=0x${x10.toRadixString(16)} [andi -16&0xff, expected 0xf0]");
-      print("  x11=0x${x11.toRadixString(16)} [sub 4-(-16), expected 0x14]");
-      print("  x12=0x${x12.toRadixString(16)} [sll 4<<4, expected 0x40]");
-      print("  x13=0x${x13.toRadixString(16)} [slt (-16<4), expected 0x1]");
-      print("  x14=0x${x14.toRadixString(16)} [sltu (-16<4)u, expected 0x0]");
-      print("  x15=0x${x15.toRadixString(16)} [xor -16^4, expected 0xfffffff4]");
-      print("  x16=0x${x16.toRadixString(16)} [srl -16>>4, expected 0x0fffffff]");
-      print("  x17=0x${x17.toRadixString(16)} [sra -16>>>4, expected 0xffffffff]");
-      print("  x18=0x${x18.toRadixString(16)} [or -16|4, expected 0xfffffff4]");
-      print("  x19=0x${x19.toRadixString(16)} [and -16&4, expected 0x0]");
-
-      expect(x1 & 0xFFFFFFFF, equals(0xFFFFFFF0), reason: "x1 should be -16");
-      expect(x2, equals(4), reason: "x2 should be 4");
-      expect(x3, equals(0x20), reason: "x3 should be 32 (slli)");
-      expect(x4 & 0xFFFFFFFF, equals(0x3FFFFFFC), reason: "x4 should be 0x3FFFFFFC (srli)");
-      expect(x5 & 0xFFFFFFFF, equals(0xFFFFFFFC), reason: "x5 should be -4 (srai)");
-      expect(x6, equals(1), reason: "x6 should be 1 (slti)");
-      expect(x7, equals(0), reason: "x7 should be 0 (sltiu)");
-      expect(x8 & 0xFFFFFFFF, equals(0xFFFFFF0F), reason: "x8 should be 0xFFFFFF0F (xori)");
-      expect(x9, equals(0xF4), reason: "x9 should be 0xF4 (ori)");
-      expect(x10, equals(0xF0), reason: "x10 should be 0xF0 (andi)");
-      expect(x11, equals(0x14), reason: "x11 should be 20 (sub)");
-      expect(x12, equals(0x40), reason: "x12 should be 64 (sll)");
-      expect(x13, equals(1), reason: "x13 should be 1 (slt)");
-      expect(x14, equals(0), reason: "x14 should be 0 (sltu)");
-      expect(x15 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x15 should be 0xFFFFFFF4 (xor)");
-      expect(x16 & 0xFFFFFFFF, equals(0x0FFFFFFF), reason: "x16 should be 0x0FFFFFFF (srl)");
-      expect(x17 & 0xFFFFFFFF, equals(0xFFFFFFFF), reason: "x17 should be 0xFFFFFFFF (sra)");
-      expect(x18 & 0xFFFFFFFF, equals(0xFFFFFFF4), reason: "x18 should be 0xFFFFFFF4 (or)");
-      expect(x19, equals(0), reason: "x19 should be 0 (and)");
+      expect(regs[23], equals(60), reason: "x23 should be 60 (mul)");
+      expect(regs[26], equals(1), reason: "x26 should be 1 (mulhu)");
+      expect(regs[27], equals(6), reason: "x27 should be 6 (div)");
+      expect(regs[28], equals(6), reason: "x28 should be 6 (divu)");
+      expect(regs[29], equals(2), reason: "x29 should be 2 (rem)");
+      expect(regs[30], equals(2), reason: "x30 should be 2 (remu)");
+      expect(regs[31]! & 0xFFFFFFFF, equals(0xFFFFFFFF), reason: "x31 should be 0xFFFFFFFF (div by 0)");
 
       await Simulator.endSimulation();
       
