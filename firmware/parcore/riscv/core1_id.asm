@@ -373,12 +373,12 @@ _pack_imm_ctrl:
 _dispatch_packet:
     ; If Rd != 0, set destination reservation in scoreboard
     FBRA.Z  R13, _push_to_ex
-    LOAD16  R7, SCOREBOARD_MASK
-    LD32    R8, (R7)
+    LOAD16  R6, SCOREBOARD_MASK
+    LD32    R8, (R6)
     LD      R14, 1
     SHIFTL  R14, R13
     OR      R8, R14
-    ST32    (R7), R8
+    ST32    (R6), R8
 
 _push_to_ex:
     FIFO.W  R4, R2              ; Word 0: Control Word [uop:8 | funct:8 | Rd:8 | flags:8]

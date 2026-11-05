@@ -567,74 +567,268 @@ _do_auipc:
     JMP     R14, R0
 
 _do_mul:
-    MULL    R15, R11, R12
+    LD      R15, R11
+    MULL    R15, R12
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_mulh:
-    SMULH   R15, R11, R12
+    LD      R15, R11
+    SMULH   R15, R12
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_mulhsu:
-    MULHSU  R15, R11, R12
+    LD      R15, R11
+    MULHSU  R15, R12
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_mulhu:
-    MULH    R15, R11, R12
+    LD      R15, R11
+    MULH    R15, R12
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_div:
-    FBRA.NZ R12, _exec_sdiv
-    LOAD32  R15, 0xFFFFFFFF     ; Division by zero
+    ; RV32M DIV (Signed)
+    FBRA.NZ R12, _div_nonzero
+    LOAD32  R15, 0xFFFFFFFF     ; Division by zero -> -1
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
-_exec_sdiv:
-    SDIV    R15, R11, R12
+
+_div_nonzero:
+    ; Check overflow: -2147483648 / -1 = -2147483648
+    LOAD32  R4, 0x80000000
+    LD      R5, R11
+    SUB     R5, R4
+    FBRA.NZ R5, _div_check_signs
+    LD      R5, R12
+    ADD     R5, 1
+    FBRA.NZ R5, _div_check_signs
+    LD      R15, R4
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
+
+_div_check_signs:
+    ; R6 = sign of quotient = (R11 ^ R12) >> 31
+    LD      R6, R11
+    XOR     R6, R12
+    SHIFTR  R6, 15
+    SHIFTR  R6, 15
+    SHIFTR  R6, 1
+
+    ; R7 = abs(R11)
+    LD      R7, R11
+    LD      R4, R11
+    SHIFTR  R4, 15
+    SHIFTR  R4, 15
+    SHIFTR  R4, 1
+    FBRA.Z  R4, _div_abs_b
+    LOAD16  R4, 0
+    SUB     R4, R7
+    LD      R7, R4
+
+_div_abs_b:
+    ; R8 = abs(R12)
+    LD      R8, R12
+    LD      R4, R12
+    SHIFTR  R4, 15
+    SHIFTR  R4, 15
+    SHIFTR  R4, 1
+    FBRA.Z  R4, _div_run_calc
+    LOAD16  R4, 0
+    SUB     R4, R8
+    LD      R8, R4
+
+_div_run_calc:
+    LOAD16  R3, 0               ; mode 0 = DIV
+    LOAD16  R14, _udiv_calc
+    JMP     R14, R0
+
+_div_finish:
+    LD      R15, R9             ; Quotient
+    FBRA.Z  R6, _div_exit
+    LOAD16  R4, 0
+    SUB     R4, R15
+    LD      R15, R4
+_div_exit:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_divu:
-    FBRA.NZ R12, _exec_udiv
-    LOAD32  R15, 0xFFFFFFFF
+    ; RV32M DIVU (Unsigned)
+    FBRA.NZ R12, _divu_nonzero
+    LOAD32  R15, 0xFFFFFFFF     ; Division by zero -> 0xFFFFFFFF
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
-_exec_udiv:
-    DIV     R15, R11, R12
+
+_divu_nonzero:
+    LD      R7, R11             ; N
+    LD      R8, R12             ; D
+    LOAD16  R3, 1               ; mode 1 = DIVU
+    LOAD16  R14, _udiv_calc
+    JMP     R14, R0
+
+_divu_finish:
+    LD      R15, R9             ; Unsigned quotient
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_rem:
-    FBRA.NZ R12, _exec_smod
+    ; RV32M REM (Signed)
+    FBRA.NZ R12, _rem_nonzero
     LD      R15, R11            ; Remainder by zero -> dividend
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
-_exec_smod:
-    SMOD    R15, R11, R12
+
+_rem_nonzero:
+    ; Check overflow: -2147483648 % -1 = 0
+    LOAD32  R4, 0x80000000
+    LD      R5, R11
+    SUB     R5, R4
+    FBRA.NZ R5, _rem_check_signs
+    LD      R5, R12
+    ADD     R5, 1
+    FBRA.NZ R5, _rem_check_signs
+    LOAD16  R15, 0
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
+
+_rem_check_signs:
+    ; Remainder sign matches dividend (R11) sign
+    LD      R6, R11
+    SHIFTR  R6, 15
+    SHIFTR  R6, 15
+    SHIFTR  R6, 1              ; R6 = sign of R11
+
+    ; R7 = abs(R11)
+    LD      R7, R11
+    FBRA.Z  R6, _rem_abs_b
+    LOAD16  R4, 0
+    SUB     R4, R7
+    LD      R7, R4
+
+_rem_abs_b:
+    ; R8 = abs(R12)
+    LD      R8, R12
+    LD      R4, R12
+    SHIFTR  R4, 15
+    SHIFTR  R4, 15
+    SHIFTR  R4, 1
+    FBRA.Z  R4, _rem_run_calc
+    LOAD16  R4, 0
+    SUB     R4, R8
+    LD      R8, R4
+
+_rem_run_calc:
+    LOAD16  R3, 2               ; mode 2 = REM
+    LOAD16  R14, _udiv_calc
+    JMP     R14, R0
+
+_rem_finish:
+    LD      R15, R11            ; Remainder in R11
+    FBRA.Z  R6, _rem_exit
+    LOAD16  R4, 0
+    SUB     R4, R15
+    LD      R15, R4
+_rem_exit:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_remu:
-    FBRA.NZ R12, _exec_umod
-    LD      R15, R11
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-_exec_umod:
-    MOD     R15, R11, R12
+    ; RV32M REMU (Unsigned)
+    FBRA.NZ R12, _remu_nonzero
+    LD      R15, R11            ; Remainder by zero -> dividend
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
+_remu_nonzero:
+    LD      R7, R11             ; N
+    LD      R8, R12             ; D
+    LOAD16  R3, 3               ; mode 3 = REMU
+    LOAD16  R14, _udiv_calc
+    JMP     R14, R0
+
+_remu_finish:
+    LD      R15, R11            ; Unsigned remainder in R11
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
+
+; ------------------------------------------------------------------------------
+; _udiv_calc: 32-bit Restoring Division
+; Inputs:  R7 = N, R8 = D, R3 = mode (0: DIV, 1: DIVU, 2: REM, 3: REMU)
+; Outputs: R9 = Quotient, R11 = Remainder
+; Preserves: R10 (Control Word), R13 (Word 3)
+; Scratch: R4 (Loop counter), R5 (temp)
+; ------------------------------------------------------------------------------
+_udiv_calc:
+    LOAD16  R9, 0               ; Q = 0
+    LOAD16  R11, 0              ; Remainder = 0 (using R11 to preserve R10!)
+    LOAD16  R4, 32              ; 32 iterations
+
+_udiv_step:
+    ; Remainder = (Remainder << 1) | (N >> 31)
+    SHIFTL  R11, 1
+    LD      R5, R7
+    SHIFTR  R5, 15
+    SHIFTR  R5, 15
+    SHIFTR  R5, 1
+    OR      R11, R5
+
+    SHIFTL  R7, 1               ; N <<= 1
+    SHIFTL  R9, 1               ; Q <<= 1
+
+    ; If Remainder >= D: Remainder -= D, Q |= 1
+    LD      R5, R11
+    SLT     R5, R8              ; R5 = (Remainder < D) ? 1 : 0 (SLT is unsigned)
+    FBRA.NZ R5, _udiv_next
+    SUB     R11, R8
+    OR      R9, 1
+
+_udiv_next:
+    SUB     R4, 1
+    FBRA.Z  R4, _udiv_done
+    LOAD16  R14, _udiv_step
+    JMP     R14, R0
+
+_udiv_done:
+    ; Dispatch by mode in R3
+    FBRA.Z  R3, _route_div
+    LD      R4, R3
+    SUB     R4, 1
+    FBRA.Z  R4, _route_divu
+    LD      R4, R3
+    SUB     R4, 2
+    FBRA.Z  R4, _route_rem
+
+    ; mode == 3 (REMU)
+    LOAD16  R14, _remu_finish
+    JMP     R14, R0
+
+_route_div:
+    LOAD16  R14, _div_finish
+    JMP     R14, R0
+
+_route_divu:
+    LOAD16  R14, _divu_finish
+    JMP     R14, R0
+
+_route_rem:
+    LOAD16  R14, _rem_finish
+    JMP     R14, R0
+
 _do_andn:
+    LD      R15, R11
     NOT     R4, R12
-    AND     R15, R11, R4
+    AND     R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_orn:
+    LD      R15, R11
     NOT     R4, R12
-    OR      R15, R11, R4
+    OR      R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -656,32 +850,40 @@ _do_ctz:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 _calc_ctz:
-    SUB     R4, R11, 1
+    LD      R4, R11
+    SUB     R4, 1
     NOT     R5, R11
     AND     R4, R5
     CLZ     R5, R4
     LOAD16  R6, 31
-    SUB     R15, R6, R5
+    LD      R15, R6
+    SUB     R15, R5
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_cpop:
-    SHIFTR  R4, R11, 1
+    LD      R4, R11
+    SHIFTR  R4, 1
     LOAD32  R5, 0x55555555
     AND     R4, R5
-    SUB     R6, R11, R4
+    LD      R6, R11
+    SUB     R6, R4
     LOAD32  R5, 0x33333333
-    AND     R4, R6, R5
-    SHIFTR  R6, R6, 2
+    LD      R4, R6
+    AND     R4, R5
+    SHIFTR  R6, 2
     AND     R6, R5
     ADD     R6, R4
-    SHIFTR  R4, R6, 4
+    LD      R4, R6
+    SHIFTR  R4, 4
     ADD     R6, R4
     LOAD32  R5, 0x0F0F0F0F
     AND     R6, R5
     LOAD32  R5, 0x01010101
     MULL    R6, R6, R5
-    SHIFTR  R15, R6, 24
+    LD      R15, R6
+    SHIFTR  R15, 12
+    SHIFTR  R15, 12
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -745,7 +947,8 @@ _do_sext_h:
 
 _do_zext_h:
     LOAD16  R4, 0xFFFF
-    AND     R15, R11, R4
+    LD      R15, R11
+    AND     R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
