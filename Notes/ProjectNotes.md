@@ -1,3 +1,29 @@
+# TODO
+
+- Rename hdl/rohd to hdl/particle
+
+- Comprehensive Tests for
+    - Assembler
+    - Compiler
+    - RISC-V 
+    - Make sure spec is correct
+
+- Particle
+    - More than 32 registers
+    - 64 bit Particle
+        - Configuration option?
+    - Floating Point?
+    - XTRA instruction/Coprocessor interface
+- Parcore
+    - System Bringup
+        - MR4/Particle/PicoRISCV
+        - Loads firmware into cores
+        - RTOS?
+        - Signing/Security?
+    - Superscsalar 
+    - Out of order
+    - JIT
+
 # Thoughts
 
 - you could have cores that do AOT compilation

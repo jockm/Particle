@@ -142,6 +142,8 @@ class ParcoreTop extends Module {
         Logic(name: 'branch_redirect_target', width: ParticleWidths.word);
     final c0MboxStrobe = Logic(name: 'c0_mbox_strobe');
     final c0MboxVector = Logic(name: 'c0_mbox_vector', width: 4);
+    final c1MboxStrobe = Logic(name: 'c1_mbox_strobe');
+    final c1MboxVector = Logic(name: 'c1_mbox_vector', width: 4);
 
     final c0FifoPopData =
         Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
@@ -246,8 +248,8 @@ class ParcoreTop extends Module {
       reset: reset,
       memPortARData: c1MemARData,
       memPortBRData: c1MemBRData,
-      mboxStrobeIn: Const(0),
-      mboxVectorIn: Const(0, width: 4),
+      mboxStrobeIn: c1MboxStrobe,
+      mboxVectorIn: c1MboxVector,
       fifoPopData: c1PopData,
       fifoStatus: c1FifoStatus,
       config: ParcoreConfig.core1Id,
@@ -319,6 +321,8 @@ class ParcoreTop extends Module {
     pipelineFlush <= core2.mboxStrobeOut;
     c0MboxStrobe <= core2.mboxStrobeOut;
     c0MboxVector <= core2.mboxVectorOut;
+    c1MboxStrobe <= core2.mboxStrobeOut;
+    c1MboxVector <= core2.mboxVectorOut;
 
     // Latch 32-bit redirect target from Core 2 (rf.rDataA = fifoPushData) on MBOX strobe
     Sequential(clk, reset: reset, [

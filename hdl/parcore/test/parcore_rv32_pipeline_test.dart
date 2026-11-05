@@ -88,7 +88,7 @@ void main() {
       int pops = 0;
 
       // Sample first 150 cycles to observe IF -> ID handshake
-      for (int cycle = 0; cycle < 15000; cycle++) {
+      for (int cycle = 0; cycle < 25000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) {
           pushes++;
@@ -146,6 +146,17 @@ void main() {
       final x15 = c1Tcm.readWord(regBase + 15 * 4);
       final x16 = c1Tcm.readWord(regBase + 16 * 4);
       final x17 = c1Tcm.readWord(regBase + 17 * 4);
+      final x18 = c1Tcm.readWord(regBase + 18 * 4);
+      final x19 = c1Tcm.readWord(regBase + 19 * 4);
+      final x20 = c1Tcm.readWord(regBase + 20 * 4);
+      final x21 = c1Tcm.readWord(regBase + 21 * 4);
+      final x22 = c1Tcm.readWord(regBase + 22 * 4);
+      final x23 = c1Tcm.readWord(regBase + 23 * 4);
+      final x24 = c1Tcm.readWord(regBase + 24 * 4);
+      final x25 = c1Tcm.readWord(regBase + 25 * 4);
+      final x26 = c1Tcm.readWord(regBase + 26 * 4);
+      final x27 = c1Tcm.readWord(regBase + 27 * 4);
+      final x28 = c1Tcm.readWord(regBase + 28 * 4);
 
       print("Architectural Registers in Core 1 TCM:");
       print("  x1=0x${x1.toRadixString(16)} (base=100)");
@@ -171,6 +182,30 @@ void main() {
       expect(x15 & 0xFFFFFFFF, equals(0x89AB1234), reason: "x15 should be 0x89AB1234");
       expect(x16, equals(0x89AB), reason: "x16 should be 0x89AB from lhu 6(x1)");
       expect(x17 & 0xFFFFFFFF, equals(0xFFFF89AB), reason: "x17 should be 0xFFFF89AB from lh 6(x1)");
+
+      print("Section 2 Branch & Jump Results:");
+      print("  x18=0x${x18.toRadixString(16)} [BEQ taken, expected 0x1]");
+      print("  x19=0x${x19.toRadixString(16)} [BNE fallthrough, expected 0x2]");
+      print("  x20=0x${x20.toRadixString(16)} [BLT signed taken, expected 0x3]");
+      print("  x21=0x${x21.toRadixString(16)} [BGE signed taken, expected 0x4]");
+      print("  x22=0x${x22.toRadixString(16)} [BLTU unsigned taken, expected 0x5]");
+      print("  x23=0x${x23.toRadixString(16)} [BGEU unsigned taken, expected 0x6]");
+      print("  x24=0x${x24.toRadixString(16)} [JAL link Rd = PC+4]");
+      print("  x25=0x${x25.toRadixString(16)} [JAL target executed, expected 0x7]");
+      print("  x26=0x${x26.toRadixString(16)} [JALR target PC]");
+      print("  x27=0x${x27.toRadixString(16)} [JALR link Rd = PC+4]");
+      print("  x28=0x${x28.toRadixString(16)} [JALR target executed, expected 0x8]");
+
+      expect(x18, equals(1), reason: "BEQ taken should set x18=1");
+      expect(x19, equals(2), reason: "BNE fallthrough should set x19=2");
+      expect(x20, equals(3), reason: "BLT signed taken should set x20=3");
+      expect(x21, equals(4), reason: "BGE signed taken should set x21=4");
+      expect(x22, equals(5), reason: "BLTU unsigned taken should set x22=5");
+      expect(x23, equals(6), reason: "BGEU unsigned taken should set x23=6");
+      expect(x25, equals(7), reason: "JAL target should set x25=7");
+      expect(x24, greaterThan(0x500), reason: "JAL link address in x24 must be valid guest PC");
+      expect(x28, equals(8), reason: "JALR target should set x28=8");
+      expect(x27, greaterThan(0x500), reason: "JALR link address in x27 must be valid guest PC");
 
       await Simulator.endSimulation();
     });

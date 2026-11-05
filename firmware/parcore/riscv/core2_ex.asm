@@ -54,8 +54,9 @@ _eval_branch:
     ; R10 = Control Word, R11 = Rs1, R12 = Rs2, R13 = Target PC (or Base PC for JAL)
 
     ; 1: BEQ
+    LD      R5, 1
     LD      R4, R3
-    SUB     R4, 1
+    SUB     R4, R5
     FBRA.Z  R4, _do_beq
     LOAD16  R14, _chk_bne
     JMP     R14, R0
@@ -71,8 +72,9 @@ _do_beq:
 
 _chk_bne:
     ; 2: BNE
+    LD      R5, 2
     LD      R4, R3
-    SUB     R4, 2
+    SUB     R4, R5
     FBRA.Z  R4, _do_bne
     LOAD16  R14, _chk_blt
     JMP     R14, R0
@@ -175,7 +177,8 @@ _do_jal:
     LD      R15, R13
     ADD     R15, 4             ; Link address = PC + 4
     LOAD16  R5, _taken_branch
-    LD      R14, R13           ; Set Target PC in R14 after LOAD16 expands
+    LD      R14, R13
+    ADD     R14, R12           ; Target PC = Base PC + Jump Offset
     JMP     R5, R0
 
 _chk_jalr:
@@ -209,8 +212,8 @@ _taken_branch:
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0
 _branch_has_rd:
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    LOAD16  R5, _forward_to_mem
+    JMP     R5, R0
 
 ; ALU / Memory / Extension Dispatch Section
 ; ==============================================================================

@@ -548,41 +548,56 @@ _emit_auipc:
 
 _emit_jal:
     ; J-Type immediate: {inst[31], inst[19:12], inst[20], inst[30:21], 0}
-    ASHIFTR R4, R11, 31
-    SHIFTL  R4, 20
-    LOAD32  R7, 0x000FF000
-    AND     R8, R11, R7
-    OR      R4, R8
-    SHIFTR  R7, R11, 20
+    LD      R4, R11
+    ASHIFTR R4, 15
+    ASHIFTR R4, 15
+    ASHIFTR R4, 1               ; Sign extend bit 31 (31-bit shift)
+    SHIFTL  R4, 12
+    SHIFTL  R4, 8               ; R4 = bit 31 << 20
+    LOAD16  R7, 0x00FF
+    SHIFTL  R7, 12              ; R7 = 0x000FF000
+    LD      R9, R11
+    AND     R9, R7
+    OR      R4, R9
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 5               ; >> 20
     AND     R7, 1
     SHIFTL  R7, 11
     OR      R4, R7
-    SHIFTR  R7, R11, 21
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 6               ; >> 21
     LOAD16  R14, 0x03FF
     AND     R7, R14
     SHIFTL  R7, 1
     OR      R4, R7              ; R4 = J-Immediate jump offset
+
     LOAD16  R7, 0x09            ; JAL uop
-    SHIFTL  R7, 20
-    SHIFTL  R8, R13, 8
+    SHIFTL  R7, 12
+    SHIFTL  R7, 8               ; uop << 20
+    LD      R8, R13             ; Rd
+    SHIFTL  R8, 8               ; Rd << 8
     OR      R7, R8
-    OR      R7, 1
-    FIFO.W  R7, 1              ; Control Word
-    FIFO.W  R10, 1             ; Link PC
-    FIFO.W  R4, 1              ; Jump Offset
-    FIFO.W  R10, 1             ; Base PC
+    OR      R7, 1               ; Valid bit
+    FIFO.W  R7, R2              ; Control Word
+    FIFO.W  R10, R2             ; Link PC
+    FIFO.W  R4, R2              ; Jump Offset
+    FIFO.W  R10, R2             ; Base PC
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
 _emit_jalr:
     LOAD16  R7, 0x0A            ; JALR uop
-    SHIFTL  R7, 20
-    SHIFTL  R8, R13, 8
+    SHIFTL  R7, 12
+    SHIFTL  R7, 8               ; uop << 20
+    LD      R8, R13             ; Rd
+    SHIFTL  R8, 8               ; Rd << 8
     OR      R7, R8
     OR      R7, 1
-    FIFO.W  R7, 1              ; Control Word
-    FIFO.W  R5, 1              ; Base Register (Rs1)
-    FIFO.W  R9, 1              ; I-Immediate Offset
-    FIFO.W  R10, 1             ; Link PC
+    FIFO.W  R7, R2              ; Control Word
+    FIFO.W  R5, R2              ; Base Register (Rs1)
+    FIFO.W  R9, R2              ; I-Immediate Offset
+    FIFO.W  R10, R2             ; Link PC
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
