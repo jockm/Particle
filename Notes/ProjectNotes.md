@@ -9,6 +9,7 @@
     - Make sure spec is correct
 
 - Particle
+    - > 3 stage pipeline?
     - Fix error in monitor
     - Monitor needs way to load files
     - Simulator needs way to load files
