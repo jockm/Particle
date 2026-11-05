@@ -7,6 +7,7 @@ DART         ?= dart
 PYTHON       ?= python3
 
 PASM         := $(PYTHON) tools/pasm.py
+PASM_LINT    := $(PYTHON) tools/pasm_lint.py
 PSIM         := $(PYTHON) tools/psim.py
 ACT16C       := $(PYTHON) tools/act16c.py
 
@@ -27,7 +28,7 @@ APP_ACT_ASMS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.asm,$(APP_ACT_SRCS))
 APP_ACT_BINS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
 .PHONY: all setup test test-all test-particle test-parcore test-sim \
-        build generate generate-particle generate-parcore \
+        lint lint-asm build generate generate-particle generate-parcore \
         firmware apps clean help
 
 # ------------------------------------------------------------------------------
@@ -40,6 +41,7 @@ help:
 	@echo "Particle & Parcore Build Automation"
 	@echo "==================================="
 	@echo "  make setup            - Fetch Dart dependencies for rohd and parcore"
+	@echo "  make lint-asm         - Statically lint all assembly files with pasm_lint.py"
 	@echo "  make build            - Build firmware, apps, and generate all HDL"
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
@@ -55,6 +57,18 @@ setup:
 	@cd $(ROHD_DIR) && $(DART) pub get
 	@echo "==> Fetching dependencies for Parcore ROHD..."
 	@cd $(PARCORE_DIR) && $(DART) pub get
+
+# ------------------------------------------------------------------------------
+# Linting Targets
+# ------------------------------------------------------------------------------
+
+lint: lint-asm
+
+lint-asm:
+	@echo "==> Linting Parcore firmware sources..."
+	@for f in $(FIRMWARE_SRCS); do $(PASM_LINT) "$$f" || exit 1; done
+	@echo "==> Linting ASM application sources..."
+	@for f in $(APP_ASM_SRCS); do $(PASM_LINT) "$$f" || exit 1; done
 
 # ------------------------------------------------------------------------------
 # Generation Targets (SystemVerilog)
@@ -101,13 +115,15 @@ firmware: $(FIRMWARE_BINS)
 # Preserves nested firmware subdirectories (e.g. firmware/parcore/riscv/foo.asm -> build/parcore/riscv/foo.bin)
 $(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
 	@mkdir -p $(dir $@)
-	@echo "==> Assembling Parcore stage kernel $< -> $@"
+	@echo "==> Linting and assembling Parcore stage kernel $< -> $@"
+	@$(PASM_LINT) "$<"
 	@$(PASM) "$<" -I lib -o "$@" --format bin
 
 apps: $(APP_ASM_BINS) $(APP_ACT_BINS)
 
 $(BUILD_DIR)/%.bin: apps/asm/%.asm | $(BUILD_DIR)
-	@echo "==> Assembling app $< -> $@"
+	@echo "==> Linting and assembling app $< -> $@"
+	@$(PASM_LINT) "$<"
 	@$(PASM) "$<" -I lib -o "$@" --format bin
 
 $(BUILD_DIR)/%.asm: apps/act16/%.act | $(BUILD_DIR)
@@ -115,7 +131,8 @@ $(BUILD_DIR)/%.asm: apps/act16/%.act | $(BUILD_DIR)
 	@$(ACT16C) "$<" -o "$@"
 
 $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.asm | $(BUILD_DIR)
-	@echo "==> Assembling compiled ACT16 app $< -> $@"
+	@echo "==> Linting and assembling compiled ACT16 app $< -> $@"
+	@$(PASM_LINT) "$<"
 	@$(PASM) "$<" -I lib -o "$@" --format bin
 
 $(BUILD_DIR):
