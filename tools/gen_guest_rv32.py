@@ -43,6 +43,25 @@ def lh(rd, rs1, imm): return encode_i(imm, rs1, 1, rd, 0x03)
 def lw(rd, rs1, imm): return encode_i(imm, rs1, 2, rd, 0x03)
 def lbu(rd, rs1, imm): return encode_i(imm, rs1, 4, rd, 0x03)
 def lhu(rd, rs1, imm): return encode_i(imm, rs1, 5, rd, 0x03)
+def slli(rd, rs1, shamt): return encode_i(shamt & 0x1F, rs1, 1, rd, 0x13)
+def slti(rd, rs1, imm): return encode_i(imm, rs1, 2, rd, 0x13)
+def sltiu(rd, rs1, imm): return encode_i(imm, rs1, 3, rd, 0x13)
+def xori(rd, rs1, imm): return encode_i(imm, rs1, 4, rd, 0x13)
+def srli(rd, rs1, shamt): return encode_i(shamt & 0x1F, rs1, 5, rd, 0x13)
+def srai(rd, rs1, shamt): return encode_i((shamt & 0x1F) | 0x400, rs1, 5, rd, 0x13)
+def ori(rd, rs1, imm): return encode_i(imm, rs1, 6, rd, 0x13)
+def andi(rd, rs1, imm): return encode_i(imm, rs1, 7, rd, 0x13)
+
+def add(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 0, rd, 0x33)
+def sub(rd, rs1, rs2): return encode_r(0x20, rs2, rs1, 0, rd, 0x33)
+def sll(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 1, rd, 0x33)
+def slt(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 2, rd, 0x33)
+def sltu(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 3, rd, 0x33)
+def xor_(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 4, rd, 0x33)
+def srl(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 5, rd, 0x33)
+def sra(rd, rs1, rs2): return encode_r(0x20, rs2, rs1, 5, rd, 0x33)
+def or_(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 6, rd, 0x33)
+def and_(rd, rs1, rs2): return encode_r(0x00, rs2, rs1, 7, rd, 0x33)
 def lui(rd, imm20): return encode_u(imm20, rd, 0x37)
 
 # Branches
@@ -156,6 +175,41 @@ instructions += [
     nop(),
     nop(),
     addi(28, 0, 0x8),           # x28 = 8 (JALR target reached)
+    nop(),
+    nop(),
+    nop()
+]
+
+
+# ==============================================================================
+# Section 3: ALU Immediate & Register-Register Operations
+# ==============================================================================
+instructions += [
+    # Setup operand registers
+    addi(1, 0, -16),            # x1 = 0xFFFFFFF0 (-16)
+    addi(2, 0, 4),              # x2 = 4
+
+    # Immediate tests
+    slli(3, 2, 3),              # x3  = 4 << 3 = 32 (0x20)
+    srli(4, 1, 2),              # x4  = 0xFFFFFFF0 >> 2 = 0x3FFFFFFC
+    srai(5, 1, 2),              # x5  = 0xFFFFFFF0 >>> 2 = 0xFFFFFFFC (-4)
+    slti(6, 1, 4),              # x6  = (-16 < 4) signed = 1
+    sltiu(7, 1, 4),             # x7  = (0xFFFFFFF0 < 4) unsigned = 0
+    xori(8, 1, 0x0FF),          # x8  = 0xFFFFFFF0 ^ 0x0FF = 0xFFFFFF0F
+    ori(9, 2, 0x0F0),           # x9  = 4 | 0x0F0 = 0x0F4
+    andi(10, 1, 0x0FF),         # x10 = 0xFFFFFFF0 & 0x0FF = 0x0F0
+
+    # Register-Register tests
+    sub(11, 2, 1),              # x11 = 4 - (-16) = 20 (0x14)
+    sll(12, 2, 2),              # x12 = 4 << 4 = 64 (0x40)
+    slt(13, 1, 2),              # x13 = (-16 < 4) signed = 1
+    sltu(14, 1, 2),             # x14 = (0xFFFFFFF0 < 4) unsigned = 0
+    xor_(15, 1, 2),             # x15 = 0xFFFFFFF0 ^ 4 = 0xFFFFFFF4
+    srl(16, 1, 2),              # x16 = 0xFFFFFFF0 >> 4 = 0x0FFFFFFF
+    sra(17, 1, 2),              # x17 = 0xFFFFFFF0 >>> 4 = 0xFFFFFFFF
+    or_(18, 1, 2),              # x18 = 0xFFFFFFF0 | 4 = 0xFFFFFFF4
+    and_(19, 1, 2),             # x19 = 0xFFFFFFF0 & 4 = 0x00000000
+
     nop(),
     nop(),
     nop()

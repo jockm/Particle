@@ -348,6 +348,19 @@ _emit_op_imm:
     LD      R4, R11
     SHIFTR  R4, 12
     AND     R4, 7
+    ; Check if SRAI (funct3 == 5 and inst[30] == 1)
+    LD      R8, R4
+    SUB     R8, 5
+    FBRA.NZ R8, _pack_imm_ctrl
+    LD      R8, R11
+    SHIFTR  R8, 15
+    SHIFTR  R8, 15              ; R8 = inst[31:30]
+    AND     R8, 1               ; bit 30
+    FBRA.Z  R8, _pack_imm_ctrl
+    LOAD16  R8, 0x10            ; SRAI: uop = 0x15
+    OR      R4, R8
+
+_pack_imm_ctrl:
     ; Shift funct3 into bits [31:24]
     LD      R8, 12
     SHIFTL  R8, 1               ; R8 = 24
