@@ -109,10 +109,12 @@ class ParcoreTop extends Module {
     final memToWbPush = Logic(name: 'memToWbPush');
     final memToWbData = Logic(name: 'memToWbData', width: 32);
     final memToWbPop = Logic(name: 'memToWbPop');
+    final pipelineFlush = Logic(name: 'pipelineFlush');
 
     final interconnect = ParcoreInterconnect(
       clk: clk,
       reset: reset,
+      pipelineFlush: pipelineFlush,
       ifToIdPush: ifToIdPush,
       ifToIdData: ifToIdData,
       ifToIdPop: ifToIdPop,
@@ -134,6 +136,10 @@ class ParcoreTop extends Module {
         Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
     final c0MemBRData =
         Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
+    final c0TcmPortBRData =
+        Logic(name: 'c0_tcm_port_b_rdata', width: ParticleWidths.word);
+    final branchRedirectTarget =
+        Logic(name: 'branch_redirect_target', width: ParticleWidths.word);
     final c0MboxStrobe = Logic(name: 'c0_mbox_strobe');
     final c0MboxVector = Logic(name: 'c0_mbox_vector', width: 4);
 
@@ -166,7 +172,7 @@ class ParcoreTop extends Module {
       portBBEn: core0.memPortBBEn,
       portBWEn: core0.memPortBWEn,
       portBREn: core0.memPortBREn,
-      portBRData: c0MemBRData,
+      portBRData: c0TcmPortBRData,
       initialBytes: core0Binary,
     );
 
@@ -310,8 +316,20 @@ class ParcoreTop extends Module {
         core2.fifoPushEn & core2.fifoChanSelect.eq(Const(1, width: 2));
     exToMemData <= core2.fifoPushData;
 
+    pipelineFlush <= core2.mboxStrobeOut;
     c0MboxStrobe <= core2.mboxStrobeOut;
     c0MboxVector <= core2.mboxVectorOut;
+
+    // Latch 32-bit redirect target from Core 2 (rf.rDataA = fifoPushData) on MBOX strobe
+    Sequential(clk, reset: reset, [
+      If(core2.mboxStrobeOut, then: [
+        branchRedirectTarget < core2.fifoPushData,
+      ]),
+    ]);
+
+    // Memory-mapped redirect target at 0x0000013C for Core 0 Trap 1 handler
+    final c0ReadRedirectMmio = core0.memPortBAddr.eq(Const(0x0000013C, width: 32));
+    c0MemBRData <= mux(c0ReadRedirectMmio, branchRedirectTarget, c0TcmPortBRData);
 
     branchRedirectStrobe <= core2.mboxStrobeOut;
     branchRedirectVector <= core2.mboxVectorOut;

@@ -10,6 +10,7 @@ import 'package:particle_rohd/fifo_subsystem.dart';
 class ParcoreInterconnect extends Module {
   Logic get clk => input('clk');
   Logic get reset => input('reset');
+  Logic get pipelineFlush => input('pipelineFlush');
 
   // Core 0 (IF) -> Core 1 (ID)
   Logic get ifToIdPush => input('ifToIdPush');
@@ -42,6 +43,7 @@ class ParcoreInterconnect extends Module {
   ParcoreInterconnect({
     required Logic clk,
     required Logic reset,
+    required Logic pipelineFlush,
     required Logic ifToIdPush,
     required Logic ifToIdData,
     required Logic ifToIdPop,
@@ -58,6 +60,7 @@ class ParcoreInterconnect extends Module {
   }) {
     addInput('clk', clk);
     addInput('reset', reset);
+    addInput('pipelineFlush', pipelineFlush);
 
     addInput('ifToIdPush', ifToIdPush);
     addInput('ifToIdData', ifToIdData, width: 32);
@@ -87,9 +90,10 @@ class ParcoreInterconnect extends Module {
   }
 
   void _build() {
+    final ifIdReset = reset | pipelineFlush;
     final fifo0to1 = ParticleFifoSubsystem(
       clk: clk,
-      reset: reset,
+      reset: ifIdReset,
       chanSelect: Const(0, width: 2),
       pushData: ifToIdData,
       pushEn: ifToIdPush,
@@ -102,7 +106,7 @@ class ParcoreInterconnect extends Module {
 
     final fifo1to2 = ParticleFifoSubsystem(
       clk: clk,
-      reset: reset,
+      reset: ifIdReset,
       chanSelect: Const(0, width: 2),
       pushData: idToExData,
       pushEn: idToExPush,

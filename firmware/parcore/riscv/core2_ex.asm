@@ -50,8 +50,8 @@ _not_branch_op:
 ; Branch & Jump Resolution Section
 ; ==============================================================================
 _eval_branch:
-    LD      R14, R13
-    ADD     R14, R12       ; Target = Base PC + Offset
+    ; uop = funct3 + 1: 1=BEQ, 2=BNE, 5=BLT, 6=BGE, 7=BLTU, 8=BGEU, 9=JAL, 10=JALR
+    ; R10 = Control Word, R11 = Rs1, R12 = Rs2, R13 = Target PC (or Base PC for JAL)
 
     ; 1: BEQ
     LD      R4, R3
@@ -62,11 +62,11 @@ _eval_branch:
 _do_beq:
     LD      R4, R11
     SUB     R4, R12
-    FBRA.Z  R4, _beq_taken
+    FBRA.NZ R4, ._beq_not_taken
+    LOAD16  R5, _b_taken
+    JMP     R5, R0
+._beq_not_taken:
     LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_beq_taken:
-    LOAD16  R14, _taken_branch
     JMP     R14, R0
 
 _chk_bne:
@@ -79,80 +79,89 @@ _chk_bne:
 _do_bne:
     LD      R4, R11
     SUB     R4, R12
-    FBRA.NZ R4, _bne_taken
+    FBRA.Z  R4, ._bne_not_taken
+    LOAD16  R5, _b_taken
+    JMP     R5, R0
+._bne_not_taken:
     LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_bne_taken:
-    LOAD16  R14, _taken_branch
     JMP     R14, R0
 
 _chk_blt:
-    ; 3: BLT (Signed)
+    ; 5: BLT (Signed)
+    LOAD16  R5, 5
     LD      R4, R3
-    SUB     R4, 3
+    SUB     R4, R5
     FBRA.Z  R4, _do_blt
     LOAD16  R14, _chk_bge
     JMP     R14, R0
 _do_blt:
     LD      R4, R11
     SSLT    R4, R12
-    FBRA.NZ R4, _blt_taken
+    FBRA.Z  R4, ._blt_not_taken
+    LOAD16  R5, _b_taken
+    JMP     R5, R0
+._blt_not_taken:
     LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_blt_taken:
-    LOAD16  R14, _taken_branch
     JMP     R14, R0
 
 _chk_bge:
-    ; 4: BGE (Signed)
+    ; 6: BGE (Signed)
+    LOAD16  R5, 6
     LD      R4, R3
-    SUB     R4, 4
+    SUB     R4, R5
     FBRA.Z  R4, _do_bge
     LOAD16  R14, _chk_bltu
     JMP     R14, R0
 _do_bge:
     LD      R4, R11
     SSLT    R4, R12
-    FBRA.Z  R4, _bge_taken
+    FBRA.NZ R4, ._bge_not_taken
+    LOAD16  R5, _b_taken
+    JMP     R5, R0
+._bge_not_taken:
     LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_bge_taken:
-    LOAD16  R14, _taken_branch
     JMP     R14, R0
 
 _chk_bltu:
-    ; 5: BLTU (Unsigned)
+    ; 7: BLTU (Unsigned)
+    LOAD16  R5, 7
     LD      R4, R3
-    SUB     R4, 5
+    SUB     R4, R5
     FBRA.Z  R4, _do_bltu
     LOAD16  R14, _chk_bgeu
     JMP     R14, R0
 _do_bltu:
     LD      R4, R11
     SLT     R4, R12
-    FBRA.NZ R4, _bltu_taken
+    FBRA.Z  R4, ._bltu_not_taken
+    LOAD16  R5, _b_taken
+    JMP     R5, R0
+._bltu_not_taken:
     LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_bltu_taken:
-    LOAD16  R14, _taken_branch
     JMP     R14, R0
 
 _chk_bgeu:
-    ; 6: BGEU (Unsigned)
+    ; 8: BGEU (Unsigned)
+    LOAD16  R5, 8
     LD      R4, R3
-    SUB     R4, 6
+    SUB     R4, R5
     FBRA.Z  R4, _do_bgeu
     LOAD16  R14, _chk_jal
     JMP     R14, R0
 _do_bgeu:
     LD      R4, R11
     SLT     R4, R12
-    FBRA.Z  R4, _bgeu_taken
+    FBRA.NZ R4, ._bgeu_not_taken
+    LOAD16  R5, _b_taken
+    JMP     R5, R0
+._bgeu_not_taken:
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0
-_bgeu_taken:
-    LOAD16  R14, _taken_branch
-    JMP     R14, R0
+
+_b_taken:
+    LOAD16  R5, _taken_branch
+    LD      R14, R13           ; Set Target PC in R14 after LOAD16 expands
+    JMP     R5, R0
 
 _chk_jal:
     ; 9: JAL
@@ -164,9 +173,10 @@ _chk_jal:
     JMP     R14, R0
 _do_jal:
     LD      R15, R13
-    ADD     R15, 4         ; Link address = PC + 4
-    LOAD16  R14, _taken_branch
-    JMP     R14, R0
+    ADD     R15, 4             ; Link address = PC + 4
+    LOAD16  R5, _taken_branch
+    LD      R14, R13           ; Set Target PC in R14 after LOAD16 expands
+    JMP     R5, R0
 
 _chk_jalr:
     ; 10: JALR
@@ -177,17 +187,17 @@ _chk_jalr:
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0
 _do_jalr:
-    LD      R14, R11
-    ADD     R14, R12       ; Target = Rs1 + Imm
-    LOAD16  R4, 0xFFFE
-    AND     R14, R4             ; Target & ~1
     LD      R15, R13
-    ADD     R15, 4         ; Link address = PC + 4
-    LOAD16  R14, _taken_branch
-    JMP     R14, R0
+    ADD     R15, 4             ; Link address = PC + 4
+    LOAD16  R4, 0xFFFE
+    LOAD16  R5, _taken_branch
+    LD      R14, R11
+    ADD     R14, R12           ; Target = Rs1 + Imm
+    AND     R14, R4            ; Target & ~1 (R14 set after all LOAD16s)
+    JMP     R5, R0
 
 _taken_branch:
-    ; Fire inter-core MBOX strobe (Vector 1) to Core 0 with redirect target
+    ; Fire inter-core MBOX strobe (Vector 1) to Core 0 with redirect target in R14
     MBOX    R14, 1
 
     ; Check if destination register Rd != 0 (e.g. for JAL/JALR link writeback)
@@ -202,7 +212,6 @@ _branch_has_rd:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
-; ==============================================================================
 ; ALU / Memory / Extension Dispatch Section
 ; ==============================================================================
 _dispatch_alu:

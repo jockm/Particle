@@ -44,8 +44,9 @@ _if_main_loop:
 ; Strobe from Core 2 lands at TRAP_TABLE_BASE + (1 * 64) = 0x00000140
 ; ==============================================================================
 .org 0x00000140
+.define REDIRECT_TARGET_ADDR 0x0000013C
+
 _branch_redirect_handler:
-    FAST_ENTER_TRAP
-    FIFO.R  R10, 0              ; Read new target PC from redirection mailbox
-    FAST_EXIT_TRAP
+    LOAD16  R14, REDIRECT_TARGET_ADDR
+    LD32    R10, (R14)          ; Set primary PC pointer to redirect target
     BBRA    _if_main_loop

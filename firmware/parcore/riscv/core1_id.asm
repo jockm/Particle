@@ -132,37 +132,68 @@ _decode_fields:
     SHIFTR  R8, 15
     SHIFTR  R8, 10              ; R8 = funct7
 
-    ; funct3 = inst[14:12] (extracted last so R14 is preserved)
-    LD      R14, R11
-    SHIFTR  R14, 12
-    AND     R14, 7              ; R14 = funct3
-
     ; --------------------------------------------------------------------------
     ; 4. Data Hazard Interlocking (Scoreboard Resolution)
     ; --------------------------------------------------------------------------
 _check_hazard:
     LOAD16  R6, SCOREBOARD_MASK
-    LD32    R9, (R6)            ; Load currently pending destination bitmask
+    LD32    R9, (R6)
 
-    ; Test Rs1 dependency: (scoreboard & (1 << Rs1))
+    ; --- Test Rs1 dependency ---
     LD      R6, 0
-    FBRA.Z  R15, _test_rs2
+    FBRA.NZ R15, ._check_rs1_ops
+    LOAD16  R14, ._check_rs2
+    JMP     R14, R0
+
+._check_rs1_ops:
+    ; Test JAL (0x6F): bits [3:2] == 3
+    LD      R4, R12
+    SHIFTR  R4, 2
+    AND     R4, 3
+    LD      R5, 3
+    SUB     R4, R5
+    FBRA.Z  R4, ._skip_rs1_eval
+
+    ; Test LUI/AUIPC: bits [4:2] == 5
+    LD      R4, R12
+    SHIFTR  R4, 2
+    AND     R4, 7
+    LD      R5, 5
+    SUB     R4, R5
+    FBRA.NZ R4, ._do_test_rs1
+
+._skip_rs1_eval:
+    LOAD16  R14, ._check_rs2
+    JMP     R14, R0
+
+._do_test_rs1:
+    ; Rs1 is valid: test (scoreboard & (1 << Rs1))
     LD      R6, 1
     SHIFTL  R6, R15
     AND     R6, R9
 
-_test_rs2:
-    ; Test Rs2 dependency: (scoreboard & (1 << Rs2))
+._check_rs2:
+    ; --- Test Rs2 dependency ---
     LD      R5, 0
     FBRA.Z  R7, _evaluate_stall
+
+    ; Only OP (0x33), STORE (0x23), BRANCH (0x63) use Rs2 (bit 2 is 0)
+    LD      R4, R12
+    AND     R4, 4
+    FBRA.NZ R4, _evaluate_stall
+
+    ; Rs2 valid: test (scoreboard & (1 << Rs2))
     LD      R5, 1
     SHIFTL  R5, R7
     AND     R5, R9
 
 _evaluate_stall:
-    OR      R6, R5              ; Hazard present if either register is reserved
-    FBRA.NZ R6, _do_stall_wait
+    OR      R6, R5
+    FBRA.NZ R6, ._stall_jump
     LOAD16  R14, _hazard_clear
+    JMP     R14, R0
+._stall_jump:
+    LOAD16  R14, _do_stall_wait
     JMP     R14, R0
 
 _do_stall_wait:
@@ -214,6 +245,11 @@ _read_rs2:
     ; --------------------------------------------------------------------------
     ; 6. Immediate Field Decoders & Format Steering
     ; --------------------------------------------------------------------------
+; Extract funct3 = inst[14:12] now that hazard checking is complete
+    LD      R14, R11
+    SHIFTR  R14, 12
+    AND     R14, 7              ; R14 = funct3
+
 _decode_immediates:
     ; Default I-Type sign extension: inst[31:20]
     LD      R9, R11
@@ -422,30 +458,57 @@ _emit_store:
     JMP     R14, R0
 
 _emit_branch:
-    ; B-Type immediate: {inst[31], inst[7], inst[30:25], inst[11:8], 0}
-    ASHIFTR R4, R11, 31
+    ; 1. B-Type immediate: {inst[31], inst[7], inst[30:25], inst[11:8], 0}
+    ; Sign-extend inst[31] shifted to bit 12
+    LD      R4, R11
+    ASHIFTR R4, 15
+    ASHIFTR R4, 15
+    ASHIFTR R4, 1
     SHIFTL  R4, 12
-    SHIFTR  R7, R11, 7
+
+    ; inst[7] to bit 11
+    LD      R7, R11
+    SHIFTR  R7, 7
     AND     R7, 1
     SHIFTL  R7, 11
     OR      R4, R7
-    SHIFTR  R7, R11, 25
+
+    ; inst[30:25] to bits [10:5]
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 10
     LOAD16  R14, 0x3F
     AND     R7, R14
     SHIFTL  R7, 5
     OR      R4, R7
-    SHIFTR  R7, R11, 8
+
+    ; inst[11:8] to bits [4:1]
+    LD      R7, R11
+    SHIFTR  R7, 8
     LD      R14, 0x0F
     AND     R7, R14
     SHIFTL  R7, 1
     OR      R4, R7              ; R4 = Sign-extended branch offset
-    ADD     R7, R14, 1          ; Branch uop
-    SHIFTL  R7, 20
-    OR      R7, 1
-    FIFO.W  R7, 1              ; Control Word
-    FIFO.W  R5, 1              ; Rs1 Value
-    FIFO.W  R6, 1              ; Rs2 Value
-    FIFO.W  R4, 1              ; Target Offset
+
+    ; 2. Target PC = Base PC (R10) + Offset (R4)
+    ADD     R4, R10
+
+    ; 3. Control Word: uop in [23:20], valid bit in [0]
+    ; uop = funct3 + 1 (1: BEQ, 2: BNE, 4: BLT, 5: BGE, 6: BLTU, 7: BGEU)
+    LD      R7, R11
+    SHIFTR  R7, 12
+    AND     R7, 7
+    ADD     R7, 1
+    LD      R8, 10
+    SHIFTL  R8, 1               ; R8 = 20
+    SHIFTL  R7, R8              ; R7 = uop << 20
+    OR      R7, 1               ; Valid bit
+
+    ; 4. Push 4-word token packet to Core 2 via Channel 1 (R2)
+    FIFO.W  R7, R2              ; Word 0: Control Word
+    FIFO.W  R5, R2              ; Word 1: Rs1 Value
+    FIFO.W  R6, R2              ; Word 2: Rs2 Value
+    FIFO.W  R4, R2              ; Word 3: Target PC
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
