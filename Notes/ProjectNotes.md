@@ -9,11 +9,16 @@
     - Make sure spec is correct
 
 - Particle
-    - More than 32 registers
+    - Fix error in monitor
+    - Monitor needs way to load files
+    - Simulator needs way to load files
+    - Build tool
+    - More than 32 registers?
     - 64 bit Particle
         - Configuration option?
     - Floating Point?
     - XTRA instruction/Coprocessor interface
+
 - Parcore
     - System Bringup
         - MR4/Particle/PicoRISCV
