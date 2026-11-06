@@ -253,7 +253,7 @@ instructions += [
     rem(29, 20, 21),            # x29 = 20 % 3 = 2
     remu(30, 20, 21),           # x30 = 20 % 3 = 2
 
-    # 5. Division / Remainder by zero
+        # 5. Division / Remainder by zero
     div(31, 20, 22),            # x31 = 20 / 0 = 0xFFFFFFFF (-1)
 
     nop(),
