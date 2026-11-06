@@ -234,21 +234,22 @@ void main() {
 
       int pushes = 0;
       int pops = 0;
+      int c3Pushes = 0;
       int idleCycles = 0;
 
       for (int cycle = 0; cycle < 30000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
-        if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
-          pops++;
+        if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
+        if (c3Push.value.isValid && c3Push.value.toInt() == 1) {
+          c3Pushes++;
           idleCycles = 0;
         } else {
           idleCycles++;
         }
 
-        // Total guest packet pops required for all 15 instructions is 82.
-        // Once pops >= 80, only a brief drain window (300 cycles) is needed.
-        if (pushes > 0 && pops >= 80 && idleCycles > 300) {
+        // 18 writeback packets * 2 words = 36 c3 pushes.
+        if (c3Pushes >= 36 && idleCycles > 50) {
           print("Signed division test drained at cycle $cycle (pops=$pops).");
           final c2Pc = signedTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = signedTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');
@@ -335,8 +336,10 @@ void main() {
       final core0 = mulTop.subModules.firstWhere((m) => m.name == 'core0_if');
       final core1 = mulTop.subModules.firstWhere((m) => m.name == 'core1_id');
 
+      final core3 = mulTop.subModules.firstWhere((m) => m.name == 'core3_mem');
       final c0FifoPush = core0.output('fifoPushEn');
       final c1FifoPop  = core1.output('fifoPopEn');
+      final c3FifoPush = core3.output('fifoPushEn');
 
       int pushes = 0;
       int pops = 0;
@@ -348,11 +351,13 @@ void main() {
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
           pops++;
           idleCycles = 0;
+        } else if (c3FifoPush.value.isValid && c3FifoPush.value.toInt() == 1) {
+          idleCycles = 0;
         } else {
           idleCycles++;
         }
 
-        if (pushes > 0 && pops >= 80 && idleCycles > 300) {
+        if (pushes > 0 && pops >= 38 && idleCycles > 350) {
           print("Multiply test drained at cycle $cycle (pops=$pops).");
           final c2Pc = mulTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = mulTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');

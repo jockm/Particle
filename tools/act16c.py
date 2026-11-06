@@ -21,22 +21,22 @@ TOKEN_TYPES = [
     ('HEX',       r'0x[0-9a-fA-F]+'),
     ('INT',       r'\d+'),
     ('STRING',    r'"(?:\\.|[^"\\])*"'),
-    ('KEYWORD',   r'\b(?:u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|struct)\b'),
+    ('KEYWORD',   r'\b(?:u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until)\b'),
     ('IDENT',     r'[a-zA-Z_]\w*'),
     ('OP_ARROW',  r'->'),
     ('OP_EQ',     r'=='),
     ('OP_NE',     r'!='),
     ('OP_LE',     r'<='),
     ('OP_GE',     r'>='),
+    ('COMPOUND_ASSIGN', r'\+=|-=|\*=|/=|&=|\|=|\^=|<<=|>>='),
     ('OP_SHL',    r'<<'),
     ('OP_SHR',    r'>>'),
     ('OP_AND',    r'&&'),
     ('OP_OR',     r'\|\|'),
     ('OP',        r'[+\-*/%&|^~<>=!]'),
-    ('PUNCT',     r'[:;,(){}\[\]]'),
+    ('PUNCT',     r'[:;,(){}\[\]@.]'),
     ('SPACE',     r'\s+'),
 ]
-
 TOKEN_REGEX = '|'.join(f'(?P<{name}>{pattern})' for name, pattern in TOKEN_TYPES)
 
 class Token:
@@ -255,6 +255,42 @@ def run_preprocessor(tokens, defines, current_file="<stdin>", func_macros=None):
 
 class ASTNode: pass
 
+class ArrayDeclNode(ASTNode):
+    def __init__(self, elem_type, name, dim, bound_addr=None):
+        self.elem_type = elem_type
+        self.name = name
+        self.dim = dim
+        self.bound_addr = bound_addr
+
+class ArrayAccessNode(ASTNode):
+    def __init__(self, base, index):
+        self.base = base
+        self.index = index
+
+class CompoundAssignNode(ASTNode):
+    def __init__(self, op, lhs, rhs):
+        self.op = op
+        self.lhs = lhs
+        self.rhs = rhs
+
+class YieldNode(ASTNode):
+    def __init__(self, task_ref, step_const):
+        self.task_ref = task_ref
+        self.step_const = step_const
+
+class WaitUntilNode(ASTNode):
+    def __init__(self, task_ref, step_const, cond):
+        self.task_ref = task_ref
+        self.step_const = step_const
+        self.cond = cond
+
+class FnTypeNode(ASTNode):
+    def __init__(self, name, param_types, ret_type):
+        self.name = name
+        self.param_types = param_types
+        self.ret_type = ret_type
+
+
 class ProgramNode(ASTNode):
     def __init__(self, decls):
         self.decls = decls
@@ -393,41 +429,86 @@ class Parser:
 
     def parse_type(self):
         t = self.peek()
-        if t.val == 'struct':
+        if t.val == 'type':
             self.consume()
             s_name = self.consume('IDENT').val
-            return f"struct {s_name}"
+            return s_name
         elif t.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void'):
+            return self.consume().val
+        elif t.type == 'IDENT':
             return self.consume().val
         raise SyntaxError(f"{t.fname}:{t.lineno}:{t.col}: Expected type specifier, got '{t.val}'")
 
     def parse_top_level(self):
-        if self.peek().val == 'struct' and self.tokens[self.pos+1].type == 'IDENT' and self.tokens[self.pos+2].val == '{':
-            self.consume('KEYWORD', 'struct')
-            s_name = self.consume('IDENT').val
-            self.consume('PUNCT', '{')
-            fields = []
-            while self.peek().val != '}' and self.peek().type != 'EOF':
-                f_type = self.parse_type()
-                f_ptr = False
-                if self.peek().val == '*':
-                    self.consume()
-                    f_ptr = True
-                f_name = self.consume('IDENT').val
-                self.consume('PUNCT', ';')
-                fields.append((f_type, f_ptr, f_name))
-            self.consume('PUNCT', '}')
-            self.consume('PUNCT', ';')
-            return StructDefNode(s_name, fields)
+        is_inline = False
+        if self.peek().val == 'inline':
+            self.consume()
+            is_inline = True
 
+        # type Name { ... }; or type Name = fn(...) -> RetType;
+        if self.peek().val == 'type':
+            self.consume('KEYWORD', 'type')
+            t_name = self.consume('IDENT').val
+            if self.peek().val == '=':
+                self.consume()
+                self.consume('KEYWORD', 'fn')
+                self.consume('PUNCT', '(')
+                fn_params = []
+                if self.peek().val != ')':
+                    while True:
+                        fn_params.append(self.parse_type())
+                        if self.peek().val == ',':
+                            self.consume()
+                        else:
+                            break
+                self.consume('PUNCT', ')')
+                ret_t = 'void'
+                if self.peek().val == '->':
+                    self.consume('OP_ARROW', '->')
+                    ret_t = self.parse_type()
+                self.consume('PUNCT', ';')
+                return FnTypeNode(t_name, fn_params, ret_t)
+            elif self.peek().val == '{':
+                self.consume('PUNCT', '{')
+                fields = []
+                while self.peek().val != '}' and self.peek().type != 'EOF':
+                    f_type = self.parse_type()
+                    f_ptr = False
+                    if self.peek().val == '*':
+                        self.consume()
+                        f_ptr = True
+                    f_name = self.consume('IDENT').val
+                    f_dim = None
+                    if self.peek().val == '[':
+                        self.consume('PUNCT', '[')
+                        f_dim = int(self.consume('INT').val, 0)
+                        self.consume('PUNCT', ']')
+                    self.consume('PUNCT', ';')
+                    fields.append((f_type, f_ptr, f_name, f_dim))
+                self.consume('PUNCT', '}')
+                self.consume('PUNCT', ';')
+                return StructDefNode(t_name, fields)
+
+        is_const = False
         if self.peek().val == 'const':
             self.consume()
+            is_const = True
+
         t_name = self.parse_type()
         is_ptr = False
         if self.peek().val == '*':
             self.consume()
             is_ptr = True
+
         name = self.consume('IDENT').val
+
+        # Oberon-style type-bound procedure: void Point.move(...)
+        bound_type = None
+        if self.peek().val == '.':
+            self.consume('PUNCT', '.')
+            method_name = self.consume('IDENT').val
+            bound_type = name
+            name = f"{bound_type}_{method_name}"
 
         if self.peek().val == '(':
             self.consume('PUNCT', '(')
@@ -452,6 +533,17 @@ class Parser:
             body = self.parse_block()
             return FuncDeclNode(t_name, is_ptr, name, params, body)
         else:
+            array_dim = None
+            bound_addr = None
+            if self.peek().val == '[':
+                self.consume('PUNCT', '[')
+                dim_tok = self.consume()
+                array_dim = int(dim_tok.val, 0)
+                self.consume('PUNCT', ']')
+            if self.peek().val == '@':
+                self.consume('PUNCT', '@')
+                addr_tok = self.consume()
+                bound_addr = int(addr_tok.val, 0)
             init_expr = None
             if self.match('='):
                 init_expr = self.parse_expr()
@@ -529,6 +621,30 @@ class Parser:
             self.consume('PUNCT', ';')
             return BreakNode()
 
+        if tok.val == 'yield':
+            self.consume()
+            self.consume('PUNCT', '(')
+            task_ref = self.parse_expr()
+            self.consume('PUNCT', ',')
+            step_tok = self.consume()
+            step_val = int(step_tok.val, 0)
+            self.consume('PUNCT', ')')
+            self.consume('PUNCT', ';')
+            return YieldNode(task_ref, step_val)
+
+        if tok.val == 'wait_until':
+            self.consume()
+            self.consume('PUNCT', '(')
+            task_ref = self.parse_expr()
+            self.consume('PUNCT', ',')
+            step_tok = self.consume()
+            step_val = int(step_tok.val, 0)
+            self.consume('PUNCT', ',')
+            cond = self.parse_expr()
+            self.consume('PUNCT', ')')
+            self.consume('PUNCT', ';')
+            return WaitUntilNode(task_ref, step_val, cond)
+
         if tok.val == 'return':
             self.consume()
             expr = None
@@ -537,18 +653,31 @@ class Parser:
             self.consume('PUNCT', ';')
             return ReturnNode(expr)
 
-        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32') or tok.val == 'struct':
+        # Local Variable / Array Declaration
+        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32') or tok.val in ('type',) or (tok.type == 'IDENT' and self.tokens[self.pos+1].type == 'IDENT'):
             t_name = self.parse_type()
             is_ptr = False
             if self.peek().val == '*':
                 self.consume()
                 is_ptr = True
             name = self.consume('IDENT').val
+            array_dim = None
+            bound_addr = None
+            if self.peek().val == '[':
+                self.consume('PUNCT', '[')
+                array_dim = int(self.consume().val, 0)
+                self.consume('PUNCT', ']')
+            if self.peek().val == '@':
+                self.consume('PUNCT', '@')
+                bound_addr = int(self.consume().val, 0)
             init_expr = None
             if self.match('='):
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
-            return VarDeclNode(t_name, is_ptr, name, init_expr)
+            node = VarDeclNode(t_name, is_ptr, name, init_expr)
+            node.array_dim = array_dim
+            node.bound_addr = bound_addr
+            return node
 
         expr = self.parse_expr()
         self.consume('PUNCT', ';')
@@ -559,10 +688,15 @@ class Parser:
 
     def parse_assignment(self):
         node = self.parse_logical_or()
-        if self.peek().val == '=':
+        tok = self.peek()
+        if tok.val == '=':
             self.consume()
             rhs = self.parse_assignment()
             return BinaryOpNode('=', node, rhs)
+        elif tok.type == 'COMPOUND_ASSIGN' or tok.val in ('+=', '-=', '*=', '/=', '&=', '|=', '^=', '<<=', '>>='):
+            op = self.consume().val
+            rhs = self.parse_assignment()
+            return CompoundAssignNode(op, node, rhs)
         return node
 
     def parse_logical_or(self):
@@ -620,12 +754,40 @@ class Parser:
             return UnaryOpNode(op, self.parse_unary())
         return self.parse_postfix()
 
+
+    def parse_array_access(self, base_node):
+        self.consume('PUNCT', '[')
+        idx = self.parse_expr()
+        self.consume('PUNCT', ']')
+        return ArrayAccessNode(base_node, idx)
+
     def parse_postfix(self):
         node = self.parse_primary()
-        while self.peek().val == '->':
-            self.consume()
-            member = self.consume('IDENT').val
-            node = MemberAccessNode(node, member)
+        while True:
+            if self.peek().val in ('.', '->'):
+                self.consume()
+                member = self.consume('IDENT').val
+                if self.peek().val == '(':
+                    self.consume('PUNCT', '(')
+                    args = [UnaryOpNode('&', node)]
+                    if self.peek().val != ')':
+                        while True:
+                            args.append(self.parse_expr())
+                            if self.peek().val == ',':
+                                self.consume()
+                            else:
+                                break
+                    self.consume('PUNCT', ')')
+                    node = CallNode(f"__METHOD__{member}", args)
+                else:
+                    node = MemberAccessNode(node, member)
+            elif self.peek().val == '[':
+                self.consume('PUNCT', '[')
+                idx = self.parse_expr()
+                self.consume('PUNCT', ']')
+                node = ArrayAccessNode(node, idx)
+            else:
+                break
         return node
 
     def parse_primary(self):
@@ -673,6 +835,7 @@ class CodeGen:
         self.globals = set()
         self.types = {}
         self.structs = {}
+        self.array_lens = {}
         self.stack_offset = 0
         self.current_func_name = ""
         self.strings = []
@@ -709,10 +872,14 @@ class CodeGen:
             expr = expr.expr
         if isinstance(expr, VarAccessNode):
             return self.types.get(expr.name, ('u32', False))
+        
+        elif isinstance(expr, MemberAccessNode) and expr.member == 'len':
+            return ('u32', False)
+
         elif isinstance(expr, MemberAccessNode):
             parent_type, _ = self._get_expr_type(expr.expr)
             s_name = parent_type.replace("struct ", "").strip()
-            _, m_type, m_ptr = self.structs.get(s_name, {}).get(expr.member, (0, 'u32', False))
+            _, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(expr.member, (0, 'u32', False, None))
             return (m_type, m_ptr)
         return ('u32', False)
 
@@ -727,9 +894,23 @@ class CodeGen:
             if isinstance(d, StructDefNode):
                 offset = 0
                 fields = {}
-                for f_type, f_ptr, f_name in d.fields:
-                    f_size = 4 if f_ptr or f_type in ('u32', 's32') else (2 if f_type in ('u16', 's16') else 1)
-                    fields[f_name] = (offset, f_type, f_ptr)
+                for field_tuple in d.fields:
+                    f_type = field_tuple[0]
+                    f_ptr = field_tuple[1]
+                    f_name = field_tuple[2]
+                    f_dim = field_tuple[3] if len(field_tuple) > 3 else None
+                    if f_ptr:
+                        elem_sz = 4
+                    elif f_type in ('u32', 's32'):
+                        elem_sz = 4
+                    elif f_type in ('u16', 's16'):
+                        elem_sz = 2
+                    elif f_type in self.structs:
+                        elem_sz = self.structs[f_type].get('__size__', 4)
+                    else:
+                        elem_sz = 1
+                    f_size = (elem_sz * f_dim) if f_dim is not None else elem_sz
+                    fields[f_name] = (offset, f_type, f_ptr, f_dim)
                     offset += f_size
                 fields['__size__'] = offset
                 self.structs[d.name] = fields
@@ -802,7 +983,7 @@ class CodeGen:
             self.emit("PUSH32  R14", "Preserve return address link")
             self.stack_offset = 4
 
-        for i, (p_type, p_ptr, p_name) in enumerate(func.params):
+        for i, (p_type, p_ptr, p_name, *_) in enumerate(func.params):
             self.types[p_name] = (p_type, p_ptr)
             if i < 4:
                 self.emit(f"PUSH32  R{i + 1}", f"Spill param '{p_name}'")
@@ -914,22 +1095,101 @@ class CodeGen:
 
         elif isinstance(stmt, VarDeclNode):
             self.types[stmt.name] = (stmt.type_name, stmt.is_ptr)
-            var_size = 4
-            if not stmt.is_ptr and stmt.type_name.startswith("struct "):
+            elem_size = 4
+            if stmt.type_name in ('u8', 's8'):
+                elem_size = 1
+            elif stmt.type_name in ('u16', 's16'):
+                elem_size = 2
+            elif not stmt.is_ptr and stmt.type_name.startswith("struct "):
                 s_name = stmt.type_name.split()[1]
-                var_size = self.structs.get(s_name, {}).get('__size__', 4)
+                elem_size = self.structs.get(s_name, {}).get('__size__', 4)
+
+            if getattr(stmt, 'array_dim', None):
+                self.array_lens[stmt.name] = stmt.array_dim
+                var_size = elem_size * stmt.array_dim
+            else:
+                var_size = elem_size
+
             if stmt.init_expr:
                 self.gen_expr(stmt.init_expr, target_reg=1)
                 self.emit("PUSH32  R1", f"Local '{stmt.name}' with initial value")
+                alloc_size = 4
             else:
                 words = (var_size + 3) // 4
                 for _ in range(words):
                     self.emit("PUSH32  R0", f"Local '{stmt.name}' zero initialized")
-            self.stack_offset += (var_size if var_size >= 4 else 4)
+                alloc_size = words * 4
+
+            self.stack_offset += alloc_size
             self.locals[stmt.name] = self.stack_offset
+
+        
+        elif isinstance(stmt, CompoundAssignNode):
+            # Compound assignment: lhs op= rhs
+            op_char = stmt.op[:-1] # Remove trailing '='
+            self.gen_expr(stmt.rhs, target_reg=2)
+            self.emit("PUSH32  R2", "Save compound RHS")
+            self.stack_offset += 4
+
+            # Evaluate LHS address
+            if isinstance(stmt.lhs, VarAccessNode):
+                name = stmt.lhs.name
+                t_name, is_ptr = self.types.get(name, ('u32', False))
+                if name in self.locals:
+                    offset = self.stack_offset - self.locals[name]
+                    self.emit_immediate(14, offset)
+                    self.emit("ADD     R14, R15")
+                elif name in self.globals:
+                    self.emit(f"LOAD32  R14, _{name}")
+                self._emit_load_typed(1, 14, t_name, is_ptr)
+                self.emit("POP32   R2", "Restore compound RHS")
+                self.stack_offset -= 4
+                self._emit_binary_calc(op_char, 1, 2)
+                self._emit_store_typed(14, 1, t_name, is_ptr)
+
+            elif isinstance(stmt.lhs, MemberAccessNode):
+                base_expr = stmt.lhs.expr
+                member = stmt.lhs.member
+                t_name, is_ptr = self._get_expr_type(base_expr)
+                s_name = t_name.replace("struct ", "").strip()
+                m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
+                self.gen_expr(base_expr, target_reg=14)
+                if m_offset > 0:
+                    self.emit_immediate(3, m_offset)
+                    self.emit("ADD     R14, R3")
+                self._emit_load_typed(1, 14, m_type, m_ptr)
+                self.emit("POP32   R2", "Restore compound RHS")
+                self.stack_offset -= 4
+                self._emit_binary_calc(op_char, 1, 2)
+                self._emit_store_typed(14, 1, m_type, m_ptr)
+            return
 
         elif isinstance(stmt, ExprStmtNode):
             self.gen_expr(stmt.expr, target_reg=1)
+
+        elif isinstance(stmt, YieldNode):
+            # yield(task, step): task.lc = step; return PK_YIELDED; case step:
+            self.gen_expr(stmt.task_ref, target_reg=14)
+            self.emit_immediate(1, stmt.step_const)
+            self.emit("LD16    (R14), R1", "Set continuation counter")
+            self.emit("LD      R1, 1", "PK_YIELDED status")
+            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
+            self.emit_label(f"._step_{stmt.step_const}")
+            return
+
+        elif isinstance(stmt, WaitUntilNode):
+            # wait_until(task, step, cond): case step: if (!cond) { task.lc = step; return PK_WAITING; }
+            self.emit_label(f"._step_{stmt.step_const}")
+            lbl_continue = self.new_label("wait_cont")
+            self.gen_expr(stmt.cond, target_reg=1)
+            self.emit(f"FBRA.P  R1, {lbl_continue}", "Condition satisfied, proceed")
+            self.gen_expr(stmt.task_ref, target_reg=14)
+            self.emit_immediate(1, stmt.step_const)
+            self.emit("LD16    (R14), R1", "Set continuation counter")
+            self.emit("LD      R1, 0", "PK_WAITING status")
+            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
+            self.emit_label(lbl_continue)
+            return
 
         elif isinstance(stmt, ReturnNode):
             if stmt.expr:
@@ -982,11 +1242,17 @@ class CodeGen:
             self.emit_immediate(target_reg, expr.val)
 
         elif isinstance(expr, MemberAccessNode):
+            if expr.member == 'len':
+                arr_name = expr.expr.name if hasattr(expr.expr, 'name') else ""
+                arr_len = self.array_lens.get(arr_name, 0)
+                self.emit_immediate(target_reg, arr_len)
+                return
+
             base_expr = expr.expr
             member = expr.member
             t_name, is_ptr = self._get_expr_type(base_expr)
             s_name = t_name.replace("struct ", "").strip()
-            m_offset, m_type, m_ptr = self.structs.get(s_name, {}).get(member, (0, 'u32', False))
+            m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
             self.gen_expr(base_expr, target_reg=14)
             if m_offset > 0:
                 self.emit_immediate(2, m_offset)
@@ -1036,6 +1302,47 @@ class CodeGen:
                 self.emit(f"LD      R{target_reg}, 1")
                 self.emit_label(lbl_done)
 
+        elif isinstance(expr, CompoundAssignNode):
+            # Compound assignment: lhs op= rhs
+            op_char = expr.op[:-1] # Strip trailing '='
+            self.gen_expr(expr.rhs, target_reg=2)
+            self.emit("PUSH32  R2", "Save compound RHS")
+            self.stack_offset += 4
+
+            if isinstance(expr.lhs, VarAccessNode):
+                name = expr.lhs.name
+                t_name, is_ptr = self.types.get(name, ('u32', False))
+                if name in self.locals:
+                    offset = self.stack_offset - self.locals[name]
+                    self.emit_immediate(14, offset)
+                    self.emit("ADD     R14, R15")
+                elif name in self.globals:
+                    self.emit(f"LOAD32  R14, _{name}")
+                self._emit_load_typed(1, 14, t_name, is_ptr)
+                self.emit("POP32   R2", "Restore compound RHS")
+                self.stack_offset -= 4
+                self._emit_binary_calc(op_char, 1, 2)
+                self._emit_store_typed(14, 1, t_name, is_ptr)
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
+            elif isinstance(expr.lhs, MemberAccessNode):
+                base_expr = expr.lhs.expr
+                member = expr.lhs.member
+                t_name, is_ptr = self._get_expr_type(base_expr)
+                s_name = t_name.replace("struct ", "").strip()
+                m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
+                self.gen_expr(base_expr, target_reg=14)
+                if m_offset > 0:
+                    self.emit_immediate(3, m_offset)
+                    self.emit("ADD     R14, R3")
+                self._emit_load_typed(1, 14, m_type, m_ptr)
+                self.emit("POP32   R2", "Restore compound RHS")
+                self.stack_offset -= 4
+                self._emit_binary_calc(op_char, 1, 2)
+                self._emit_store_typed(14, 1, m_type, m_ptr)
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
+
         elif isinstance(expr, BinaryOpNode):
             if expr.op == '=':
                 self.gen_expr(expr.right, target_reg=1)
@@ -1044,7 +1351,7 @@ class CodeGen:
                     member = expr.left.member
                     t_name, is_ptr = self._get_expr_type(base_expr)
                     s_name = t_name.replace("struct ", "").strip()
-                    m_offset, m_type, m_ptr = self.structs.get(s_name, {}).get(member, (0, 'u32', False))
+                    m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
                     self.gen_expr(base_expr, target_reg=14)
                     if m_offset > 0:
                         self.emit_immediate(2, m_offset)
@@ -1109,6 +1416,20 @@ class CodeGen:
             self.emit(f"LD      R{target_reg}, 0")
 
         elif isinstance(expr, CallNode):
+            if expr.name.startswith("__METHOD__"):
+                m_name = expr.name.replace("__METHOD__", "")
+                # Find receiver type to form _Type_method
+                rcv_node = expr.args[0].operand
+                t_name, _ = self._get_expr_type(rcv_node)
+                s_name = t_name.replace("struct ", "").strip()
+                target_func = f"{s_name}_{m_name}"
+                for i, arg in enumerate(expr.args[:4]):
+                    self.gen_expr(arg, target_reg=i + 1)
+                self.emit(f"RCALL   _{target_func}")
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
+                return
+
             if expr.name == 'readfifo':
                 chan = expr.args[0].val if isinstance(expr.args[0], IntLitNode) else 0
                 self.emit(f"FIFO.R  R{target_reg}, {chan}")
@@ -1131,6 +1452,26 @@ class CodeGen:
             self.emit(f"RCALL   _{expr.name}")
             if target_reg != 1:
                 self.emit(f"LD      R{target_reg}, R1")
+
+    def _emit_binary_calc(self, op, r_dst, r_src):
+        if op == '+':
+            self.emit(f"ADD     R{r_dst}, R{r_src}")
+        elif op == '-':
+            self.emit(f"SUB     R{r_dst}, R{r_src}")
+        elif op == '*':
+            self.emit(f"MULL    R{r_dst}, R{r_src}")
+        elif op == '/':
+            self.emit(f"DIV     R{r_dst}, R{r_src}")
+        elif op == '&':
+            self.emit(f"AND     R{r_dst}, R{r_src}")
+        elif op == '|':
+            self.emit(f"OR      R{r_dst}, R{r_src}")
+        elif op == '^':
+            self.emit(f"XOR     R{r_dst}, R{r_src}")
+        elif op == '<<':
+            self.emit(f"SHIFTL  R{r_dst}, R{r_src}")
+        elif op == '>>':
+            self.emit(f"SHIFTR  R{r_dst}, R{r_src}")
 
     def _emit_load_typed(self, dst, addr_reg, t_name, is_ptr):
         if is_ptr or t_name in ('u32', 's32'):
@@ -1155,33 +1496,26 @@ class CodeGen:
             self.emit(f"LD16    (R{addr_reg}), R{src}")
 
     def _gen_relational(self, op, target_reg):
-        lbl_true = self.new_label("rel_true")
-        lbl_done = self.new_label("rel_done")
+        # Native single-cycle Particle comparisons (SEQ, SNE, SLE, SSLE)
+        # R1 is LHS, R2 is RHS
         if op == '==':
-            self.emit("SUB     R1, R2")
-            self.emit(f"FBRA.Z  R1, {lbl_true}")
+            self.emit("SEQ     R1, R2", "Single-cycle equal")
         elif op == '!=':
-            self.emit("SUB     R1, R2")
-            self.emit(f"FBRA.Z  R1, {lbl_done}")
-            self.emit(f"FBRA    {lbl_true}")
-        elif op == '<':
-            self.emit("SLT     R1, R2")
-            self.emit(f"FBRA.P  R1, {lbl_true}")
-        elif op == '>=':
-            self.emit("SLT     R1, R2")
-            self.emit(f"FBRA.Z  R1, {lbl_true}")
+            self.emit("SNE     R1, R2", "Single-cycle not-equal")
         elif op == '<=':
-            self.emit("SLT     R2, R1")
-            self.emit(f"FBRA.Z  R2, {lbl_true}")
+            self.emit("SLE     R1, R2", "Single-cycle unsigned less-equal")
+        elif op == '>=':
+            self.emit("SLE     R2, R1", "Single-cycle unsigned greater-equal (swapped)")
+            self.emit("LD      R1, R2")
+        elif op == '<':
+            self.emit("SLE     R2, R1", "Single-cycle unsigned less (< <=> !(R2 <= R1))")
+            self.emit("XOR     R2, 1")
+            self.emit("LD      R1, R2")
         elif op == '>':
-            self.emit("SLT     R2, R1")
-            self.emit(f"FBRA.P  R2, {lbl_true}")
-
-        self.emit(f"LD      R{target_reg}, 0")
-        self.emit(f"FBRA    {lbl_done}")
-        self.emit_label(lbl_true)
-        self.emit(f"LD      R{target_reg}, 1")
-        self.emit_label(lbl_done)
+            self.emit("SLE     R1, R2", "Single-cycle unsigned greater (> <=> !(R1 <= R2))")
+            self.emit("XOR     R1, 1")
+        if target_reg != 1:
+            self.emit(f"LD      R{target_reg}, R1")
 
 def main():
     parser = argparse.ArgumentParser(description="ACT16 Systems Language Compiler for Particle")

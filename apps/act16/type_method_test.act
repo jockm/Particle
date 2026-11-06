@@ -1,0 +1,54 @@
+// apps/act16/type_method_test.act
+#include "lib/protokernel.h"
+
+type Point {
+    u16 x;
+    u16 y;
+};
+
+type Window {
+    Point origin;
+    u16 width;
+    u16 height;
+    u8 title[16];
+};
+
+void Point.move(Point* self, u16 dx, u16 dy) {
+    self->x += dx;
+    self->y += dy;
+}
+
+void main() {
+    Point pt;
+    pt.x = 10;
+    pt.y = 20;
+
+    // Test Oberon-style method desugaring & compound assignments
+    pt.move(5, 10);
+
+    // Test native single-cycle comparisons
+    u16 pass = 0;
+    if (pt.x == 15) {
+        if (pt.y == 30) {
+            pass = 1;
+        }
+    }
+
+    if (pass == 1) {
+        // Test array .len evaluation with while loop
+        u32 buf[8];
+        u16 sum = 0;
+        u16 i = 0;
+        while (i < buf.len) {
+            sum += 1;
+            i += 1;
+        }
+
+        if (sum == 8) {
+            trap(14);
+            return;
+        }
+    }
+
+    trap(15);
+}
