@@ -212,4 +212,4 @@ Displacements shift left by 1 (halfword instruction units).
 - `0xE2`: `FIFO.STAT Rr, Chan` — Read channel FIFO status word (`bit[0]` = empty, `bit[1]` = full)
 - `0xE3`: `FIFO.TRYR Rr, Chan` — Non-blocking read (returns 0 if channel empty)
 - `0xE4`: `FIFO.TRYW Rr, Chan` — Non-blocking write to channel
-- `0xE5`: `MBOX Rr, Vector` — Trigger cross-core hardware strobe interrupt to target core $Rr$ with 4-bit vector
+grep -n -C 15 "00000790" build/parcore/riscv/core2_ex.lst
