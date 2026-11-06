@@ -249,7 +249,8 @@ void main() {
         }
 
         // 18 writeback packets * 2 words = 36 c3 pushes.
-        if (c3Pushes >= 36 && idleCycles > 50) {
+        // Wait for all 36 writeback pushes from Core 3 plus settling cycles for Core 1 register writeback.
+        if (c3Pushes >= 36 && idleCycles > 300) {
           print("Signed division test drained at cycle $cycle (pops=$pops).");
           final c2Pc = signedTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = signedTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');

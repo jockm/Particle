@@ -548,7 +548,10 @@ class Parser:
             if self.match('='):
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
-            return VarDeclNode(t_name, is_ptr, name, init_expr)
+            node = VarDeclNode(t_name, is_ptr, name, init_expr)
+            node.array_dim = array_dim
+            node.bound_addr = bound_addr
+            return node
 
     def parse_block(self):
         self.consume('PUNCT', '{')
@@ -836,6 +839,7 @@ class CodeGen:
         self.types = {}
         self.structs = {}
         self.array_lens = {}
+        self.bound_addrs = {}
         self.stack_offset = 0
         self.current_func_name = ""
         self.strings = []
@@ -940,13 +944,27 @@ class CodeGen:
             self.asm.append("; Global Variable Allocation")
             self.asm.append("; ------------------------------------------------------------------------------")
             for d in data_decls:
-                self.globals.add(d.name)
                 self.types[d.name] = (d.type_name, d.is_ptr)
-                self.emit_label(f"_{d.name}")
-                if d.init_expr and isinstance(d.init_expr, IntLitNode):
-                    self.emit(f".word   {d.init_expr.val}")
+                if getattr(d, 'bound_addr', None) is not None:
+                    self.bound_addrs[d.name] = d.bound_addr
+                    if getattr(d, 'array_dim', None):
+                        self.array_lens[d.name] = d.array_dim
+                    continue
+
+                self.globals.add(d.name)
+                if getattr(d, 'array_dim', None):
+                    self.array_lens[d.name] = d.array_dim
+                    self.emit_label(f"_{d.name}")
+                    elem_sz = 1 if d.type_name in ('u8', 's8') else (2 if d.type_name in ('u16', 's16') else 4)
+                    total_words = (elem_sz * d.array_dim + 3) // 4
+                    for _ in range(total_words):
+                        self.emit(".word   0")
                 else:
-                    self.emit(".word   0")
+                    self.emit_label(f"_{d.name}")
+                    if d.init_expr and isinstance(d.init_expr, IntLitNode):
+                        self.emit(f".word   {d.init_expr.val}")
+                    else:
+                        self.emit(".word   0")
             self.asm.append("")
 
         for f in func_decls:
@@ -1096,19 +1114,23 @@ class CodeGen:
         elif isinstance(stmt, VarDeclNode):
             self.types[stmt.name] = (stmt.type_name, stmt.is_ptr)
             elem_size = 4
+            clean_type = stmt.type_name.replace("struct ", "").replace("type ", "").strip()
             if stmt.type_name in ('u8', 's8'):
                 elem_size = 1
             elif stmt.type_name in ('u16', 's16'):
                 elem_size = 2
-            elif not stmt.is_ptr and stmt.type_name.startswith("struct "):
-                s_name = stmt.type_name.split()[1]
-                elem_size = self.structs.get(s_name, {}).get('__size__', 4)
+            elif not stmt.is_ptr and clean_type in self.structs:
+                elem_size = self.structs[clean_type].get('__size__', 4)
 
             if getattr(stmt, 'array_dim', None):
                 self.array_lens[stmt.name] = stmt.array_dim
                 var_size = elem_size * stmt.array_dim
             else:
                 var_size = elem_size
+
+            if getattr(stmt, 'bound_addr', None) is not None:
+                self.bound_addrs[stmt.name] = stmt.bound_addr
+                return
 
             if stmt.init_expr:
                 self.gen_expr(stmt.init_expr, target_reg=1)
@@ -1147,6 +1169,14 @@ class CodeGen:
                 self._emit_binary_calc(op_char, 1, 2)
                 self._emit_store_typed(14, 1, t_name, is_ptr)
 
+            elif isinstance(stmt.lhs, ArrayAccessNode):
+                t_name, _ = self._emit_array_elem_addr(stmt.lhs, addr_reg=14, idx_scratch=3)
+                self._emit_load_typed(1, 14, t_name, False)
+                self.emit("POP32   R2", "Restore compound RHS")
+                self.stack_offset -= 4
+                self._emit_binary_calc(op_char, 1, 2)
+                self._emit_store_typed(14, 1, t_name, False)
+                return
             elif isinstance(stmt.lhs, MemberAccessNode):
                 base_expr = stmt.lhs.expr
                 member = stmt.lhs.member
@@ -1237,6 +1267,59 @@ class CodeGen:
             self.emit_label(lbl_end)
             self.break_stack.pop()
 
+    def _get_elem_size(self, t_name, is_ptr):
+        if is_ptr:
+            return 4
+        clean = t_name.replace("struct ", "").replace("type ", "").strip()
+        if clean in ('u8', 's8'):
+            return 1
+        elif clean in ('u16', 's16'):
+            return 2
+        elif clean in self.structs:
+            return self.structs[clean].get('__size__', 4)
+        return 4
+
+    def _emit_array_elem_addr(self, node, addr_reg=14, idx_scratch=2):
+        # 1. Compute Base Address into addr_reg
+        base_name = getattr(node.base, 'name', None)
+        if base_name and base_name in self.bound_addrs:
+            self.emit_immediate(addr_reg, self.bound_addrs[base_name])
+        elif base_name and base_name in self.locals:
+            offset = self.stack_offset - self.locals[base_name]
+            self.emit_immediate(addr_reg, offset)
+            self.emit(f"ADD     R{addr_reg}, R15", f"Base of local array '{base_name}'")
+        elif base_name and base_name in self.globals:
+            self.emit(f"LOAD32  R{addr_reg}, _{base_name}", f"Base of global array '{base_name}'")
+        else:
+            self.gen_expr(node.base, target_reg=addr_reg)
+
+        # 2. Evaluate index into idx_scratch
+        self.gen_expr(node.index, target_reg=idx_scratch)
+
+        # 3. Runtime Bounds Check with Trap 15 if dimension is known
+        if base_name and base_name in self.array_lens:
+            arr_dim = self.array_lens[base_name]
+            lbl_in_bounds = self.new_label("in_bounds")
+            self.emit_immediate(3, arr_dim)
+            self.emit(f"SLT     R{idx_scratch}, R3", f"Check {base_name}[i] < {arr_dim}")
+            self.emit(f"FBRA.NZ R{idx_scratch}, {lbl_in_bounds}", "Branch if within array bounds")
+            self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
+            self.emit_label(lbl_in_bounds)
+            # Re-evaluate or preserve index
+            self.gen_expr(node.index, target_reg=idx_scratch)
+
+        # 4. Scale index by element size
+        base_type, _ = self._get_expr_type(node.base)
+        elem_sz = self._get_elem_size(base_type, False)
+        if elem_sz == 2:
+            self.emit(f"SHIFTL  R{idx_scratch}, 1", "Scale index by 2")
+        elif elem_sz == 4:
+            self.emit(f"SHIFTL  R{idx_scratch}, 2", "Scale index by 4")
+
+        # 5. Add offset to base address
+        self.emit(f"ADD     R{addr_reg}, R{idx_scratch}", "Indexed element address")
+        return base_type, elem_sz
+
     def gen_expr(self, expr, target_reg=1):
         if isinstance(expr, IntLitNode):
             self.emit_immediate(target_reg, expr.val)
@@ -1259,17 +1342,33 @@ class CodeGen:
                 self.emit("ADD     R14, R2", f"Offset {m_offset} for field '{member}'")
             self._emit_load_typed(target_reg, 14, m_type, m_ptr)
 
+        elif isinstance(expr, ArrayAccessNode):
+            t_name, elem_sz = self._emit_array_elem_addr(expr, addr_reg=14, idx_scratch=2)
+            self._emit_load_typed(target_reg, 14, t_name, False)
+
         elif isinstance(expr, VarAccessNode):
             name = expr.name
             t_name, is_ptr = self.types.get(name, ('u32', False))
-            if name in self.locals:
+            if name in self.bound_addrs:
+                self.emit_immediate(14, self.bound_addrs[name])
+                if name in self.array_lens:
+                    self.emit(f"LD      R{target_reg}, R14", f"Address of bound array '{name}'")
+                else:
+                    self._emit_load_typed(target_reg, 14, t_name, is_ptr)
+            elif name in self.locals:
                 offset = self.stack_offset - self.locals[name]
                 self.emit_immediate(14, offset)
                 self.emit("ADD     R14, R15", "Compute local address")
-                self._emit_load_typed(target_reg, 14, t_name, is_ptr)
+                if name in self.array_lens:
+                    self.emit(f"LD      R{target_reg}, R14", f"Address of local array '{name}'")
+                else:
+                    self._emit_load_typed(target_reg, 14, t_name, is_ptr)
             elif name in self.globals:
                 self.emit(f"LOAD32  R14, _{name}", f"Address of global '{name}'")
-                self._emit_load_typed(target_reg, 14, t_name, is_ptr)
+                if name in self.array_lens:
+                    self.emit(f"LD      R{target_reg}, R14", f"Address of global array '{name}'")
+                else:
+                    self._emit_load_typed(target_reg, 14, t_name, is_ptr)
 
         elif isinstance(expr, UnaryOpNode):
             if expr.op == '*':
@@ -1283,6 +1382,8 @@ class CodeGen:
                         offset = self.stack_offset - self.locals[name]
                         self.emit_immediate(target_reg, offset)
                         self.emit(f"ADD     R{target_reg}, R15", f"Address of local '{name}'")
+                    elif name in self.bound_addrs:
+                        self.emit_immediate(target_reg, self.bound_addrs[name])
                     elif name in self.globals:
                         self.emit(f"LOAD32  R{target_reg}, _{name}")
             elif expr.op == '-':
@@ -1363,10 +1464,21 @@ class CodeGen:
                     t_name, is_ptr = self._get_expr_type(expr.left.operand)
                     self._emit_store_typed(14, 1, t_name, False)
                     return
+                elif isinstance(expr.left, ArrayAccessNode):
+                    self.emit("PUSH32  R1", "Preserve RHS")
+                    self.stack_offset += 4
+                    t_name, _ = self._emit_array_elem_addr(expr.left, addr_reg=14, idx_scratch=2)
+                    self.emit("POP32   R1", "Restore RHS")
+                    self.stack_offset -= 4
+                    self._emit_store_typed(14, 1, t_name, False)
+                    return
                 elif isinstance(expr.left, VarAccessNode):
                     name = expr.left.name
                     t_name, is_ptr = self.types.get(name, ('u32', False))
-                    if name in self.locals:
+                    if name in self.bound_addrs:
+                        self.emit_immediate(14, self.bound_addrs[name])
+                        self._emit_store_typed(14, 1, t_name, is_ptr)
+                    elif name in self.locals:
                         offset = self.stack_offset - self.locals[name]
                         self.emit_immediate(14, offset)
                         self.emit("ADD     R14, R15")
@@ -1403,6 +1515,16 @@ class CodeGen:
                 self.emit(f"SHIFTL  R{target_reg}, R2")
             elif expr.op == '>>':
                 self.emit(f"SHIFTR  R{target_reg}, R2")
+            elif expr.op == '&&':
+                self.emit(f"AND     R1, R2")
+                self.emit(f"NEZ     R1, R1", "Logical AND boolean normalization")
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
+            elif expr.op == '||':
+                self.emit(f"OR      R1, R2")
+                self.emit(f"NEZ     R1, R1", "Logical OR boolean normalization")
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
             elif expr.op in ('==', '!=', '<', '<=', '>', '>='):
                 self._gen_relational(expr.op, target_reg)
 
