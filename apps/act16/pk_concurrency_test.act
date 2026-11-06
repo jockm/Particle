@@ -1,0 +1,76 @@
+#include "lib/protokernel.h"
+
+// Verification variables
+u32 g_producer_count = 0;
+u32 g_consumer_count = 0;
+u32 g_shared_mailbox = 0;
+u32 g_mailbox_ready  = 0;
+u32 g_checksum       = 0;
+u32 g_test_passed    = 0;
+
+u16 task_producer(struct pt* p) {
+    PK_BEGIN(p);
+
+    // Iteration 1
+    g_shared_mailbox = 16;
+    g_mailbox_ready = 1;
+    g_producer_count = g_producer_count + 1;
+    PK_YIELD(p, 1);
+
+    // Iteration 2
+    g_shared_mailbox = 32;
+    g_mailbox_ready = 1;
+    g_producer_count = g_producer_count + 1;
+    PK_YIELD(p, 2);
+
+    // Iteration 3
+    g_shared_mailbox = 48;
+    g_mailbox_ready = 1;
+    g_producer_count = g_producer_count + 1;
+    PK_YIELD(p, 3);
+
+    // Iteration 4
+    g_shared_mailbox = 64;
+    g_mailbox_ready = 1;
+    g_producer_count = g_producer_count + 1;
+    PK_YIELD(p, 4);
+
+    PK_END(p);
+}
+
+u16 task_consumer(struct pt* p) {
+    PK_BEGIN(p);
+
+    while (g_consumer_count < 4) {
+        PK_WAIT_UNTIL(p, 1, g_mailbox_ready == 1);
+
+        g_checksum = g_checksum + g_shared_mailbox;
+        g_mailbox_ready = 0;
+        g_consumer_count = g_consumer_count + 1;
+
+        PK_YIELD(p, 2);
+    }
+
+    PK_END(p);
+}
+
+void main() {
+    struct pt pt_prod;
+    struct pt pt_cons;
+
+    PK_INIT(&pt_prod);
+    PK_INIT(&pt_cons);
+
+    while (g_consumer_count < 4) {
+        task_producer(&pt_prod);
+        task_consumer(&pt_cons);
+    }
+
+    if (g_checksum == 160) {
+        if (g_producer_count == 4) {
+            g_test_passed = 0xCAFE;
+        }
+    }
+
+    trap(14);
+}
