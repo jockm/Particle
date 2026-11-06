@@ -625,9 +625,9 @@ _div_check_signs:
     SHIFTR  R4, 15
     SHIFTR  R4, 1
     FBRA.Z  R4, _div_abs_b
-    LOAD16  R4, 0
-    SUB     R4, R7
-    LD      R7, R4
+    NOT     R7
+    LD      R5, 1
+    ADD     R7, R5
 
 _div_abs_b:
     ; R8 = abs(R12)
@@ -637,9 +637,9 @@ _div_abs_b:
     SHIFTR  R4, 15
     SHIFTR  R4, 1
     FBRA.Z  R4, _div_run_calc
-    LOAD16  R4, 0
-    SUB     R4, R8
-    LD      R8, R4
+    NOT     R8
+    LD      R5, 1
+    ADD     R8, R5
 
 _div_run_calc:
     LOAD16  R3, 0               ; mode 0 = DIV
@@ -649,9 +649,9 @@ _div_run_calc:
 _div_finish:
     LD      R15, R9             ; Quotient
     FBRA.Z  R6, _div_exit
-    LOAD16  R4, 0
-    SUB     R4, R15
-    LD      R15, R4
+    NOT     R15
+    LD      R5, 1
+    ADD     R15, R5
 _div_exit:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
@@ -705,9 +705,9 @@ _rem_check_signs:
     ; R7 = abs(R11)
     LD      R7, R11
     FBRA.Z  R6, _rem_abs_b
-    LOAD16  R4, 0
-    SUB     R4, R7
-    LD      R7, R4
+    NOT     R7
+    LD      R5, 1
+    ADD     R7, R5
 
 _rem_abs_b:
     ; R8 = abs(R12)
@@ -717,9 +717,9 @@ _rem_abs_b:
     SHIFTR  R4, 15
     SHIFTR  R4, 1
     FBRA.Z  R4, _rem_run_calc
-    LOAD16  R4, 0
-    SUB     R4, R8
-    LD      R8, R4
+    NOT     R8
+    LD      R5, 1
+    ADD     R8, R5
 
 _rem_run_calc:
     LOAD16  R3, 2               ; mode 2 = REM
@@ -729,9 +729,9 @@ _rem_run_calc:
 _rem_finish:
     LD      R15, R11            ; Remainder in R11
     FBRA.Z  R6, _rem_exit
-    LOAD16  R4, 0
-    SUB     R4, R15
-    LD      R15, R4
+    NOT     R15
+    LD      R5, 1
+    ADD     R15, R5
 _rem_exit:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
@@ -787,19 +787,22 @@ _udiv_step:
     OR      R9, 1
 
 _udiv_next:
-    SUB     R4, 1
+    LD      R5, 1
+    SUB     R4, R5
     FBRA.Z  R4, _udiv_done
     LOAD16  R14, _udiv_step
     JMP     R14, R0
 
 _udiv_done:
-    ; Dispatch by mode in R3
+    ; Dispatch by mode in R3 (0: DIV, 1: DIVU, 2: REM, 3: REMU)
     FBRA.Z  R3, _route_div
+    LD      R5, 1
     LD      R4, R3
-    SUB     R4, 1
+    SUB     R4, R5
     FBRA.Z  R4, _route_divu
+    LD      R5, 2
     LD      R4, R3
-    SUB     R4, 2
+    SUB     R4, R5
     FBRA.Z  R4, _route_rem
 
     ; mode == 3 (REMU)
