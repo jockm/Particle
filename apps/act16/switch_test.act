@@ -1,0 +1,21 @@
+u32 g_test_val = 2;
+u32 g_result = 0;
+
+void main() {
+    switch (g_test_val) {
+        case 1:
+            g_result = 0x1111;
+            break;
+        case 2:
+            g_result = 0xCAFE;
+            break;
+        case 3:
+            g_result = 0x3333;
+            break;
+        default:
+            g_result = 0xDEAD;
+            break;
+    }
+
+    trap(14);
+}
