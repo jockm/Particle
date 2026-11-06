@@ -6,17 +6,15 @@ SHELL        := /bin/bash
 DART         ?= dart
 PYTHON       ?= python3
 
-PASM         := $(PYTHON) tools/pasm.py
-PASM_LINT    := $(PYTHON) tools/pasm_lint.py
+PBUILD       := ./pbuild
 PSIM         := $(PYTHON) tools/psim.py
-ACT16C       := $(PYTHON) tools/act16c.py
 
 ROHD_DIR     := hdl/rohd
 PARCORE_DIR  := hdl/parcore
 BUILD_DIR    := build
 PARCORE_BLD  := $(BUILD_DIR)/parcore
 
-# Recursive wildcard across firmware/parcore to support multiple sub-firmwares (e.g. riscv)
+# Recursive wildcard across firmware/parcore
 FIRMWARE_SRCS := $(shell find firmware/parcore -name '*.asm' 2>/dev/null)
 FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWARE_SRCS))
 
@@ -24,7 +22,6 @@ APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
 APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 
 APP_ACT_SRCS  := $(wildcard apps/act16/*.act)
-APP_ACT_ASMS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.asm,$(APP_ACT_SRCS))
 APP_ACT_BINS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
 .PHONY: all setup test test-all test-particle test-parcore test-sim \
@@ -41,15 +38,15 @@ help:
 	@echo "Particle & Parcore Build Automation"
 	@echo "==================================="
 	@echo "  make setup            - Fetch Dart dependencies for rohd and parcore"
-	@echo "  make lint-asm         - Statically lint all assembly files with pasm_lint.py"
+	@echo "  make lint-asm         - Statically lint all assembly files"
 	@echo "  make build            - Build firmware, apps, and generate all HDL"
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
-	@echo "  make test-sim         - Run pasm and psim verification test suites"
+	@echo "  make test-sim         - Run instruction simulator verification"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
-	@echo "  make apps             - Compile ACT16 programs and assemble ASM apps"
+	@echo "  make apps             - Build ACT16 and ASM application binaries"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
 
 setup:
@@ -66,9 +63,9 @@ lint: lint-asm
 
 lint-asm:
 	@echo "==> Linting Parcore firmware sources..."
-	@for f in $(FIRMWARE_SRCS); do $(PASM_LINT) "$$f" || exit 1; done
+	@for f in $(FIRMWARE_SRCS); do $(PYTHON) tools/pasm_lint.py "$$f" || exit 1; done
 	@echo "==> Linting ASM application sources..."
-	@for f in $(APP_ASM_SRCS); do $(PASM_LINT) "$$f" || exit 1; done
+	@for f in $(APP_ASM_SRCS); do $(PYTHON) tools/pasm_lint.py "$$f" || exit 1; done
 
 # ------------------------------------------------------------------------------
 # Generation Targets (SystemVerilog)
@@ -100,40 +97,29 @@ test-parcore: setup
 
 test-sim: apps
 	@echo "==> Running instruction-level simulation tests (psim.py)..."
-	@if [ -f "$(BUILD_DIR)/comprehensive_test.bin" ]; then \
-		$(PSIM) $(BUILD_DIR)/comprehensive_test.bin -c 10000; \
+	@if [ -f "$(BUILD_DIR)/branch_suite.bin" ]; then \
+		$(PSIM) $(BUILD_DIR)/branch_suite.bin; \
 	fi
 
 # ------------------------------------------------------------------------------
-# Firmware & Application Targets
+# Firmware & Application Targets (via pbuild)
 # ------------------------------------------------------------------------------
 
 build: firmware apps generate
 
 firmware: $(FIRMWARE_BINS)
 
-# Preserves nested firmware subdirectories (e.g. firmware/parcore/riscv/foo.asm -> build/parcore/riscv/foo.bin)
 $(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
 	@mkdir -p $(dir $@)
-	@echo "==> Linting and assembling Parcore stage kernel $< -> $@"
-	@$(PASM_LINT) "$<"
-	@$(PASM) "$<" -I lib -o "$@" --format bin
+	@$(PBUILD) "$<" -o "$@"
 
 apps: $(APP_ASM_BINS) $(APP_ACT_BINS)
 
 $(BUILD_DIR)/%.bin: apps/asm/%.asm | $(BUILD_DIR)
-	@echo "==> Linting and assembling app $< -> $@"
-	@$(PASM_LINT) "$<"
-	@$(PASM) "$<" -I lib -o "$@" --format bin
+	@$(PBUILD) "$<" -o "$@"
 
-$(BUILD_DIR)/%.asm: apps/act16/%.act | $(BUILD_DIR)
-	@echo "==> Compiling ACT16 app $< -> $@"
-	@$(ACT16C) "$<" -o "$@"
-
-$(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.asm | $(BUILD_DIR)
-	@echo "==> Linting and assembling compiled ACT16 app $< -> $@"
-	@$(PASM_LINT) "$<"
-	@$(PASM) "$<" -I lib -o "$@" --format bin
+$(BUILD_DIR)/%.bin: apps/act16/%.act | $(BUILD_DIR)
+	@$(PBUILD) "$<" -o "$@"
 
 $(BUILD_DIR):
 	@mkdir -p $@

@@ -7,7 +7,7 @@
 .org 0x00000100
 
 _reset_handler:
-    FBRA    _main               ; Branch directly to _main
+    FBRA    _main               ; Branch directly to _main in 1 instruction
     .align  64
 
 _main:
@@ -27,7 +27,7 @@ _test1_fail:
     ; Test 2: FBRA.NZ Branch Taken when register is Non-Zero
     ; --------------------------------------------------------------------------
 _test2_start:
-    LD      R1, 10
+    LD      R1, 10              ; Value fits in 4-bit immediate
     FBRA.NZ R1, _test2_pass
     LD      R10, 2
     FBRA    _fail_halt
@@ -47,7 +47,7 @@ _loop_bbra:
     ; --------------------------------------------------------------------------
     ; Test 4: BRANCH Rr Forward
     ; --------------------------------------------------------------------------
-    LD      R6, (_branch_fwd_dest - _trigger_fwd_branch) / 2
+    LD      R6, 3               ; Jump forward 3 halfwords (6 bytes)
 _trigger_fwd_branch:
     BRANCH  R6
     LD      R10, 4
@@ -58,7 +58,8 @@ _branch_fwd_dest:
     ; --------------------------------------------------------------------------
     ; Test 5: BRANCH Rr Backward
     ; --------------------------------------------------------------------------
-    LD      R8, (_branch_bwd_dest - _trigger_bwd_branch) / 2
+    LD      R8, 4
+    NEG     R8                  ; R8 = -4 (jump backward 4 halfwords / -8 bytes)
     FBRA    _trigger_bwd_branch
 _branch_bwd_dest:
     LD      R9, 5               ; Marker 5 passed
@@ -74,7 +75,7 @@ _all_passed:
     PUSH8   R14, 0xFE           ; Shift left 8 and OR 0xFE -> R14 = 0xCAFE
     LD      R10, R14            ; Sentinel for overall suite success
 _spin_done:
-    FBRA    _spin_done          ; Terminal halt loop
+    BBRA    _spin_done          ; Terminal halt loop (backward branch)
 
 _fail_halt:
-    FBRA    _fail_halt
+    BBRA    _fail_halt          ; Terminal fail loop (backward branch)

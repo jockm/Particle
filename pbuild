@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# pbuild - Particle Unified Build & Driver Script
+# ==============================================================================
+set -euo pipefail
+
+# Self-locating base path: works when invoked locally or anywhere from $PATH
+SELF_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SELF_SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
+    SELF_SOURCE="$(readlink "$SELF_SOURCE")"
+    [[ "$SELF_SOURCE" != /* ]] && SELF_SOURCE="$DIR/$SELF_SOURCE"
+done
+PROJECT_ROOT="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
+
+# Toolchain paths
+PYTHON="${PYTHON:-python3}"
+PASM="${PROJECT_ROOT}/tools/pasm.py"
+PASM_LINT="${PROJECT_ROOT}/tools/pasm_lint.py"
+ACT16C="${PROJECT_ROOT}/tools/act16c.py"
+LIB_DIR="${PROJECT_ROOT}/lib"
+
+print_usage() {
+    cat << "HELP_TEXT"
+Usage: pbuild [options] <source-file>
+
+A unified build driver for Particle RISC (.asm) and ACT16 (.act) programs.
+
+Positional Arguments:
+  source-file            Source file (.asm or .act)
+
+Options:
+  -o, --output <file>    Output binary path (default: build/<name>.<format>)
+  -I, --include <dir>    Additional include search directory (repeatable)
+  -D, --define <sym>     Predefine preprocessor symbol (repeatable)
+      --format <fmt>     Output format: bin or hex (default: bin)
+  -h, --help             Show this help message and exit
+
+Workflow:
+  - If input is .act: Compiles to .asm, runs pasm_lint, then assembles to binary.
+  - If input is .asm: Runs pasm_lint, then assembles to binary.
+HELP_TEXT
+}
+
+SOURCE=""
+OUTPUT=""
+FORMAT="bin"
+INCLUDES=()
+DEFINES=()
+
+# Always include repo's lib/ by default if present
+if [ -d "$LIB_DIR" ]; then
+    INCLUDES+=("-I" "$LIB_DIR")
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            print_usage
+            exit 0
+            ;;
+        -o|--output)
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: Option $1 requires an argument." >&2
+                exit 1
+            fi
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -I|--include)
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: Option $1 requires an argument." >&2
+                exit 1
+            fi
+            INCLUDES+=("-I" "$2")
+            shift 2
+            ;;
+        -D|--define)
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: Option $1 requires an argument." >&2
+                exit 1
+            fi
+            DEFINES+=("-D" "$2")
+            shift 2
+            ;;
+        --format)
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: Option --format requires an argument (bin or hex)." >&2
+                exit 1
+            fi
+            if [[ "$2" != "bin" && "$2" != "hex" ]]; then
+                echo "Error: Invalid format '$2'. Allowed choices are 'bin' or 'hex'." >&2
+                exit 1
+            fi
+            FORMAT="$2"
+            shift 2
+            ;;
+        -*)
+            echo "Error: Unrecognized option '$1'." >&2
+            echo "Run 'pbuild --help' for usage." >&2
+            exit 1
+            ;;
+        *)
+            if [ -n "$SOURCE" ]; then
+                echo "Error: Multiple input files specified ('$SOURCE' and '$1')." >&2
+                exit 1
+            fi
+            SOURCE="$1"
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$SOURCE" ]; then
+    echo "Error: No source file specified." >&2
+    print_usage >&2
+    exit 1
+fi
+
+if [ ! -f "$SOURCE" ]; then
+    echo "Error: Source file not found: '$SOURCE'" >&2
+    exit 1
+fi
+
+BASE_NAME="$(basename "$SOURCE")"
+STEM="${BASE_NAME%.*}"
+EXT="${SOURCE##*.}"
+
+if [[ "$EXT" != "asm" && "$EXT" != "act" ]]; then
+    echo "Error: Unsupported file type '.$EXT'. pbuild expects .asm or .act files." >&2
+    exit 1
+fi
+
+if [ -z "$OUTPUT" ]; then
+    OUTPUT="build/${STEM}.${FORMAT}"
+fi
+
+OUTPUT_DIR="$(dirname "$OUTPUT")"
+if [ -n "$OUTPUT_DIR" ]; then
+    mkdir -p "$OUTPUT_DIR"
+fi
+
+if [ "$EXT" = "act" ]; then
+    STAGE_ASM="build/${STEM}.asm"
+    mkdir -p "$(dirname "$STAGE_ASM")"
+    echo "==> [pbuild] Compiling ACT16: $SOURCE -> $STAGE_ASM"
+    "$PYTHON" "$ACT16C" "$SOURCE" -o "$STAGE_ASM" ${DEFINES[@]+"${DEFINES[@]}"}
+
+    echo "==> [pbuild] Linting: $STAGE_ASM"
+    "$PYTHON" "$PASM_LINT" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"}
+
+    echo "==> [pbuild] Assembling: $STAGE_ASM -> $OUTPUT"
+    "$PYTHON" "$PASM" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+elif [ "$EXT" = "asm" ]; then
+    echo "==> [pbuild] Linting: $SOURCE"
+    "$PYTHON" "$PASM_LINT" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"}
+
+    echo "==> [pbuild] Assembling: $SOURCE -> $OUTPUT"
+    "$PYTHON" "$PASM" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+fi
+
+echo "==> [pbuild] Successfully built $OUTPUT"
