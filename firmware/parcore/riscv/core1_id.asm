@@ -75,7 +75,8 @@ _poll_fetch_queue:
     FBRA.NZ   R4, _fetch_empty  ; If empty, loop back to check writebacks
     FIFO.R    R10, R1           ; Pop PC
     LOAD32  R6, 0xFFFFFFFF      ; Check for pipeline flush sentinel (-1)
-    SUB     R7, R10, R6
+    LD      R7, R10
+    SUB     R7, R6
     FBRA.Z  R7, _drain_flush_token
 
     FIFO.R  R11, R1             ; Pop Instruction Word
@@ -424,6 +425,11 @@ _pack_reg_ctrl:
     JMP     R14, R0
 
 _emit_load:
+    ; Re-extract I-Type signed immediate offset: inst[31:20] into R9
+    LD      R9, R11
+    ASHIFTR R9, 15
+    ASHIFTR R9, 5               ; R9 = Sign-extended 12-bit load offset
+
     ; Extract funct3 from R11[14:12]
     LD      R4, R11
     SHIFTR  R4, 12
