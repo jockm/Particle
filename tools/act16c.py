@@ -840,6 +840,7 @@ class CodeGen:
         self.structs = {}
         self.array_lens = {}
         self.bound_addrs = {}
+        self.func_signatures = {}
         self.stack_offset = 0
         self.current_func_name = ""
         self.strings = []
@@ -875,7 +876,8 @@ class CodeGen:
         while hasattr(expr, 'expr') and not isinstance(expr, (MemberAccessNode, UnaryOpNode)):
             expr = expr.expr
         if isinstance(expr, VarAccessNode):
-            return self.types.get(expr.name, ('u32', False))
+            info = self.types.get(expr.name, ('u32', False, False))
+            return (info[0], info[1])
         
         elif isinstance(expr, MemberAccessNode) and expr.member == 'len':
             return ('u32', False)
@@ -921,6 +923,8 @@ class CodeGen:
 
         data_decls = [d for d in root.decls if isinstance(d, VarDeclNode)]
         func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
+        for f in func_decls:
+            self.func_signatures[f.name] = [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1]) for p in f.params]
         has_main = any(f.name == "main" for f in func_decls)
 
         if has_main:
@@ -944,7 +948,7 @@ class CodeGen:
             self.asm.append("; Global Variable Allocation")
             self.asm.append("; ------------------------------------------------------------------------------")
             for d in data_decls:
-                self.types[d.name] = (d.type_name, d.is_ptr)
+                self.types[d.name] = (d.type_name, d.is_ptr, False)
                 if getattr(d, 'bound_addr', None) is not None:
                     self.bound_addrs[d.name] = d.bound_addr
                     if getattr(d, 'array_dim', None):
@@ -1002,7 +1006,9 @@ class CodeGen:
             self.stack_offset = 4
 
         for i, (p_type, p_ptr, p_name, *_) in enumerate(func.params):
-            self.types[p_name] = (p_type, p_ptr)
+            clean_pt = p_type.replace("struct ", "").replace("type ", "").strip()
+            is_ref = (clean_pt in self.structs and not p_ptr)
+            self.types[p_name] = (p_type, p_ptr, is_ref)
             if i < 4:
                 self.emit(f"PUSH32  R{i + 1}", f"Spill param '{p_name}'")
                 self.stack_offset += 4
@@ -1112,7 +1118,7 @@ class CodeGen:
             return
 
         elif isinstance(stmt, VarDeclNode):
-            self.types[stmt.name] = (stmt.type_name, stmt.is_ptr)
+            self.types[stmt.name] = (stmt.type_name, stmt.is_ptr, False)
             elem_size = 4
             clean_type = stmt.type_name.replace("struct ", "").replace("type ", "").strip()
             if stmt.type_name in ('u8', 's8'):
@@ -1156,7 +1162,7 @@ class CodeGen:
             # Evaluate LHS address
             if isinstance(stmt.lhs, VarAccessNode):
                 name = stmt.lhs.name
-                t_name, is_ptr = self.types.get(name, ('u32', False))
+                t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                 if name in self.locals:
                     offset = self.stack_offset - self.locals[name]
                     self.emit_immediate(14, offset)
@@ -1267,6 +1273,38 @@ class CodeGen:
             self.emit_label(lbl_end)
             self.break_stack.pop()
 
+    def _emit_lvalue_addr(self, node, target_reg=14):
+        if isinstance(node, VarAccessNode):
+            name = node.name
+            t_info = self.types.get(name, ('u32', False, False))
+            is_ref = t_info[2] if len(t_info) > 2 else False
+            if name in self.bound_addrs:
+                self.emit_immediate(target_reg, self.bound_addrs[name])
+            elif name in self.locals:
+                offset = self.stack_offset - self.locals[name]
+                self.emit_immediate(target_reg, offset)
+                self.emit(f"ADD     R{target_reg}, R15", f"Address of local '{name}'")
+                if is_ref:
+                    self.emit(f"LD32    R{target_reg}, (R{target_reg})", f"Dereference ref param '{name}'")
+            elif name in self.globals:
+                self.emit(f"LOAD32  R{target_reg}, _{name}")
+        elif isinstance(node, MemberAccessNode):
+            base_expr = node.expr
+            member = node.member
+            t_name, _ = self._get_expr_type(base_expr)
+            s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+            m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
+            self._emit_lvalue_addr(base_expr, target_reg=target_reg)
+            if m_offset > 0:
+                self.emit_immediate(2, m_offset)
+                self.emit(f"ADD     R{target_reg}, R2", f"Offset {m_offset} for field '{member}'")
+        elif isinstance(node, ArrayAccessNode):
+            self._emit_array_elem_addr(node, addr_reg=target_reg, idx_scratch=2)
+        elif isinstance(node, UnaryOpNode) and node.op == '*':
+            self.gen_expr(node.operand, target_reg=target_reg)
+        else:
+            self.gen_expr(node, target_reg=target_reg)
+
     def _get_elem_size(self, t_name, is_ptr):
         if is_ptr:
             return 4
@@ -1334,9 +1372,9 @@ class CodeGen:
             base_expr = expr.expr
             member = expr.member
             t_name, is_ptr = self._get_expr_type(base_expr)
-            s_name = t_name.replace("struct ", "").strip()
+            s_name = t_name.replace("struct ", "").replace("type ", "").strip()
             m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
-            self.gen_expr(base_expr, target_reg=14)
+            self._emit_lvalue_addr(base_expr, target_reg=14)
             if m_offset > 0:
                 self.emit_immediate(2, m_offset)
                 self.emit("ADD     R14, R2", f"Offset {m_offset} for field '{member}'")
@@ -1348,7 +1386,7 @@ class CodeGen:
 
         elif isinstance(expr, VarAccessNode):
             name = expr.name
-            t_name, is_ptr = self.types.get(name, ('u32', False))
+            t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
             if name in self.bound_addrs:
                 self.emit_immediate(14, self.bound_addrs[name])
                 if name in self.array_lens:
@@ -1412,7 +1450,7 @@ class CodeGen:
 
             if isinstance(expr.lhs, VarAccessNode):
                 name = expr.lhs.name
-                t_name, is_ptr = self.types.get(name, ('u32', False))
+                t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                 if name in self.locals:
                     offset = self.stack_offset - self.locals[name]
                     self.emit_immediate(14, offset)
@@ -1451,12 +1489,16 @@ class CodeGen:
                     base_expr = expr.left.expr
                     member = expr.left.member
                     t_name, is_ptr = self._get_expr_type(base_expr)
-                    s_name = t_name.replace("struct ", "").strip()
+                    s_name = t_name.replace("struct ", "").replace("type ", "").strip()
                     m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
-                    self.gen_expr(base_expr, target_reg=14)
+                    self.emit("PUSH32  R1", "Preserve RHS")
+                    self.stack_offset += 4
+                    self._emit_lvalue_addr(base_expr, target_reg=14)
                     if m_offset > 0:
                         self.emit_immediate(2, m_offset)
                         self.emit("ADD     R14, R2", f"Offset {m_offset} for field '{member}'")
+                    self.emit("POP32   R1", "Restore RHS")
+                    self.stack_offset -= 4
                     self._emit_store_typed(14, 1, m_type, m_ptr)
                     return
                 elif isinstance(expr.left, UnaryOpNode) and expr.left.op == '*':
@@ -1474,7 +1516,7 @@ class CodeGen:
                     return
                 elif isinstance(expr.left, VarAccessNode):
                     name = expr.left.name
-                    t_name, is_ptr = self.types.get(name, ('u32', False))
+                    t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                     if name in self.bound_addrs:
                         self.emit_immediate(14, self.bound_addrs[name])
                         self._emit_store_typed(14, 1, t_name, is_ptr)
@@ -1569,8 +1611,14 @@ class CodeGen:
                 self.emit(f"LD      R{target_reg}, R14")
                 return
 
+            sig = self.func_signatures.get(expr.name, [])
             for i, arg in enumerate(expr.args[:4]):
-                self.gen_expr(arg, target_reg=i + 1)
+                param_type = sig[i][0] if i < len(sig) else None
+                param_is_ptr = sig[i][1] if i < len(sig) else False
+                if param_type and param_type in self.structs and not param_is_ptr:
+                    self._emit_lvalue_addr(arg, target_reg=i + 1)
+                else:
+                    self.gen_expr(arg, target_reg=i + 1)
             self.emit(f"RCALL   _{expr.name}")
             if target_reg != 1:
                 self.emit(f"LD      R{target_reg}, R1")
