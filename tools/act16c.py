@@ -445,9 +445,9 @@ class Parser:
             self.consume()
             is_inline = True
 
-        # type Name { ... }; or type Name = fn(...) -> RetType;
-        if self.peek().val == 'type':
-            self.consume('KEYWORD', 'type')
+        # type Name { ... }; or struct Name { ... }; or type Name = fn(...) -> RetType;
+        if self.peek().val in ('type', 'struct') and self.tokens[self.pos+1].type == 'IDENT' and self.tokens[self.pos+2].val in ('{', '='):
+            kind_tok = self.consume()
             t_name = self.consume('IDENT').val
             if self.peek().val == '=':
                 self.consume()
@@ -466,7 +466,8 @@ class Parser:
                 if self.peek().val == '->':
                     self.consume('OP_ARROW', '->')
                     ret_t = self.parse_type()
-                self.consume('PUNCT', ';')
+                if self.peek().val == ';':
+                    self.consume('PUNCT', ';')
                 return FnTypeNode(t_name, fn_params, ret_t)
             elif self.peek().val == '{':
                 self.consume('PUNCT', '{')
@@ -483,10 +484,12 @@ class Parser:
                         self.consume('PUNCT', '[')
                         f_dim = int(self.consume('INT').val, 0)
                         self.consume('PUNCT', ']')
-                    self.consume('PUNCT', ';')
+                    if self.peek().val == ';':
+                        self.consume('PUNCT', ';')
                     fields.append((f_type, f_ptr, f_name, f_dim))
                 self.consume('PUNCT', '}')
-                self.consume('PUNCT', ';')
+                if self.peek().val == ';':
+                    self.consume('PUNCT', ';')
                 return StructDefNode(t_name, fields)
 
         is_const = False
@@ -502,20 +505,26 @@ class Parser:
 
         name = self.consume('IDENT').val
 
+        bound_struct = None
+        bound_type = None
         # Oberon-style type-bound procedure: void Point.move(...)
         bound_type = None
         if self.peek().val == '.':
             self.consume('PUNCT', '.')
             method_name = self.consume('IDENT').val
             bound_type = name
+            bound_struct = bound_type
             name = f"{bound_type}_{method_name}"
 
         if self.peek().val == '(':
             self.consume('PUNCT', '(')
             params = []
+            if bound_struct:
+                # Automatically prepend receiver 'this' by reference
+                params.append((bound_struct, False, 'this'))
             if self.peek().val != ')':
                 while True:
-                    if self.peek().val == 'void' and len(params) == 0:
+                    if self.peek().val == 'void' and len(params) == (1 if bound_struct else 0):
                         self.consume()
                         break
                     p_type = self.parse_type()
@@ -772,7 +781,7 @@ class Parser:
                 member = self.consume('IDENT').val
                 if self.peek().val == '(':
                     self.consume('PUNCT', '(')
-                    args = [UnaryOpNode('&', node)]
+                    args = [node]
                     if self.peek().val != ')':
                         while True:
                             args.append(self.parse_expr())
@@ -873,6 +882,8 @@ class CodeGen:
             self.emit(f"LOAD32  R{reg}, 0x{v:08X}", f"LOAD32 full word ({val})")
 
     def _get_expr_type(self, expr):
+        if isinstance(expr, UnaryOpNode) and expr.op == '&':
+            return self._get_expr_type(expr.operand)
         while hasattr(expr, 'expr') and not isinstance(expr, (MemberAccessNode, UnaryOpNode)):
             expr = expr.expr
         if isinstance(expr, VarAccessNode):
@@ -1582,13 +1593,21 @@ class CodeGen:
         elif isinstance(expr, CallNode):
             if expr.name.startswith("__METHOD__"):
                 m_name = expr.name.replace("__METHOD__", "")
-                # Find receiver type to form _Type_method
-                rcv_node = expr.args[0].operand
+                rcv_node = expr.args[0]
+                if isinstance(rcv_node, UnaryOpNode) and rcv_node.op == '&':
+                    rcv_node = rcv_node.operand
                 t_name, _ = self._get_expr_type(rcv_node)
-                s_name = t_name.replace("struct ", "").strip()
+                s_name = t_name.replace("struct ", "").replace("type ", "").strip()
                 target_func = f"{s_name}_{m_name}"
-                for i, arg in enumerate(expr.args[:4]):
-                    self.gen_expr(arg, target_reg=i + 1)
+                
+                # Receiver is passed by reference (&rcv_node)
+                # First argument register R1 gets address of receiver
+                self._emit_lvalue_addr(rcv_node, target_reg=1)
+                
+                # Remaining arguments go to R2..R4
+                for i, arg in enumerate(expr.args[1:4]):
+                    self.gen_expr(arg, target_reg=i + 2)
+                    
                 self.emit(f"RCALL   _{target_func}")
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")

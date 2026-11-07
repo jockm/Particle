@@ -1,0 +1,23 @@
+type Point {
+    u32 x;
+    u32 y;
+};
+
+void Point.move(u32 dx, u32 dy) {
+    this.x = this.x + dx;
+    this.y = this.y + dy;
+}
+
+void main() {
+    Point pt;
+    pt.x = 5;
+    pt.y = 10;
+
+    pt.move(15, 20);
+
+    if (pt.x == 20 && pt.y == 30) {
+        trap(14);
+    } else {
+        trap(15);
+    }
+}
