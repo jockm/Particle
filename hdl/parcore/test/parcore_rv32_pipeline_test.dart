@@ -28,6 +28,7 @@ void main() {
     late ParcoreTop top;
 
     setUp(() async {
+      await Simulator.reset();
       clk = SimpleClockGenerator(10);
       reset = Logic(name: 'reset');
       uartRx = Logic(name: 'uart_rx');

@@ -1,28 +1,31 @@
+// =============================================================================
+// File: lib/protokernel.h
+// Description: Stackless Cooperative Protothreads for ACT16 / Particle
+// Attribution & Lineage:
+// - Original Protothreads Architecture & Design: Adam Dunkels <adam@sics.se>
+// - ProtoKernel ACT16 / Particle Architecture: Jock Murphy
+// =============================================================================
+
 #ifndef _PROTOKERNEL_H_
 #define _PROTOKERNEL_H_
 
-// Lifecycle constants
-const u16 PK_WAITING = 0;
-const u16 PK_YIELDED = 1;
-const u16 PK_EXITED  = 2;
-const u16 PK_ENDED   = 3;
+#define PK_WAITING   0
+#define PK_YIELDED   1
+#define PK_EXITED    2
+#define PK_ENDED     3
 
-// Minimal Continuation Control Block
 type pt {
     u16 lc;
 };
 
-// Function type for task coroutines
-type TaskFn = fn(pt) -> u16;
+#define PK_INIT(p)        (p.lc = 0)
+#define PK_SCHEDULE(expr) ((expr) < PK_EXITED)
 
-// Type-bound initialization method
-inline void pt.init(pt self) {
-    self.lc = 0;
-}
+#define PK_BEGIN(p)       switch (p.lc) { case 0:
+#define PK_YIELD(p, s)    p.lc = s; return PK_YIELDED; case s:
+#define PK_WAIT_UNTIL(p, s, cond) p.lc = s; case s: if (!(cond)) return PK_WAITING;
+#define PK_EXIT(p)        p.lc = 0; return PK_EXITED;
+#define PK_RESTART(p)     (p.lc = 0)
+#define PK_END(p)         } p.lc = 0; return PK_ENDED;
 
-// Scheduling predicate
-inline u16 pk_schedule(u16 status) {
-    return status < PK_EXITED;
-}
-
-#endif
+#endif // _PROTOKERNEL_H_
