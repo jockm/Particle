@@ -447,8 +447,12 @@ class Parser:
             self.consume()
             is_inline = True
 
-        # type Name { ... }; or struct Name { ... }; or type Name = fn(...) -> RetType;
-        if self.peek().val in ('type', 'struct') and self.tokens[self.pos+1].type == 'IDENT' and self.tokens[self.pos+2].val in ('{', '='):
+        # type Name { ... }; or type Name = fn(...) -> RetType;
+        if self.peek().val == 'struct':
+            t = self.peek()
+            raise SyntaxError(f"{t.fname}:{t.lineno}:{t.col}: 'struct' is deprecated; use 'type {self.tokens[self.pos+1].val} {{ ... }}' instead")
+
+        if self.peek().val == 'type' and self.tokens[self.pos+1].type == 'IDENT' and self.tokens[self.pos+2].val in ('{', '='):
             kind_tok = self.consume()
             t_name = self.consume('IDENT').val
             if self.peek().val == '=':
@@ -683,7 +687,7 @@ class Parser:
             is_const = True
             tok = self.peek()
 
-        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32') or tok.val in ('type',) or (tok.type == 'IDENT' and self.tokens[self.pos+1].type == 'IDENT'):
+        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32') or tok.val == 'type' or (tok.type == 'IDENT' and (self.tokens[self.pos+1].type == 'IDENT' or self.tokens[self.pos+1].val == '*')):
             t_name = self.parse_type()
             is_ptr = False
             if self.peek().val == '*':
@@ -857,6 +861,10 @@ class Parser:
 # ------------------------------------------------------------------------------
 
 class CodeGen:
+    def _clean_type(self, t):
+        if not t:
+            return ""
+        return t.replace("struct ", "").replace("type ", "").strip()
     def __init__(self):
         self.asm = []
         self.label_counter = 0
