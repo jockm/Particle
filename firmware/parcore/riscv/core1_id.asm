@@ -29,9 +29,28 @@ _init_rf_loop:
     LOAD16  R4, SCOREBOARD_MASK
     LD32    (R4), R5
 
+    LOAD16  R14, _id_main_loop
+    JMP     R14, R0
+
+; ==============================================================================
+; Trap Vector 1: Pipeline Flush on Branch / Jump (Core 2 Strobe)
+; Strobe from Core 2 lands at TRAP_TABLE_BASE + (1 * 64) = 0x00000140
+; ==============================================================================
+.org 0x00000140
+_branch_flush_handler:
+    ; Reset Scoreboard mask to clear in-flight locks for discarded speculative instructions
+    LOAD16  R4, SCOREBOARD_MASK
+    LD      R5, 0
+    LD32    (R4), R5
+
+    ; Jump back to main decode loop
+    LOAD16  R14, _id_main_loop
+    JMP     R14, R0
+
 ; ==============================================================================
 ; Main Decode Pipeline Loop
 ; ==============================================================================
+.org 0x00000180
 _id_main_loop:
     ; --------------------------------------------------------------------------
     ; 1. Service Retiring Writebacks (Non-blocking check)

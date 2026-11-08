@@ -899,7 +899,7 @@ class CodeGen:
 
         elif isinstance(expr, MemberAccessNode):
             parent_type, _ = self._get_expr_type(expr.expr)
-            s_name = parent_type.replace("struct ", "").strip()
+            s_name = parent_type.replace("struct ", "").replace("type ", "").strip()
             _, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(expr.member, (0, 'u32', False, None))
             return (m_type, m_ptr)
 
@@ -924,30 +924,56 @@ class CodeGen:
         self.asm.append("; ==============================================================================\n")
         self.asm.append('.include "lib/common.inc"\n')
 
-        for d in root.decls:
-            if isinstance(d, StructDefNode):
-                offset = 0
-                fields = {}
+        struct_defs = [d for d in root.decls if isinstance(d, StructDefNode)]
+        remaining = list(struct_defs)
+        max_iters = len(remaining) + 1
+        for _ in range(max_iters):
+            progress = False
+            next_remaining = []
+            for d in remaining:
+                can_resolve = True
                 for field_tuple in d.fields:
-                    f_type = field_tuple[0]
+                    f_type = field_tuple[0].replace("struct ", "").replace("type ", "").strip()
                     f_ptr = field_tuple[1]
-                    f_name = field_tuple[2]
-                    f_dim = field_tuple[3] if len(field_tuple) > 3 else None
-                    if f_ptr:
-                        elem_sz = 4
-                    elif f_type in ('u32', 's32'):
-                        elem_sz = 4
-                    elif f_type in ('u16', 's16'):
-                        elem_sz = 2
-                    elif f_type in self.structs:
-                        elem_sz = self.structs[f_type].get('__size__', 4)
-                    else:
-                        elem_sz = 1
-                    f_size = (elem_sz * f_dim) if f_dim is not None else elem_sz
-                    fields[f_name] = (offset, f_type, f_ptr, f_dim)
-                    offset += f_size
-                fields['__size__'] = offset
-                self.structs[d.name] = fields
+                    if not f_ptr and f_type not in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void'):
+                        if f_type not in self.structs:
+                            can_resolve = False
+                            break
+                if can_resolve:
+                    offset = 0
+                    fields = {}
+                    for field_tuple in d.fields:
+                        f_type = field_tuple[0].replace("struct ", "").replace("type ", "").strip()
+                        f_ptr = field_tuple[1]
+                        f_name = field_tuple[2]
+                        f_dim = field_tuple[3] if len(field_tuple) > 3 else None
+                        if f_ptr:
+                            elem_sz = 4
+                        elif f_type in ('u32', 's32'):
+                            elem_sz = 4
+                        elif f_type in ('u16', 's16'):
+                            elem_sz = 2
+                        elif f_type in self.structs:
+                            elem_sz = self.structs[f_type].get('__size__', 4)
+                        elif f_type in ('u8', 's8'):
+                            elem_sz = 1
+                        else:
+                            elem_sz = 4
+                        f_size = (elem_sz * f_dim) if f_dim is not None else elem_sz
+                        fields[f_name] = (offset, f_type, f_ptr, f_dim)
+                        offset += f_size
+                    fields['__size__'] = offset
+                    self.structs[d.name] = fields
+                    progress = True
+                else:
+                    next_remaining.append(d)
+            remaining = next_remaining
+            if not remaining or not progress:
+                break
+
+        if remaining:
+            unresolved = ", ".join(d.name for d in remaining)
+            raise SyntaxError(f"Circular dependency or unknown type in struct/type definition: {unresolved}")
 
         for d in root.decls:
             if isinstance(d, FnTypeNode):
@@ -1219,9 +1245,9 @@ class CodeGen:
                 base_expr = stmt.lhs.expr
                 member = stmt.lhs.member
                 t_name, is_ptr = self._get_expr_type(base_expr)
-                s_name = t_name.replace("struct ", "").strip()
+                s_name = t_name.replace("struct ", "").replace("type ", "").strip()
                 m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
-                self.gen_expr(base_expr, target_reg=14)
+                self._emit_lvalue_addr(base_expr, target_reg=14)
                 if m_offset > 0:
                     self.emit_immediate(3, m_offset)
                     self.emit("ADD     R14, R3")
@@ -1503,9 +1529,9 @@ class CodeGen:
                 base_expr = expr.lhs.expr
                 member = expr.lhs.member
                 t_name, is_ptr = self._get_expr_type(base_expr)
-                s_name = t_name.replace("struct ", "").strip()
+                s_name = t_name.replace("struct ", "").replace("type ", "").strip()
                 m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
-                self.gen_expr(base_expr, target_reg=14)
+                self._emit_lvalue_addr(base_expr, target_reg=14)
                 if m_offset > 0:
                     self.emit_immediate(3, m_offset)
                     self.emit("ADD     R14, R3")
