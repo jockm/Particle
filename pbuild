@@ -33,6 +33,8 @@ Options:
   -I, --include <dir>    Additional include search directory (repeatable)
   -D, --define <sym>     Predefine preprocessor symbol (repeatable)
       --format <fmt>     Output format: bin or hex (default: bin)
+  -fbounds-check         Enable array bounds checking (default)
+  -fno-bounds-check      Disable array bounds checking
   -v, --verbose          Verbose output
   -h, --help             Show this help message and exit
 
@@ -48,6 +50,7 @@ FORMAT="bin"
 VERBOSE=0
 INCLUDES=()
 DEFINES=()
+ACT16_FLAGS=()
 
 if [ -d "$LIB_DIR" ]; then
     INCLUDES+=("-I" "$LIB_DIR")
@@ -86,6 +89,14 @@ while [[ $# -gt 0 ]]; do
             fi
             DEFINES+=("-D" "$2")
             shift 2
+            ;;
+        -fbounds-check|--bounds-check)
+            ACT16_FLAGS+=("-fbounds-check")
+            shift
+            ;;
+        -fno-bounds-check|--no-bounds-check)
+            ACT16_FLAGS+=("-fno-bounds-check")
+            shift
             ;;
         --format)
             if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
@@ -171,7 +182,7 @@ run_step() {
 if [ "$EXT" = "act" ]; then
     STAGE_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$STAGE_ASM")"
-    run_step "Compiling ACT16: $SOURCE -> $STAGE_ASM" "$PYTHON" "$ACT16C" "$SOURCE" -o "$STAGE_ASM" ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Compiling ACT16: $SOURCE -> $STAGE_ASM" "$PYTHON" "$ACT16C" "$SOURCE" -o "$STAGE_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
     run_step "Linting: $STAGE_ASM" "$PYTHON" "$PASM_LINT" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"}
     run_step "Assembling: $STAGE_ASM -> $OUTPUT" "$PYTHON" "$PASM" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
 elif [ "$EXT" = "asm" ]; then

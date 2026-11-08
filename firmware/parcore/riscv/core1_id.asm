@@ -352,8 +352,26 @@ _check_jalr:
     LOAD16  R14, 0x67
     LD      R4, R12
     SUB     R4, R14
-    FBRA.NZ R4, _drop_unrecognized
+    FBRA.NZ R4, _check_fence
     LOAD16  R14, _emit_jalr
+    JMP     R14, R0
+
+_check_fence:
+    ; FENCE (0x0F): in-order memory drain
+    LOAD16  R14, 0x0F
+    LD      R4, R12
+    SUB     R4, R14
+    FBRA.NZ R4, _check_system
+    LOAD16  R14, _id_main_loop
+    JMP     R14, R0
+
+_check_system:
+    ; SYSTEM (0x73): ECALL, EBREAK, MRET, CSRRW, CSRRS, CSRRC
+    LOAD16  R14, 0x73
+    LD      R4, R12
+    SUB     R4, R14
+    FBRA.NZ R4, _drop_unrecognized
+    LOAD16  R14, _emit_system
     JMP     R14, R0
 
 _drop_unrecognized:
@@ -581,6 +599,88 @@ _emit_auipc:
     OR      R4, R7
     OR      R4, 1               ; Valid bit
     LD      R5, R10             ; OpA = Current PC
+    LOAD16  R14, _dispatch_packet
+    JMP     R14, R0
+
+; ==============================================================================
+; SYSTEM Instruction Decoder (Opcode 0x73: ECALL, EBREAK, MRET, CSR)
+; ==============================================================================
+_emit_system:
+    ; funct3 is in R14 (inst[14:12])
+    FBRA.NZ R14, _emit_csr_rw
+
+    ; funct3 == 0: ECALL, EBREAK, or MRET based on inst[31:20]
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 5               ; R7 = inst[31:20]
+
+    ; Check 0x000: ECALL
+    FBRA.NZ R7, ._chk_ebreak
+    LOAD16  R4, 0x40            ; uop = 0x40 (ECALL)
+    BBRA    ._pack_system_ctrl
+
+._chk_ebreak:
+    ; Check 0x001: EBREAK
+    LD      R8, R7
+    SUB     R8, 1
+    FBRA.NZ R8, ._chk_mret
+    LOAD16  R4, 0x41            ; uop = 0x41 (EBREAK)
+    BBRA    ._pack_system_ctrl
+
+._chk_mret:
+    ; Check 0x302: MRET
+    LOAD16  R8, 0x302
+    SUB     R8, R7
+    FBRA.NZ R8, _drop_unrecognized
+    LOAD16  R4, 0x42            ; uop = 0x42 (MRET)
+
+._pack_system_ctrl:
+    LD      R8, 12
+    SHIFTL  R8, 1               ; R8 = 24
+    SHIFTL  R4, R8              ; uop << 24
+    LD      R8, R13             ; Rd
+    SHIFTL  R8, 8               ; Rd << 8
+    OR      R4, R8
+    OR      R4, 1               ; Valid bit
+
+    FIFO.W  R4, R2              ; Word 0: Control Word
+    FIFO.W  R5, R2              ; Word 1: Rs1 Value
+    FIFO.W  R7, R2              ; Word 2: funct12 / CSR Addr
+    FIFO.W  R10, R2             ; Word 3: Guest PC
+    LOAD16  R14, _id_main_loop
+    JMP     R14, R0
+
+_emit_csr_rw:
+    ; R14 = funct3 (1: CSRRW, 2: CSRRS, 3: CSRRC, 5: CSRRWI, 6: CSRRSI, 7: CSRRCI)
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 5               ; R7 = CSR Address (inst[31:20])
+
+    ; If immediate form (funct3 bit 2 is set), OpA is zero-extended rs1 field
+    LD      R8, R14
+    AND     R8, 4
+    FBRA.Z  R8, ._csr_reg_op
+    LD      R5, R15             ; R15 holds inst[19:15]
+
+._csr_reg_op:
+    ; Base uop: 0x43 (CSRRW), 0x44 (CSRRS), 0x45 (CSRRC)
+    LD      R8, R14
+    AND     R8, 3
+    LOAD16  R4, 0x42
+    ADD     R4, R8
+
+    LD      R8, 12
+    SHIFTL  R8, 1               ; R8 = 24
+    SHIFTL  R4, R8              ; uop << 24
+    LD      R8, R14
+    SHIFTL  R8, 16              ; funct3 << 16
+    OR      R4, R8
+    LD      R8, R13             ; Rd
+    SHIFTL  R8, 8               ; Rd << 8
+    OR      R4, R8
+    OR      R4, 1               ; Valid bit
+
+    LD      R9, R7              ; OpB = CSR Address
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
 

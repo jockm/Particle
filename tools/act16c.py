@@ -880,7 +880,8 @@ class CodeGen:
         if not t:
             return ""
         return t.replace("struct ", "").replace("type ", "").strip()
-    def __init__(self):
+    def __init__(self, bounds_check: bool = True):
+        self.bounds_check = bounds_check
         self.asm = []
         self.label_counter = 0
         self.locals = {}
@@ -1578,26 +1579,27 @@ class CodeGen:
         self.gen_expr(node.index, target_reg=idx_scratch)
 
         # 2. Runtime Bounds Check with Trap 15 (preserve idx_scratch in R3)
-        if is_open:
-            lbl_in_bounds = self.new_label("in_bounds")
-            len_off = self.stack_offset - self.locals[f"{base_name}__len"]
-            self.emit_immediate(14, len_off)
-            self.emit("ADD     R14, R15")
-            self.emit("LD32    R14, (R14)", f"Load dynamic length for '{base_name}'")
-            self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
-            self.emit("SLT     R3, R14", f"Check {base_name}[i] < dynamic length")
-            self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
-            self.emit("TRAP    15", f"Open array out-of-bounds trap ({base_name})")
-            self.emit_label(lbl_in_bounds)
-        elif base_name and base_name in self.array_lens:
-            arr_dim = self.array_lens[base_name]
-            lbl_in_bounds = self.new_label("in_bounds")
-            self.emit_immediate(14, arr_dim)
-            self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
-            self.emit("SLT     R3, R14", f"Check {base_name}[i] < {arr_dim}")
-            self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
-            self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
-            self.emit_label(lbl_in_bounds)
+        if self.bounds_check:
+            if is_open:
+                lbl_in_bounds = self.new_label("in_bounds")
+                len_off = self.stack_offset - self.locals[f"{base_name}__len"]
+                self.emit_immediate(14, len_off)
+                self.emit("ADD     R14, R15")
+                self.emit("LD32    R14, (R14)", f"Load dynamic length for '{base_name}'")
+                self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
+                self.emit("SLT     R3, R14", f"Check {base_name}[i] < dynamic length")
+                self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
+                self.emit("TRAP    15", f"Open array out-of-bounds trap ({base_name})")
+                self.emit_label(lbl_in_bounds)
+            elif base_name and base_name in self.array_lens:
+                arr_dim = self.array_lens[base_name]
+                lbl_in_bounds = self.new_label("in_bounds")
+                self.emit_immediate(14, arr_dim)
+                self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
+                self.emit("SLT     R3, R14", f"Check {base_name}[i] < {arr_dim}")
+                self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
+                self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
+                self.emit_label(lbl_in_bounds)
 
         # 3. Compute Base Address into addr_reg after index & bounds check
         if is_open:
@@ -2115,6 +2117,8 @@ def main():
     parser.add_argument("source", help="Input ACT16 source file (.act / .c)")
     parser.add_argument("-o", "--output", default=None, help="Output assembly file (.asm)")
     parser.add_argument("-D", "--define", action="append", default=[], help="Predefine symbol (KEY[=VALUE])")
+    parser.add_argument("-fbounds-check", dest="bounds_check", action="store_true", default=True, help="Enable runtime array bounds checking (default)")
+    parser.add_argument("-fno-bounds-check", dest="bounds_check", action="store_false", help="Disable runtime array bounds checking")
     args = parser.parse_args()
 
     if not args.output:
@@ -2142,7 +2146,7 @@ def main():
     p = Parser(filtered)
     ast = p.parse_program()
 
-    cg = CodeGen()
+    cg = CodeGen(bounds_check=args.bounds_check)
     asm_code = cg.generate(ast)
 
     with open(args.output, 'w', encoding='utf-8') as f:
