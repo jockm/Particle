@@ -167,18 +167,17 @@ def lint_file(filepath, include_dirs=None):
                         (lno, f"Backward branch '{mnem} {target_label}' branches forward (target on line {tgt_lno}). Use FBRA/FBRA.* instead.")
                     )
 
-    # Print Report
-    print(f"=== Particle Assembly Lint: {filepath} ===")
+    # Print Report (silent on success)
     if not errors and not warnings:
-        print("[PASS] No immediate, literal, or direction violations detected.")
         return 0
 
+    print(f"=== Particle Assembly Lint: {filepath} ===", file=sys.stderr)
     for lno, msg in errors:
-        print(f"[ERROR] Line {lno:4d}: {msg}")
+        print(f"[ERROR] Line {lno:4d}: {msg}", file=sys.stderr)
     for lno, msg in warnings:
-        print(f"[WARN]  Line {lno:4d}: {msg}")
+        print(f"[WARN]  Line {lno:4d}: {msg}", file=sys.stderr)
 
-    print(f"\nResult: {len(errors)} error(s), {len(warnings)} warning(s).")
+    print(f"\nResult: {len(errors)} error(s), {len(warnings)} warning(s).", file=sys.stderr)
     return 1 if errors else 0
 
 

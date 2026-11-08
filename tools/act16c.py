@@ -2064,7 +2064,6 @@ def main():
     with open(args.output, 'w', encoding='utf-8') as f:
         f.write(asm_code)
 
-    print(f"Compilation complete: Emitted Particle assembly to '{args.output}'.")
 
 if __name__ == "__main__":
     try:
