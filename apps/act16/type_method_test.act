@@ -13,9 +13,9 @@ type Window {
     u8 title[16];
 };
 
-void Point.move(Point* self, u16 dx, u16 dy) {
-    self->x += dx;
-    self->y += dy;
+void Point.move(u16 dx, u16 dy) {
+    this.x += dx;
+    this.y += dy;
 }
 
 void main() {

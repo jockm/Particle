@@ -42,4 +42,4 @@ _reset:
     ; Sentinel check: If all pass, R10 = 0xCAFE
     LOAD16  R10, 0xCAFE
 _halt:
-    FBRA    _halt
+    BBRA    _halt

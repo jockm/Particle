@@ -535,7 +535,13 @@ class Parser:
                         self.consume()
                         p_ptr = True
                     p_name = self.consume('IDENT').val
-                    params.append((p_type, p_ptr, p_name))
+                    is_open_arr = False
+                    if self.peek().val == '[':
+                        self.consume('PUNCT', '[')
+                        self.consume('PUNCT', ']')
+                        is_open_arr = True
+                        p_ptr = True
+                    params.append((p_type, p_ptr, p_name, is_open_arr))
                     if self.peek().val == ',':
                         self.consume()
                     else:
@@ -869,6 +875,7 @@ class CodeGen:
         self.constants = {}
         self.inline_funcs = {}
         self.inline_return_stack = []
+        self.open_arrays = set()
 
     def emit(self, line, comment=""):
         if comment:
@@ -1024,7 +1031,11 @@ class CodeGen:
         data_decls = [d for d in root.decls if isinstance(d, VarDeclNode)]
         func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
         for f in func_decls:
-            self.func_signatures[f.name] = (f.ret_type.replace("struct ", "").replace("type ", "").strip(), f.ret_ptr, [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1]) for p in f.params])
+            self.func_signatures[f.name] = (
+                f.ret_type.replace("struct ", "").replace("type ", "").strip(),
+                f.ret_ptr,
+                [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1], len(p) > 3 and p[3]) for p in f.params]
+            )
         has_main = any(f.name == "main" for f in func_decls)
 
         if has_main:
@@ -1112,14 +1123,30 @@ class CodeGen:
             self.emit("PUSH32  R14", "Preserve return address link")
             self.stack_offset = 4
 
-        for i, (p_type, p_ptr, p_name, *_) in enumerate(func.params):
+        self.open_arrays.clear()
+        r_idx = 1
+        for p in func.params:
+            p_type, p_ptr, p_name = p[0], p[1], p[2]
+            is_open_arr = p[3] if len(p) > 3 else False
             clean_pt = p_type.replace("struct ", "").replace("type ", "").strip()
-            is_ref = (clean_pt in self.structs and not p_ptr)
+            is_ref = (clean_pt in self.structs and not p_ptr) or is_open_arr
             self.types[p_name] = (p_type, p_ptr, is_ref)
-            if i < 4:
-                self.emit(f"PUSH32  R{i + 1}", f"Spill param '{p_name}'")
+            if is_open_arr:
+                self.open_arrays.add(p_name)
+                self.emit(f"PUSH32  R{r_idx}", f"Spill open array ptr '{p_name}'")
                 self.stack_offset += 4
                 self.locals[p_name] = self.stack_offset
+                r_idx += 1
+                self.emit(f"PUSH32  R{r_idx}", f"Spill open array len '{p_name}'")
+                self.stack_offset += 4
+                self.locals[f"{p_name}__len"] = self.stack_offset
+                r_idx += 1
+            else:
+                if r_idx <= 4:
+                    self.emit(f"PUSH32  R{r_idx}", f"Spill param '{p_name}'")
+                    self.stack_offset += 4
+                    self.locals[p_name] = self.stack_offset
+                    r_idx += 1
 
         self.gen_block(func.body)
 
@@ -1436,9 +1463,41 @@ class CodeGen:
         return 4
 
     def _emit_array_elem_addr(self, node, addr_reg=14, idx_scratch=2):
-        # 1. Compute Base Address into addr_reg
         base_name = getattr(node.base, 'name', None)
-        if base_name and base_name in self.bound_addrs:
+        is_open = base_name and (base_name in self.open_arrays)
+
+        # 1. Evaluate index into idx_scratch first
+        self.gen_expr(node.index, target_reg=idx_scratch)
+
+        # 2. Runtime Bounds Check with Trap 15 (preserve idx_scratch in R3)
+        if is_open:
+            lbl_in_bounds = self.new_label("in_bounds")
+            len_off = self.stack_offset - self.locals[f"{base_name}__len"]
+            self.emit_immediate(14, len_off)
+            self.emit("ADD     R14, R15")
+            self.emit("LD32    R14, (R14)", f"Load dynamic length for '{base_name}'")
+            self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
+            self.emit("SLT     R3, R14", f"Check {base_name}[i] < dynamic length")
+            self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
+            self.emit("TRAP    15", f"Open array out-of-bounds trap ({base_name})")
+            self.emit_label(lbl_in_bounds)
+        elif base_name and base_name in self.array_lens:
+            arr_dim = self.array_lens[base_name]
+            lbl_in_bounds = self.new_label("in_bounds")
+            self.emit_immediate(14, arr_dim)
+            self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
+            self.emit("SLT     R3, R14", f"Check {base_name}[i] < {arr_dim}")
+            self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
+            self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
+            self.emit_label(lbl_in_bounds)
+
+        # 3. Compute Base Address into addr_reg after index & bounds check
+        if is_open:
+            offset = self.stack_offset - self.locals[base_name]
+            self.emit_immediate(addr_reg, offset)
+            self.emit(f"ADD     R{addr_reg}, R15")
+            self.emit(f"LD32    R{addr_reg}, (R{addr_reg})", f"Dereference open array base '{base_name}'")
+        elif base_name and base_name in self.bound_addrs:
             self.emit_immediate(addr_reg, self.bound_addrs[base_name])
         elif base_name and base_name in self.locals:
             offset = self.stack_offset - self.locals[base_name]
@@ -1448,21 +1507,6 @@ class CodeGen:
             self.emit(f"LOAD32  R{addr_reg}, _{base_name}", f"Base of global array '{base_name}'")
         else:
             self.gen_expr(node.base, target_reg=addr_reg)
-
-        # 2. Evaluate index into idx_scratch
-        self.gen_expr(node.index, target_reg=idx_scratch)
-
-        # 3. Runtime Bounds Check with Trap 15 if dimension is known
-        if base_name and base_name in self.array_lens:
-            arr_dim = self.array_lens[base_name]
-            lbl_in_bounds = self.new_label("in_bounds")
-            self.emit_immediate(3, arr_dim)
-            self.emit(f"SLT     R{idx_scratch}, R3", f"Check {base_name}[i] < {arr_dim}")
-            self.emit(f"FBRA.NZ R{idx_scratch}, {lbl_in_bounds}", "Branch if within array bounds")
-            self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
-            self.emit_label(lbl_in_bounds)
-            # Re-evaluate or preserve index
-            self.gen_expr(node.index, target_reg=idx_scratch)
 
         # 4. Scale index by element size
         base_type, _ = self._get_expr_type(node.base)
@@ -1483,8 +1527,14 @@ class CodeGen:
         elif isinstance(expr, MemberAccessNode):
             if expr.member == 'len':
                 arr_name = expr.expr.name if hasattr(expr.expr, 'name') else ""
-                arr_len = self.array_lens.get(arr_name, 0)
-                self.emit_immediate(target_reg, arr_len)
+                if arr_name in self.open_arrays:
+                    len_off = self.stack_offset - self.locals[f"{arr_name}__len"]
+                    self.emit_immediate(14, len_off)
+                    self.emit("ADD     R14, R15")
+                    self.emit(f"LD32    R{target_reg}, (R14)", f"Dynamic .len for open array '{arr_name}'")
+                else:
+                    arr_len = self.array_lens.get(arr_name, 0)
+                    self.emit_immediate(target_reg, arr_len)
                 return
 
             base_expr = expr.expr
@@ -1802,14 +1852,37 @@ class CodeGen:
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
             else:
-                sig = self.func_signatures.get(expr.name, [])
-                for i, arg in enumerate(expr.args[:4]):
-                    param_type = sig[i][0] if i < len(sig) else None
-                    param_is_ptr = sig[i][1] if i < len(sig) else False
-                    if param_type and param_type in self.structs and not param_is_ptr:
-                        self._emit_lvalue_addr(arg, target_reg=i + 1)
+                sig_info = self.func_signatures.get(expr.name, (None, False, []))
+                param_sigs = sig_info[2] if isinstance(sig_info, tuple) and len(sig_info) > 2 else []
+                cur_reg = 1
+                for i, arg in enumerate(expr.args):
+                    if cur_reg > 4:
+                        break
+                    p_sig = param_sigs[i] if i < len(param_sigs) else (None, False, False)
+                    p_type, p_is_ptr = p_sig[0], p_sig[1]
+                    p_open = p_sig[2] if len(p_sig) > 2 else False
+                    if p_open:
+                        arg_name = getattr(arg, 'name', None)
+                        if arg_name and arg_name in self.open_arrays:
+                            off = self.stack_offset - self.locals[arg_name]
+                            self.emit_immediate(cur_reg, off)
+                            self.emit(f"ADD     R{cur_reg}, R15")
+                            self.emit(f"LD32    R{cur_reg}, (R{cur_reg})", f"Forward open array ptr '{arg_name}'")
+                            len_off = self.stack_offset - self.locals[f"{arg_name}__len"]
+                            self.emit_immediate(cur_reg + 1, len_off)
+                            self.emit(f"ADD     R{cur_reg + 1}, R15")
+                            self.emit(f"LD32    R{cur_reg + 1}, (R{cur_reg + 1})", f"Forward open array len '{arg_name}'")
+                        else:
+                            self._emit_lvalue_addr(arg, target_reg=cur_reg)
+                            arr_sz = self.array_lens.get(arg_name, 0)
+                            self.emit_immediate(cur_reg + 1, arr_sz)
+                        cur_reg += 2
+                    elif p_type and p_type in self.structs and not p_is_ptr:
+                        self._emit_lvalue_addr(arg, target_reg=cur_reg)
+                        cur_reg += 1
                     else:
-                        self.gen_expr(arg, target_reg=i + 1)
+                        self.gen_expr(arg, target_reg=cur_reg)
+                        cur_reg += 1
                 self.emit(f"RCALL   _{expr.name}")
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")

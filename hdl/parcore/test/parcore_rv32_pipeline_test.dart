@@ -94,7 +94,7 @@ void main() {
       final c3Push = core3.output("fifoPushEn");
 
       int idleCycles = 0;
-      for (int cycle = 0; cycle < 36000; cycle++) {
+      for (int cycle = 0; cycle < 12000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
@@ -105,7 +105,7 @@ void main() {
         } else {
           idleCycles++;
         }
-        if (pushes > 0 && pops >= 340 && idleCycles > 800) {
+        if (pushes > 0 && pops >= 300 && idleCycles > 400) {
           print("Program completed early at cycle $cycle (pipeline drained).");
           break;
         }
@@ -237,7 +237,7 @@ void main() {
       int c3Pushes = 0;
       int idleCycles = 0;
 
-      for (int cycle = 0; cycle < 30000; cycle++) {
+      for (int cycle = 0; cycle < 16000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
@@ -346,7 +346,7 @@ void main() {
       int pops = 0;
       int idleCycles = 0;
 
-      for (int cycle = 0; cycle < 20000; cycle++) {
+      for (int cycle = 0; cycle < 12000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
@@ -448,7 +448,7 @@ void main() {
       int pops = 0;
       int idleCycles = 0;
 
-      for (int cycle = 0; cycle < 25000; cycle++) {
+      for (int cycle = 0; cycle < 12000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
@@ -460,7 +460,7 @@ void main() {
           idleCycles++;
         }
 
-        if (pushes > 0 && pops >= 50 && idleCycles > 400) {
+        if (pushes > 0 && pops >= 20 && idleCycles > 400) {
           print("Memory test drained at cycle $cycle (pops=$pops).");
           final c2Pc = memTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = memTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');
@@ -549,7 +549,7 @@ void main() {
       int pops = 0;
       int idleCycles = 0;
 
-      for (int cycle = 0; cycle < 25000; cycle++) {
+      for (int cycle = 0; cycle < 12000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {

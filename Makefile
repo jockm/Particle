@@ -24,7 +24,7 @@ APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 APP_ACT_SRCS  := $(wildcard apps/act16/*.act)
 APP_ACT_BINS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
-.PHONY: all setup test test-all test-particle test-parcore test-sim \
+.PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests \
         lint lint-asm build generate generate-particle generate-parcore \
         firmware apps clean help
 
@@ -44,6 +44,7 @@ help:
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
 	@echo "  make test-sim         - Run instruction simulator verification"
+	@echo "  make compiler-tests   - Run all ACT16 compiler test suites in psim"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build ACT16 and ASM application binaries"
@@ -99,6 +100,27 @@ test-sim: apps
 	@echo "==> Running instruction-level simulation tests (psim.py)..."
 	@if [ -f "$(BUILD_DIR)/branch_suite.bin" ]; then \
 		$(PSIM) $(BUILD_DIR)/branch_suite.bin; \
+	fi
+
+ACT_TEST_SRCS := $(wildcard apps/act16/*_test.act)
+
+compiler-tests:
+	@mkdir -p $(BUILD_DIR)
+	@echo "==> Building and running ACT16 compiler test suites..."
+	@failed=0; \
+	for src in $(ACT_TEST_SRCS); do \
+		base=$$(basename "$$src" .act); \
+		bin="$(BUILD_DIR)/$${base}.bin"; \
+		echo "----------------------------------------------------------------"; \
+		echo "Testing: $$src -> $$bin"; \
+		$(PBUILD) "$$src" -o "$$bin" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
+		$(PSIM) "$$bin" || { echo "[FAIL] $$bin failed simulation"; failed=1; break; }; \
+	done; \
+	if [ $$failed -ne 0 ]; then \
+		echo "==> [FAIL] ACT16 compiler tests failed."; \
+		exit 1; \
+	else \
+		echo "==> [PASS] All ACT16 compiler tests passed successfully."; \
 	fi
 
 # ------------------------------------------------------------------------------
