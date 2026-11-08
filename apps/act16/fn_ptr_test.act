@@ -1,0 +1,23 @@
+type BinaryOp = fn(u32, u32) -> u32;
+
+u32 add(u32 a, u32 b) {
+    return a + b;
+}
+
+u32 sub(u32 a, u32 b) {
+    return a - b;
+}
+
+void main() {
+    BinaryOp op = add;
+    u32 res1 = op(20, 30);
+
+    op = sub;
+    u32 res2 = op(50, 10);
+
+    if (res1 == 50 && res2 == 40) {
+        trap(14);
+    } else {
+        trap(15);
+    }
+}

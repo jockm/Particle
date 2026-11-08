@@ -853,6 +853,7 @@ class CodeGen:
         self.array_lens = {}
         self.bound_addrs = {}
         self.func_signatures = {}
+        self.fn_types = {}
         self.stack_offset = 0
         self.current_func_name = ""
         self.strings = []
@@ -948,6 +949,9 @@ class CodeGen:
                 fields['__size__'] = offset
                 self.structs[d.name] = fields
 
+        for d in root.decls:
+            if isinstance(d, FnTypeNode):
+                self.fn_types[d.name] = (d.param_types, d.ret_type)
         data_decls = [d for d in root.decls if isinstance(d, VarDeclNode)]
         func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
         for f in func_decls:
@@ -1414,6 +1418,9 @@ class CodeGen:
 
         elif isinstance(expr, VarAccessNode):
             name = expr.name
+            if name in self.func_signatures:
+                self.emit(f"LOAD32  R{target_reg}, _{name}", f"Function address '{name}'")
+                return
             t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
             if name in self.bound_addrs:
                 self.emit_immediate(14, self.bound_addrs[name])
@@ -1656,17 +1663,28 @@ class CodeGen:
                 self.emit(f"LD      R{target_reg}, R14")
                 return
 
-            sig = self.func_signatures.get(expr.name, [])
-            for i, arg in enumerate(expr.args[:4]):
-                param_type = sig[i][0] if i < len(sig) else None
-                param_is_ptr = sig[i][1] if i < len(sig) else False
-                if param_type and param_type in self.structs and not param_is_ptr:
-                    self._emit_lvalue_addr(arg, target_reg=i + 1)
-                else:
+            is_fn_var = expr.name in self.locals or expr.name in self.globals or expr.name in self.bound_addrs
+            if is_fn_var:
+                # Evaluate arguments into R1..R4
+                for i, arg in enumerate(expr.args[:4]):
                     self.gen_expr(arg, target_reg=i + 1)
-            self.emit(f"RCALL   _{expr.name}")
-            if target_reg != 1:
-                self.emit(f"LD      R{target_reg}, R1")
+                # Load indirect target into R13 (uses only R14 for address calc, preserving R1-R4)
+                self.gen_expr(VarAccessNode(expr.name), target_reg=13)
+                self.emit("JMP     R13, R14", f"Indirect call through '{expr.name}'")
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
+            else:
+                sig = self.func_signatures.get(expr.name, [])
+                for i, arg in enumerate(expr.args[:4]):
+                    param_type = sig[i][0] if i < len(sig) else None
+                    param_is_ptr = sig[i][1] if i < len(sig) else False
+                    if param_type and param_type in self.structs and not param_is_ptr:
+                        self._emit_lvalue_addr(arg, target_reg=i + 1)
+                    else:
+                        self.gen_expr(arg, target_reg=i + 1)
+                self.emit(f"RCALL   _{expr.name}")
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
 
     def _emit_binary_calc(self, op, r_dst, r_src):
         if op == '+':
@@ -1689,7 +1707,7 @@ class CodeGen:
             self.emit(f"SHIFTR  R{r_dst}, R{r_src}")
 
     def _emit_load_typed(self, dst, addr_reg, t_name, is_ptr):
-        if is_ptr or t_name in ('u32', 's32'):
+        if is_ptr or t_name in ('u32', 's32') or t_name in self.fn_types:
             self.emit(f"LD32    R{dst}, (R{addr_reg})")
         elif t_name == 'u8':
             self.emit(f"LD8     R{dst}, (R{addr_reg})")
@@ -1703,7 +1721,7 @@ class CodeGen:
             self.emit(f"SEXT16  R{dst}")
 
     def _emit_store_typed(self, addr_reg, src, t_name, is_ptr):
-        if is_ptr or t_name in ('u32', 's32'):
+        if is_ptr or t_name in ('u32', 's32') or t_name in self.fn_types:
             self.emit(f"LD32    (R{addr_reg}), R{src}")
         elif t_name in ('u8', 's8'):
             self.emit(f"LD8     (R{addr_reg}), R{src}")
