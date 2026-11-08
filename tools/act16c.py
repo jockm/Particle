@@ -301,19 +301,21 @@ class StructDefNode(ASTNode):
         self.fields = fields
 
 class VarDeclNode(ASTNode):
-    def __init__(self, type_name, is_ptr, name, init_expr=None):
+    def __init__(self, type_name, is_ptr, name, init_expr=None, is_const=False):
         self.type_name = type_name
         self.is_ptr = is_ptr
         self.name = name
         self.init_expr = init_expr
+        self.is_const = is_const
 
 class FuncDeclNode(ASTNode):
-    def __init__(self, ret_type, ret_ptr, name, params, body):
+    def __init__(self, ret_type, ret_ptr, name, params, body, is_inline=False):
         self.ret_type = ret_type
         self.ret_ptr = ret_ptr
         self.name = name
         self.params = params
         self.body = body
+        self.is_inline = is_inline
 
 class BlockNode(ASTNode):
     def __init__(self, stmts):
@@ -541,9 +543,9 @@ class Parser:
             self.consume('PUNCT', ')')
             if self.peek().val == ';':
                 self.consume('PUNCT', ';')
-                return FuncDeclNode(t_name, is_ptr, name, params, None)
+                return FuncDeclNode(t_name, is_ptr, name, params, None, is_inline=is_inline)
             body = self.parse_block()
-            return FuncDeclNode(t_name, is_ptr, name, params, body)
+            return FuncDeclNode(t_name, is_ptr, name, params, body, is_inline=is_inline)
         else:
             array_dim = None
             bound_addr = None
@@ -560,7 +562,7 @@ class Parser:
             if self.match('='):
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
-            node = VarDeclNode(t_name, is_ptr, name, init_expr)
+            node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const)
             node.array_dim = array_dim
             node.bound_addr = bound_addr
             return node
@@ -669,6 +671,12 @@ class Parser:
             return ReturnNode(expr)
 
         # Local Variable / Array Declaration
+        is_const = False
+        if tok.val == 'const':
+            self.consume()
+            is_const = True
+            tok = self.peek()
+
         if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32') or tok.val in ('type',) or (tok.type == 'IDENT' and self.tokens[self.pos+1].type == 'IDENT'):
             t_name = self.parse_type()
             is_ptr = False
@@ -689,7 +697,7 @@ class Parser:
             if self.match('='):
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
-            node = VarDeclNode(t_name, is_ptr, name, init_expr)
+            node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const)
             node.array_dim = array_dim
             node.bound_addr = bound_addr
             return node
@@ -858,6 +866,9 @@ class CodeGen:
         self.current_func_name = ""
         self.strings = []
         self.break_stack = []
+        self.constants = {}
+        self.inline_funcs = {}
+        self.inline_return_stack = []
 
     def emit(self, line, comment=""):
         if comment:
@@ -916,6 +927,38 @@ class CodeGen:
                 return (ret_t, ret_ptr)
             return ('u32', False)
         return ('u32', False)
+
+    def _eval_const_expr(self, expr):
+        if expr is None:
+            return 0
+        if isinstance(expr, IntLitNode):
+            return expr.val
+        elif isinstance(expr, VarAccessNode):
+            if expr.name in self.constants:
+                return self.constants[expr.name]
+            raise ValueError(f"Constant expression references non-constant symbol '{expr.name}'")
+        elif isinstance(expr, UnaryOpNode):
+            val = self._eval_const_expr(expr.operand)
+            if expr.op == '-':
+                return (-val) & 0xFFFFFFFF
+            elif expr.op == '~':
+                return (~val) & 0xFFFFFFFF
+            elif expr.op == '!':
+                return 1 if val == 0 else 0
+        elif isinstance(expr, BinaryOpNode):
+            left = self._eval_const_expr(expr.left)
+            right = self._eval_const_expr(expr.right)
+            if expr.op == '+': return (left + right) & 0xFFFFFFFF
+            elif expr.op == '-': return (left - right) & 0xFFFFFFFF
+            elif expr.op == '*': return (left * right) & 0xFFFFFFFF
+            elif expr.op == '/': return (left // right) & 0xFFFFFFFF if right != 0 else 0
+            elif expr.op == '%': return (left % right) & 0xFFFFFFFF if right != 0 else 0
+            elif expr.op == '&': return (left & right) & 0xFFFFFFFF
+            elif expr.op == '|': return (left | right) & 0xFFFFFFFF
+            elif expr.op == '^': return (left ^ right) & 0xFFFFFFFF
+            elif expr.op == '<<': return (left << (right & 31)) & 0xFFFFFFFF
+            elif expr.op == '>>': return (left >> (right & 31)) & 0xFFFFFFFF
+        raise ValueError(f"Expression cannot be evaluated as constant: {type(expr).__name__}")
 
     def generate(self, root):
         self.asm.append("; ==============================================================================")
@@ -1005,6 +1048,9 @@ class CodeGen:
             self.asm.append("; Global Variable Allocation")
             self.asm.append("; ------------------------------------------------------------------------------")
             for d in data_decls:
+                if getattr(d, 'is_const', False):
+                    self.constants[d.name] = self._eval_const_expr(d.init_expr)
+                    continue
                 self.types[d.name] = (d.type_name, d.is_ptr, False)
                 if getattr(d, 'bound_addr', None) is not None:
                     self.bound_addrs[d.name] = d.bound_addr
@@ -1029,6 +1075,9 @@ class CodeGen:
             self.asm.append("")
 
         for f in func_decls:
+            if getattr(f, 'is_inline', False):
+                self.inline_funcs[f.name] = f
+                continue
             if f.body is not None:
                 self.gen_func(f)
 
@@ -1176,6 +1225,9 @@ class CodeGen:
             return
 
         elif isinstance(stmt, VarDeclNode):
+            if getattr(stmt, 'is_const', False):
+                self.constants[stmt.name] = self._eval_const_expr(stmt.init_expr)
+                return
             self.types[stmt.name] = (stmt.type_name, stmt.is_ptr, False)
             elem_size = 4
             clean_type = stmt.type_name.replace("struct ", "").replace("type ", "").strip()
@@ -1288,7 +1340,15 @@ class CodeGen:
         elif isinstance(stmt, ReturnNode):
             if stmt.expr:
                 self.gen_expr(stmt.expr, target_reg=1)
-            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
+            if self.inline_return_stack:
+                lbl_inline_end, initial_offset = self.inline_return_stack[-1]
+                frame_extra = self.stack_offset - initial_offset
+                if frame_extra > 0:
+                    self.emit_immediate(14, frame_extra)
+                    self.emit("ADD     R15, R14", "Unwind inline stack frame on return")
+                self.emit(f"FBRA    {lbl_inline_end}", "Return from inline function")
+            else:
+                self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
 
         elif isinstance(stmt, IfNode):
             lbl_else = self.new_label("else")
@@ -1444,6 +1504,9 @@ class CodeGen:
 
         elif isinstance(expr, VarAccessNode):
             name = expr.name
+            if name in self.constants:
+                self.emit_immediate(target_reg, self.constants[name])
+                return
             if name in self.func_signatures:
                 self.emit(f"LOAD32  R{target_reg}, _{name}", f"Function address '{name}'")
                 return
@@ -1687,6 +1750,45 @@ class CodeGen:
                 self.gen_expr(expr.args[1], target_reg=3)
                 self.emit("LD32    (R3), R2")
                 self.emit(f"LD      R{target_reg}, R14")
+                return
+
+            if expr.name in self.inline_funcs:
+                func = self.inline_funcs[expr.name]
+                lbl_inline_end = self.new_label(f"inline_end_{expr.name}")
+                saved_locals = dict(self.locals)
+                saved_types = dict(self.types)
+                initial_offset = self.stack_offset
+
+                # Evaluate parameters and spill onto caller stack frame
+                for i, (p_type, p_ptr, p_name, *_) in enumerate(func.params):
+                    arg_expr = expr.args[i]
+                    clean_pt = p_type.replace("struct ", "").replace("type ", "").strip()
+                    is_ref = (clean_pt in self.structs and not p_ptr)
+                    self.types[p_name] = (p_type, p_ptr, is_ref)
+                    if is_ref:
+                        self._emit_lvalue_addr(arg_expr, target_reg=1)
+                    else:
+                        self.gen_expr(arg_expr, target_reg=1)
+                    self.emit("PUSH32  R1", f"Spill inline param '{p_name}'")
+                    self.stack_offset += 4
+                    self.locals[p_name] = self.stack_offset
+
+                self.inline_return_stack.append((lbl_inline_end, self.stack_offset))
+                self.gen_block(func.body)
+                self.emit_label(lbl_inline_end)
+                self.inline_return_stack.pop()
+
+                # Deallocate pushed inline params
+                param_bytes = len(func.params) * 4
+                if param_bytes > 0:
+                    self.emit_immediate(14, param_bytes)
+                    self.emit("ADD     R15, R14", f"Deallocate inline '{expr.name}' parameters")
+                self.stack_offset = initial_offset
+                self.locals = saved_locals
+                self.types = saved_types
+
+                if target_reg != 1:
+                    self.emit(f"LD      R{target_reg}, R1")
                 return
 
             is_fn_var = expr.name in self.locals or expr.name in self.globals or expr.name in self.bound_addrs

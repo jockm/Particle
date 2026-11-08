@@ -501,5 +501,101 @@ void main() {
       expect(regs[13]! & 0xFFFFFFFF, equals(0xFFFE1234), reason: "x13 should be 0xFFFE1234 (lw 2 halfwords combined)");
     });
 
+
+    test("Guest instructions - Control Transfer & Pipeline Flushing (BEQ, BNE, BLT, BGEU, JAL, JALR)", () async {
+      final c0Kernel = loadBinary('../../build/parcore/riscv/core0_if_uart.bin');
+      final c1Kernel = loadBinary('../../build/parcore/riscv/core1_id.bin');
+      final c2Kernel = loadBinary('../../build/parcore/riscv/core2_ex.bin');
+      final c3Kernel = loadBinary('../../build/parcore/riscv/core3_mem.bin');
+      final guestProg = loadBinary('../../build/guest_rv32_branch.bin');
+
+      final c0Merged = Uint8List(0x2000);
+      for (int i = 0; i < c0Kernel.length; i++) {
+        c0Merged[i] = c0Kernel[i];
+      }
+      const guestOffsetInTcm = 0x0500 - 0x0100;
+      for (int i = 0; i < guestProg.length; i++) {
+        c0Merged[guestOffsetInTcm + i] = guestProg[i];
+      }
+
+      final branchTop = ParcoreTop(
+        clk: clk.clk,
+        reset: reset,
+        uartRx: uartRx,
+        core0Binary: c0Merged,
+        core1Binary: c1Kernel,
+        core2Binary: c2Kernel,
+        core3Binary: c3Kernel,
+      );
+      await branchTop.build();
+
+      reset.put(1);
+      uartRx.put(1);
+
+      unawaited(Simulator.run());
+
+      await clk.waitCycles(5);
+      reset.put(0);
+
+      final core0 = branchTop.subModules.firstWhere((m) => m.name == 'core0_if');
+      final core1 = branchTop.subModules.firstWhere((m) => m.name == 'core1_id');
+      final core3 = branchTop.subModules.firstWhere((m) => m.name == 'core3_mem');
+
+      final c0FifoPush = core0.output('fifoPushEn');
+      final c1FifoPop  = core1.output('fifoPopEn');
+      final c3FifoPush = core3.output('fifoPushEn');
+
+      int pushes = 0;
+      int pops = 0;
+      int idleCycles = 0;
+
+      for (int cycle = 0; cycle < 25000; cycle++) {
+        await clk.waitCycles(1);
+        if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
+        if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
+          pops++;
+          idleCycles = 0;
+        } else if (c3FifoPush.value.isValid && c3FifoPush.value.toInt() == 1) {
+          idleCycles = 0;
+        } else {
+          idleCycles++;
+        }
+
+        if (pushes > 0 && pops >= 20 && idleCycles > 400) {
+          print("Branch test drained at cycle $cycle (pops=$pops).");
+          break;
+        }
+      }
+
+      await Simulator.endSimulation();
+
+      const int regBase = 0x0600;
+      final c1Tcm = branchTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
+      final Map<int, int> regs = {};
+      for (int i = 1; i <= 31; i++) {
+        regs[i] = c1Tcm.readWord(regBase + i * 4);
+      }
+
+      print("=== Section 6: Control Transfer & Branch Results ===");
+      print("  x1=0x${regs[1]!.toRadixString(16)} [setup x1=10]");
+      print("  x2=0x${regs[2]!.toRadixString(16)} [setup x2=10]");
+      print("  x3=0x${regs[3]!.toRadixString(16)} [beq taken & squash poison, expected 0x42]");
+      print("  x4=0x${regs[4]!.toRadixString(16)} [bne not-taken fall-through, expected 0x55]");
+      print("  x7=0x${regs[7]!.toRadixString(16)} [blt -5 < 5 taken & squash poison, expected 0x77]");
+      print("  x8=0x${regs[8]!.toRadixString(16)} [bgeu 0xFFFFFFFB >= 5 taken & squash, expected 0x88]");
+      print("  x9=0x${regs[9]!.toRadixString(16)} [jal link PC+4, expected 0x54c]");
+      print("  x10=0x${regs[10]!.toRadixString(16)} [jal target taken & squash, expected 0x99]");
+      print("  x12=0x${regs[12]!.toRadixString(16)} [jalr link PC+4, expected 0x560]");
+      print("  x13=0x${regs[13]!.toRadixString(16)} [jalr target taken & squash, expected 0xaa]");
+
+      expect(regs[3], equals(0x42), reason: "x3 should be 0x42 (BEQ taken; poison 0xBAD squashed)");
+      expect(regs[4], equals(0x55), reason: "x4 should be 0x55 (BNE fall-through)");
+      expect(regs[7], equals(0x77), reason: "x7 should be 0x77 (BLT taken; poison 0xBAD squashed)");
+      expect(regs[8], equals(0x88), reason: "x8 should be 0x88 (BGEU taken; poison 0xBAD squashed)");
+      expect(regs[9], equals(0x54C), reason: "x9 should be 0x54C (JAL link return address)");
+      expect(regs[10], equals(0x99), reason: "x10 should be 0x99 (JAL target taken; poison 0xBAD squashed)");
+      expect(regs[12], equals(0x560), reason: "x12 should be 0x560 (JALR link return address)");
+      expect(regs[13], equals(0xAA), reason: "x13 should be 0xAA (JALR target taken; poison 0xBAD squashed)");
+    });
   });
 }
