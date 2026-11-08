@@ -924,9 +924,18 @@ class CodeGen:
             return ('u32', False)
 
         elif isinstance(expr, MemberAccessNode):
-            parent_type, _ = self._get_expr_type(expr.expr)
-            s_name = parent_type.replace("struct ", "").replace("type ", "").strip()
-            _, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(expr.member, (0, 'u32', False, None))
+            possible_type = ""
+            if isinstance(expr.expr, VarAccessNode) and expr.expr.name in self.structs:
+                possible_type = expr.expr.name
+            else:
+                p_t, _ = self._get_expr_type(expr.expr)
+                possible_type = p_t.replace("struct ", "").replace("type ", "").strip()
+
+            mangled = f"{possible_type}_{expr.member}"
+            if mangled in self.func_signatures:
+                return (f"fn_{mangled}", True)
+
+            _, m_type, m_ptr, *rest = self.structs.get(possible_type, {}).get(expr.member, (0, 'u32', False, None))
             return (m_type, m_ptr)
 
         elif isinstance(expr, CallNode):
@@ -1622,6 +1631,20 @@ class CodeGen:
 
             base_expr = expr.expr
             member = expr.member
+
+            # Method function pointer introspection (Type.method or instance.method)
+            possible_type = ""
+            if isinstance(base_expr, VarAccessNode) and base_expr.name in self.structs:
+                possible_type = base_expr.name
+            else:
+                t_n, _ = self._get_expr_type(base_expr)
+                possible_type = t_n.replace("struct ", "").replace("type ", "").strip()
+
+            mangled_func = f"{possible_type}_{member}"
+            if mangled_func in self.func_signatures:
+                self.emit(f"LOAD32  R{target_reg}, _{mangled_func}", f"Method function address '{mangled_func}'")
+                return
+
             t_name, is_ptr = self._get_expr_type(base_expr)
             s_name = t_name.replace("struct ", "").replace("type ", "").strip()
             m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))

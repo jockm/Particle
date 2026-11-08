@@ -1,0 +1,33 @@
+type Point {
+    u32 x;
+    u32 y;
+};
+
+type Handler = fn(Point, u32, u32) -> Point;
+
+Point Point.move(u32 dx, u32 dy) {
+    this.x += dx;
+    this.y += dy;
+    return this;
+}
+
+void main() {
+    Point pt;
+    pt.x = 10;
+    pt.y = 20;
+
+    // 1. Method chaining verification
+    pt.move(5, 5).move(10, 15);
+
+    // 2. Method function pointer introspection verification
+    Handler h = Point.move;
+    h(pt, 1, 2);
+
+    // pt.x should be 10 + 5 + 10 + 1 = 26
+    // pt.y should be 20 + 5 + 15 + 2 = 42
+    if (pt.x == 26 && pt.y == 42) {
+        trap(14);
+    } else {
+        trap(15);
+    }
+}
