@@ -1430,18 +1430,11 @@ class CodeGen:
             lbl_end = self.new_label("endif")
             target = lbl_else if stmt.else_body else lbl_end
 
-            self.gen_expr(stmt.cond, target_reg=1)
-            lbl_take = self.new_label("if_false")
-            lbl_cont = self.new_label("if_cont")
-            self.emit(f"FBRA.Z  R1, {lbl_take}", "Hop if condition false")
-            self.emit(f"FBRA    {lbl_cont}", "Enter then-body")
-            self.emit_label(lbl_take)
-            self.emit(f"FBRA    {target}", "Wide branch to else/endif (8-bit)")
-            self.emit_label(lbl_cont)
+            self._gen_cond_jump(stmt.cond, target)
 
             self.gen_stmt(stmt.then_body)
             if stmt.else_body:
-                self.emit(f"FBRA    {lbl_end}")
+                self.emit(f"FBRA     {lbl_end}")
                 self.emit_label(lbl_else)
                 self.gen_stmt(stmt.else_body)
             self.emit_label(lbl_end)
@@ -1452,19 +1445,53 @@ class CodeGen:
             self.break_stack.append(lbl_end)
 
             self.emit_label(lbl_loop)
-            self.gen_expr(stmt.cond, target_reg=1)
-            lbl_exit = self.new_label("while_exit")
-            lbl_cont = self.new_label("while_body")
-            self.emit(f"FBRA.Z  R1, {lbl_exit}", "Hop if condition false")
-            self.emit(f"FBRA    {lbl_cont}", "Enter while body")
-            self.emit_label(lbl_exit)
-            self.emit(f"FBRA    {lbl_end}", "Wide branch to while_end (8-bit)")
-            self.emit_label(lbl_cont)
+            self._gen_cond_jump(stmt.cond, lbl_end)
 
             self.gen_stmt(stmt.body)
-            self.emit(f"BBRA    {lbl_loop}", "Loop back")
+            self.emit(f"BBRA     {lbl_loop}", "Loop back")
             self.emit_label(lbl_end)
             self.break_stack.pop()
+
+    def _gen_cond_jump(self, cond_expr, false_target):
+        # Optimized control-flow branch fusion for relational comparisons
+        lbl_hop = self.new_label("hop_false")
+        lbl_cont = self.new_label("hop_cont")
+
+        if isinstance(cond_expr, BinaryOpNode) and cond_expr.op in ('==', '!=', '<=', '>=', '<', '>'):
+            self.gen_expr(cond_expr.left, target_reg=1)
+            self.emit("PUSH32  R1", "Save LHS for comparison branch")
+            self.stack_offset += 4
+            self.gen_expr(cond_expr.right, target_reg=2)
+            self.emit("POP32   R1", "Restore LHS for comparison branch")
+            self.stack_offset -= 4
+
+            op = cond_expr.op
+            if op == '==':
+                self.emit("SEQ      R1, R2", "Single-cycle equal")
+                self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false (not equal)")
+            elif op == '!=':
+                self.emit("SNE      R1, R2", "Single-cycle not-equal")
+                self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false (equal)")
+            elif op == '<=':
+                self.emit("SLE      R1, R2", "Single-cycle less-equal")
+                self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false (!(L <= R))")
+            elif op == '>=':
+                self.emit("SLE      R2, R1", "Single-cycle greater-equal (swapped <=)")
+                self.emit(f"FBRA.Z   R2, {lbl_hop}", "Hop if condition false (!(R <= L))")
+            elif op == '<':
+                self.emit("SLE      R2, R1", "Single-cycle less check via inverted SLE")
+                self.emit(f"FBRA.NZ  R2, {lbl_hop}", "Hop if condition false (R <= L)")
+            elif op == '>':
+                self.emit("SLE      R1, R2", "Single-cycle greater check via inverted SLE")
+                self.emit(f"FBRA.NZ  R1, {lbl_hop}", "Hop if condition false (L <= R)")
+        else:
+            self.gen_expr(cond_expr, target_reg=1)
+            self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false")
+
+        self.emit(f"FBRA     {lbl_cont}", "Enter body")
+        self.emit_label(lbl_hop)
+        self.emit(f"FBRA     {false_target}", "Wide branch to target (8-bit)")
+        self.emit_label(lbl_cont)
 
     def _emit_lvalue_addr(self, node, target_reg=14):
         if isinstance(node, VarAccessNode):

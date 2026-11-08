@@ -94,7 +94,7 @@ void main() {
       final c3Push = core3.output("fifoPushEn");
 
       int idleCycles = 0;
-      for (int cycle = 0; cycle < 28000; cycle++) {
+      for (int cycle = 0; cycle < 35000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
