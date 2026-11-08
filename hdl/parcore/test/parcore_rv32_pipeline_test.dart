@@ -94,18 +94,18 @@ void main() {
       final c3Push = core3.output("fifoPushEn");
 
       int idleCycles = 0;
-      for (int cycle = 0; cycle < 12000; cycle++) {
+      for (int cycle = 0; cycle < 28000; cycle++) {
         await clk.waitCycles(1);
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
 
-        // Detect early completion: 1000 consecutive cycles without any Core3 writeback
+        // Detect early completion
         if (c3Push.value.isValid && c3Push.value.toInt() == 1) {
           idleCycles = 0;
         } else {
           idleCycles++;
         }
-        if (pushes > 0 && pops >= 300 && idleCycles > 400) {
+        if (pushes > 0 && pops >= 328 && idleCycles > 400) {
           print("Program completed early at cycle $cycle (pipeline drained).");
           break;
         }

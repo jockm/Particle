@@ -1148,7 +1148,42 @@ class CodeGen:
                     self.locals[p_name] = self.stack_offset
                     r_idx += 1
 
+        coro_steps = []
+        if func.body is not None:
+            self._collect_coroutine_steps(func.body, coro_steps)
+
+        if coro_steps:
+            self.emit("; Coroutine entry continuation dispatch")
+            task_ref = coro_steps[0][1]
+            self._emit_lvalue_addr(task_ref, target_reg=14)
+            self.emit("LD16     R1, (R14)", "Read continuation counter")
+            lbl_entry_0 = f"._step_{func.name}_0"
+            lbl_skip_0 = self.new_label("coro_skip")
+            self.emit("SEQ      R3, R1, R0", "Check if initial entry (lc == 0)")
+            self.emit(f"FBRA.Z   R3, {lbl_skip_0}", "Hop if not lc == 0")
+            self.emit(f"FBRA     {lbl_entry_0}", "Wide branch to initial entry (8-bit)")
+            self.emit_label(lbl_skip_0)
+            seen = set()
+            for s_val, _ in coro_steps:
+                if s_val not in seen:
+                    seen.add(s_val)
+                    lbl_s = f"._step_{func.name}_{s_val}"
+                    lbl_skip_s = self.new_label("coro_skip")
+                    self.emit_immediate(2, s_val)
+                    self.emit("SEQ      R3, R1, R2", f"Check step {s_val}")
+                    self.emit(f"FBRA.Z   R3, {lbl_skip_s}", "Hop if not matched")
+                    self.emit(f"FBRA     {lbl_s}", f"Wide branch to step {s_val} (8-bit)")
+                    self.emit_label(lbl_skip_s)
+            self.emit_label(lbl_entry_0)
+
         self.gen_block(func.body)
+
+        if coro_steps:
+            self.emit("; Coroutine fallthrough completion (PK_ENDED)")
+            task_ref = coro_steps[0][1]
+            self._emit_lvalue_addr(task_ref, target_reg=14)
+            self.emit("LD16     (R14), R0", "Reset continuation counter (lc = 0)")
+            self.emit("LD       R1, 3", "Status PK_ENDED (3)")
 
         self.emit_label(f"._epilogue_{func.name}")
         if func.name == "main":
@@ -1171,6 +1206,19 @@ class CodeGen:
         for stmt in block.stmts:
             self.gen_stmt(stmt)
 
+
+    def _collect_coroutine_steps(self, node, steps):
+        if isinstance(node, (YieldNode, WaitUntilNode)):
+            steps.append((node.step_const, node.task_ref))
+        elif isinstance(node, BlockNode):
+            for s in node.stmts:
+                self._collect_coroutine_steps(s, steps)
+        elif isinstance(node, IfNode):
+            self._collect_coroutine_steps(node.then_body, steps)
+            if node.else_body:
+                self._collect_coroutine_steps(node.else_body, steps)
+        elif isinstance(node, WhileNode):
+            self._collect_coroutine_steps(node.body, steps)
 
     def _collect_switch_labels(self, node, cases, default_holder):
         if isinstance(node, CaseLabelNode):
@@ -1342,25 +1390,25 @@ class CodeGen:
 
         elif isinstance(stmt, YieldNode):
             # yield(task, step): task.lc = step; return PK_YIELDED; case step:
-            self.gen_expr(stmt.task_ref, target_reg=14)
+            self._emit_lvalue_addr(stmt.task_ref, target_reg=14)
             self.emit_immediate(1, stmt.step_const)
-            self.emit("LD16    (R14), R1", "Set continuation counter")
-            self.emit("LD      R1, 1", "PK_YIELDED status")
-            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
-            self.emit_label(f"._step_{stmt.step_const}")
+            self.emit("LD16     (R14), R1", "Set continuation counter")
+            self.emit("LD       R1, 1", "PK_YIELDED status (1)")
+            self.emit(f"FBRA     ._epilogue_{self.current_func_name}")
+            self.emit_label(f"._step_{self.current_func_name}_{stmt.step_const}")
             return
 
         elif isinstance(stmt, WaitUntilNode):
             # wait_until(task, step, cond): case step: if (!cond) { task.lc = step; return PK_WAITING; }
-            self.emit_label(f"._step_{stmt.step_const}")
+            self.emit_label(f"._step_{self.current_func_name}_{stmt.step_const}")
             lbl_continue = self.new_label("wait_cont")
             self.gen_expr(stmt.cond, target_reg=1)
-            self.emit(f"FBRA.P  R1, {lbl_continue}", "Condition satisfied, proceed")
-            self.gen_expr(stmt.task_ref, target_reg=14)
+            self.emit(f"FBRA.NZ  R1, {lbl_continue}", "Condition satisfied, proceed")
+            self._emit_lvalue_addr(stmt.task_ref, target_reg=14)
             self.emit_immediate(1, stmt.step_const)
-            self.emit("LD16    (R14), R1", "Set continuation counter")
-            self.emit("LD      R1, 0", "PK_WAITING status")
-            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
+            self.emit("LD16     (R14), R1", "Set continuation counter")
+            self.emit("LD       R1, 0", "PK_WAITING status (0)")
+            self.emit(f"FBRA     ._epilogue_{self.current_func_name}")
             self.emit_label(lbl_continue)
             return
 
