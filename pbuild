@@ -4,7 +4,6 @@
 # ==============================================================================
 set -euo pipefail
 
-# Self-locating base path: works when invoked locally or anywhere from $PATH
 SELF_SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SELF_SOURCE" ]; do
     DIR="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
@@ -34,6 +33,7 @@ Options:
   -I, --include <dir>    Additional include search directory (repeatable)
   -D, --define <sym>     Predefine preprocessor symbol (repeatable)
       --format <fmt>     Output format: bin or hex (default: bin)
+  -v, --verbose          Verbose output
   -h, --help             Show this help message and exit
 
 Workflow:
@@ -45,10 +45,10 @@ HELP_TEXT
 SOURCE=""
 OUTPUT=""
 FORMAT="bin"
+VERBOSE=0
 INCLUDES=()
 DEFINES=()
 
-# Always include repo's lib/ by default if present
 if [ -d "$LIB_DIR" ]; then
     INCLUDES+=("-I" "$LIB_DIR")
 fi
@@ -58,6 +58,10 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             print_usage
             exit 0
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
             ;;
         -o|--output)
             if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
@@ -140,23 +144,41 @@ if [ -n "$OUTPUT_DIR" ]; then
     mkdir -p "$OUTPUT_DIR"
 fi
 
+# Run a command quietly, printing its output only on failure or warning
+run_step() {
+    local label="$1"
+    shift
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "==> [pbuild] $label"
+        "$@"
+    else
+        local tmp
+        tmp=$(mktemp)
+        if ! "$@" > "$tmp" 2>&1; then
+            echo "==> [pbuild] FAILED: $label" >&2
+            cat "$tmp" >&2
+            rm -f "$tmp"
+            exit 1
+        fi
+        # If output contains warnings, show them
+        if grep -qi "warning" "$tmp"; then
+            cat "$tmp"
+        fi
+        rm -f "$tmp"
+    fi
+}
+
 if [ "$EXT" = "act" ]; then
     STAGE_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$STAGE_ASM")"
-    echo "==> [pbuild] Compiling ACT16: $SOURCE -> $STAGE_ASM"
-    "$PYTHON" "$ACT16C" "$SOURCE" -o "$STAGE_ASM" ${DEFINES[@]+"${DEFINES[@]}"}
-
-    echo "==> [pbuild] Linting: $STAGE_ASM"
-    "$PYTHON" "$PASM_LINT" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"}
-
-    echo "==> [pbuild] Assembling: $STAGE_ASM -> $OUTPUT"
-    "$PYTHON" "$PASM" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Compiling ACT16: $SOURCE -> $STAGE_ASM" "$PYTHON" "$ACT16C" "$SOURCE" -o "$STAGE_ASM" ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Linting: $STAGE_ASM" "$PYTHON" "$PASM_LINT" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"}
+    run_step "Assembling: $STAGE_ASM -> $OUTPUT" "$PYTHON" "$PASM" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
 elif [ "$EXT" = "asm" ]; then
-    echo "==> [pbuild] Linting: $SOURCE"
-    "$PYTHON" "$PASM_LINT" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"}
-
-    echo "==> [pbuild] Assembling: $SOURCE -> $OUTPUT"
-    "$PYTHON" "$PASM" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Linting: $SOURCE" "$PYTHON" "$PASM_LINT" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"}
+    run_step "Assembling: $SOURCE -> $OUTPUT" "$PYTHON" "$PASM" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
 fi
 
-echo "==> [pbuild] Successfully built $OUTPUT"
+if [ "$VERBOSE" -eq 1 ]; then
+    echo "==> [pbuild] Successfully built $OUTPUT"
+fi
