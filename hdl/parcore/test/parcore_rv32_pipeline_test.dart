@@ -32,14 +32,16 @@ void main() {
       clk = SimpleClockGenerator(10);
       reset = Logic(name: 'reset');
       uartRx = Logic(name: 'uart_rx');
+    });
 
+    test("Guest instructions retire into Core 1 architectural registers (x1..x5)", () async {
       final c0Kernel = loadBinary('../../build/parcore/riscv/core0_if_uart.bin');
       final c1Kernel = loadBinary('../../build/parcore/riscv/core1_id.bin');
       final c2Kernel = loadBinary('../../build/parcore/riscv/core2_ex.bin');
       final c3Kernel = loadBinary('../../build/parcore/riscv/core3_mem.bin');
       final guestProg = loadBinary('../../build/guest_rv32_test.bin');
 
-      final c0Merged = Uint8List(0x2000); // 8KB
+      final c0Merged = Uint8List(0x2000);
       for (int i = 0; i < c0Kernel.length; i++) {
         c0Merged[i] = c0Kernel[i];
       }
@@ -57,11 +59,8 @@ void main() {
         core2Binary: c2Kernel,
         core3Binary: c3Kernel,
       );
-
       await top.build();
-    });
 
-    test("Guest instructions retire into Core 1 architectural registers (x1..x5)", () async {
       reset.put(1);
       uartRx.put(1);
 

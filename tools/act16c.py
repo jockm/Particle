@@ -898,6 +898,19 @@ class CodeGen:
             s_name = parent_type.replace("struct ", "").strip()
             _, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(expr.member, (0, 'u32', False, None))
             return (m_type, m_ptr)
+
+        elif isinstance(expr, CallNode):
+            if expr.name.startswith("__METHOD__"):
+                m_name = expr.name.replace("__METHOD__", "")
+                rcv_t, _ = self._get_expr_type(expr.args[0])
+                s_name = rcv_t.replace("struct ", "").replace("type ", "").strip()
+                fname = f"{s_name}_{m_name}"
+            else:
+                fname = expr.name
+            if fname in self.func_signatures:
+                ret_t, ret_ptr, _ = self.func_signatures[fname]
+                return (ret_t, ret_ptr)
+            return ('u32', False)
         return ('u32', False)
 
     def generate(self, root):
@@ -935,7 +948,7 @@ class CodeGen:
         data_decls = [d for d in root.decls if isinstance(d, VarDeclNode)]
         func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
         for f in func_decls:
-            self.func_signatures[f.name] = [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1]) for p in f.params]
+            self.func_signatures[f.name] = (f.ret_type.replace("struct ", "").replace("type ", "").strip(), f.ret_ptr, [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1]) for p in f.params])
         has_main = any(f.name == "main" for f in func_decls)
 
         if has_main:
@@ -1600,13 +1613,22 @@ class CodeGen:
                 s_name = t_name.replace("struct ", "").replace("type ", "").strip()
                 target_func = f"{s_name}_{m_name}"
                 
-                # Receiver is passed by reference (&rcv_node)
-                # First argument register R1 gets address of receiver
-                self._emit_lvalue_addr(rcv_node, target_reg=1)
+                if isinstance(rcv_node, CallNode):
+                    # Evaluated receiver returned pointer in R1
+                    self.gen_expr(rcv_node, target_reg=1)
+                else:
+                    # Pass receiver by reference into R1
+                    self._emit_lvalue_addr(rcv_node, target_reg=1)
                 
-                # Remaining arguments go to R2..R4
-                for i, arg in enumerate(expr.args[1:4]):
-                    self.gen_expr(arg, target_reg=i + 2)
+                # If there are arguments, preserve receiver pointer (R1) across evaluation
+                has_args = len(expr.args) > 1
+                if has_args:
+                    self.emit("PUSH32  R1", "Preserve receiver pointer")
+                    self.stack_offset += 4
+                    for i, arg in enumerate(expr.args[1:4]):
+                        self.gen_expr(arg, target_reg=i + 2)
+                    self.emit("POP32   R1", "Restore receiver pointer")
+                    self.stack_offset -= 4
                     
                 self.emit(f"RCALL   _{target_func}")
                 if target_reg != 1:
