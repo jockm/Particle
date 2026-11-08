@@ -1,6 +1,15 @@
 # TODO
 
 - Rename hdl/rohd to hdl/particle
+- Rename Act16 to Enact
+- Make lint more quiet
+- Make pbuild more quiet
+
+- Dart Conversion
+    - Convert Compiler to Dart
+    - Convert Assembler to Dart
+    - Convert Simulator to Dart
+    - Convert Linter to Dart
 
 - Comprehensive Tests for
     - Assembler

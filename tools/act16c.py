@@ -295,10 +295,12 @@ class ProgramNode(ASTNode):
     def __init__(self, decls):
         self.decls = decls
 
-class StructDefNode(ASTNode):
+class TypeDefNode(ASTNode):
     def __init__(self, name, fields):
         self.name = name
         self.fields = fields
+
+StructDefNode = TypeDefNode
 
 class VarDeclNode(ASTNode):
     def __init__(self, type_name, is_ptr, name, init_expr=None, is_const=False):
@@ -496,7 +498,7 @@ class Parser:
                 self.consume('PUNCT', '}')
                 if self.peek().val == ';':
                     self.consume('PUNCT', ';')
-                return StructDefNode(t_name, fields)
+                return TypeDefNode(t_name, fields)
 
         is_const = False
         if self.peek().val == 'const':
@@ -871,7 +873,8 @@ class CodeGen:
         self.locals = {}
         self.globals = set()
         self.types = {}
-        self.structs = {}
+        self.type_records = {}
+        self.structs = self.type_records
         self.array_lens = {}
         self.bound_addrs = {}
         self.func_signatures = {}
@@ -929,7 +932,7 @@ class CodeGen:
                 possible_type = expr.expr.name
             else:
                 p_t, _ = self._get_expr_type(expr.expr)
-                possible_type = p_t.replace("struct ", "").replace("type ", "").strip()
+                possible_type = self._clean_type(p_t)
 
             mangled = f"{possible_type}_{expr.member}"
             if mangled in self.func_signatures:
@@ -942,7 +945,7 @@ class CodeGen:
             if expr.name.startswith("__METHOD__"):
                 m_name = expr.name.replace("__METHOD__", "")
                 rcv_t, _ = self._get_expr_type(expr.args[0])
-                s_name = rcv_t.replace("struct ", "").replace("type ", "").strip()
+                s_name = self._clean_type(rcv_t)
                 fname = f"{s_name}_{m_name}"
             else:
                 fname = expr.name
@@ -1049,7 +1052,7 @@ class CodeGen:
         func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
         for f in func_decls:
             self.func_signatures[f.name] = (
-                f.ret_type.replace("struct ", "").replace("type ", "").strip(),
+                self._clean_type(f.ret_type),
                 f.ret_ptr,
                 [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1], len(p) > 3 and p[3]) for p in f.params]
             )
@@ -1145,7 +1148,7 @@ class CodeGen:
         for p in func.params:
             p_type, p_ptr, p_name = p[0], p[1], p[2]
             is_open_arr = p[3] if len(p) > 3 else False
-            clean_pt = p_type.replace("struct ", "").replace("type ", "").strip()
+            clean_pt = self._clean_type(p_type)
             is_ref = (clean_pt in self.structs and not p_ptr) or is_open_arr
             self.types[p_name] = (p_type, p_ptr, is_ref)
             if is_open_arr:
@@ -1322,7 +1325,7 @@ class CodeGen:
                 return
             self.types[stmt.name] = (stmt.type_name, stmt.is_ptr, False)
             elem_size = 4
-            clean_type = stmt.type_name.replace("struct ", "").replace("type ", "").strip()
+            clean_type = self._clean_type(stmt.type_name)
             if stmt.type_name in ('u8', 's8'):
                 elem_size = 1
             elif stmt.type_name in ('u16', 's16'):
@@ -1389,7 +1392,7 @@ class CodeGen:
                 base_expr = stmt.lhs.expr
                 member = stmt.lhs.member
                 t_name, is_ptr = self._get_expr_type(base_expr)
-                s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+                s_name = self._clean_type(t_name)
                 m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
                 self._emit_lvalue_addr(base_expr, target_reg=14)
                 if m_offset > 0:
@@ -1529,7 +1532,7 @@ class CodeGen:
             base_expr = node.expr
             member = node.member
             t_name, _ = self._get_expr_type(base_expr)
-            s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+            s_name = self._clean_type(t_name)
             m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
             self._emit_lvalue_addr(base_expr, target_reg=target_reg)
             if m_offset > 0:
@@ -1545,7 +1548,7 @@ class CodeGen:
     def _get_elem_size(self, t_name, is_ptr):
         if is_ptr:
             return 4
-        clean = t_name.replace("struct ", "").replace("type ", "").strip()
+        clean = self._clean_type(t_name)
         if clean in ('u8', 's8'):
             return 1
         elif clean in ('u16', 's16'):
@@ -1638,7 +1641,7 @@ class CodeGen:
                 possible_type = base_expr.name
             else:
                 t_n, _ = self._get_expr_type(base_expr)
-                possible_type = t_n.replace("struct ", "").replace("type ", "").strip()
+                possible_type = self._clean_type(t_n)
 
             mangled_func = f"{possible_type}_{member}"
             if mangled_func in self.func_signatures:
@@ -1646,7 +1649,7 @@ class CodeGen:
                 return
 
             t_name, is_ptr = self._get_expr_type(base_expr)
-            s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+            s_name = self._clean_type(t_name)
             m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
             self._emit_lvalue_addr(base_expr, target_reg=14)
             if m_offset > 0:
@@ -1748,7 +1751,7 @@ class CodeGen:
                 base_expr = expr.lhs.expr
                 member = expr.lhs.member
                 t_name, is_ptr = self._get_expr_type(base_expr)
-                s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+                s_name = self._clean_type(t_name)
                 m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
                 self._emit_lvalue_addr(base_expr, target_reg=14)
                 if m_offset > 0:
@@ -1769,7 +1772,7 @@ class CodeGen:
                     base_expr = expr.left.expr
                     member = expr.left.member
                     t_name, is_ptr = self._get_expr_type(base_expr)
-                    s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+                    s_name = self._clean_type(t_name)
                     m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
                     self.emit("PUSH32  R1", "Preserve RHS")
                     self.stack_offset += 4
@@ -1866,7 +1869,7 @@ class CodeGen:
                 if isinstance(rcv_node, UnaryOpNode) and rcv_node.op == '&':
                     rcv_node = rcv_node.operand
                 t_name, _ = self._get_expr_type(rcv_node)
-                s_name = t_name.replace("struct ", "").replace("type ", "").strip()
+                s_name = self._clean_type(t_name)
                 target_func = f"{s_name}_{m_name}"
                 
                 if isinstance(rcv_node, CallNode):
@@ -1918,7 +1921,7 @@ class CodeGen:
                 # Evaluate parameters and spill onto caller stack frame
                 for i, (p_type, p_ptr, p_name, *_) in enumerate(func.params):
                     arg_expr = expr.args[i]
-                    clean_pt = p_type.replace("struct ", "").replace("type ", "").strip()
+                    clean_pt = self._clean_type(p_type)
                     is_ref = (clean_pt in self.structs and not p_ptr)
                     self.types[p_name] = (p_type, p_ptr, is_ref)
                     if is_ref:
