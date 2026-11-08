@@ -1893,15 +1893,17 @@ class CodeGen:
                     self._emit_lvalue_addr(rcv_node, target_reg=1)
                 
                 # If there are arguments, preserve receiver pointer (R1) across evaluation
+                sig_info = self.func_signatures.get(target_func, (None, False, []))
+                param_sigs = sig_info[2] if isinstance(sig_info, tuple) and len(sig_info) > 2 else []
+                method_param_sigs = param_sigs[1:] if len(param_sigs) > 1 else []
                 has_args = len(expr.args) > 1
                 if has_args:
-                    self.emit("PUSH32  R1", "Preserve receiver pointer")
+                    self.emit("PUSH32   R1", "Preserve receiver pointer")
                     self.stack_offset += 4
-                    for i, arg in enumerate(expr.args[1:4]):
-                        self.gen_expr(arg, target_reg=i + 2)
-                    self.emit("POP32   R1", "Restore receiver pointer")
+                    self._gen_call_arg_list(expr.args[1:], method_param_sigs, start_reg=2)
+                    self.emit("POP32    R1", "Restore receiver pointer")
                     self.stack_offset -= 4
-                    
+                
                 self.emit(f"RCALL   _{target_func}")
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
@@ -1976,76 +1978,73 @@ class CodeGen:
             else:
                 sig_info = self.func_signatures.get(expr.name, (None, False, []))
                 param_sigs = sig_info[2] if isinstance(sig_info, tuple) and len(sig_info) > 2 else []
-                cur_reg = 1
-                for i, arg in enumerate(expr.args):
-                    if cur_reg > 4:
-                        break
-                    p_sig = param_sigs[i] if i < len(param_sigs) else (None, False, False)
-                    p_type, p_is_ptr = p_sig[0], p_sig[1]
-                    p_open = p_sig[2] if len(p_sig) > 2 else False
-                    if p_open:
-                        if isinstance(arg, SliceNode):
-                            base_expr = arg.base
-                            base_name = getattr(base_expr, 'name', None)
-                            elem_t, _ = self._get_expr_type(base_expr)
-                            elem_sz = self._get_elem_size(elem_t, False)
-
-                            # 1. Base pointer into cur_reg
-                            if base_name and base_name in self.open_arrays:
-                                off = self.stack_offset - self.locals[base_name]
-                                self.emit_immediate(cur_reg, off)
-                                self.emit(f"ADD     R{cur_reg}, R15")
-                                self.emit(f"LD32    R{cur_reg}, (R{cur_reg})", f"Base of open array slice '{base_name}'")
-                            else:
-                                self._emit_lvalue_addr(base_expr, target_reg=cur_reg)
-
-                            # 2. Add start * elem_sz offset
-                            if isinstance(arg.start_expr, IntLitNode):
-                                start_val = arg.start_expr.val
-                                if start_val > 0:
-                                    self.emit_immediate(14, start_val * elem_sz)
-                                    self.emit(f"ADD     R{cur_reg}, R14", "Add slice start offset")
-                            else:
-                                self.gen_expr(arg.start_expr, target_reg=14)
-                                if elem_sz == 2:
-                                    self.emit("SHIFTL  R14, 1")
-                                elif elem_sz == 4:
-                                    self.emit("SHIFTL  R14, 2")
-                                self.emit(f"ADD     R{cur_reg}, R14", "Add dynamic slice start offset")
-
-                            # 3. Calculate length into cur_reg + 1
-                            if isinstance(arg.start_expr, IntLitNode) and isinstance(arg.end_expr, IntLitNode):
-                                slice_len = max(0, arg.end_expr.val - arg.start_expr.val)
-                                self.emit_immediate(cur_reg + 1, slice_len)
-                            else:
-                                self.gen_expr(arg.end_expr, target_reg=cur_reg + 1)
-                                self.gen_expr(arg.start_expr, target_reg=14)
-                                self.emit(f"SUB     R{cur_reg + 1}, R14", "Slice length = end - start")
-                        else:
-                            arg_name = getattr(arg, 'name', None)
-                            if arg_name and arg_name in self.open_arrays:
-                                off = self.stack_offset - self.locals[arg_name]
-                                self.emit_immediate(cur_reg, off)
-                                self.emit(f"ADD     R{cur_reg}, R15")
-                                self.emit(f"LD32    R{cur_reg}, (R{cur_reg})", f"Forward open array ptr '{arg_name}'")
-                                len_off = self.stack_offset - self.locals[f"{arg_name}__len"]
-                                self.emit_immediate(cur_reg + 1, len_off)
-                                self.emit(f"ADD     R{cur_reg + 1}, R15")
-                                self.emit(f"LD32    R{cur_reg + 1}, (R{cur_reg + 1})", f"Forward open array len '{arg_name}'")
-                            else:
-                                self._emit_lvalue_addr(arg, target_reg=cur_reg)
-                                arr_sz = self.array_lens.get(arg_name, 0)
-                                self.emit_immediate(cur_reg + 1, arr_sz)
-                        cur_reg += 2
-                    elif p_type and p_type in self.structs and not p_is_ptr:
-                        self._emit_lvalue_addr(arg, target_reg=cur_reg)
-                        cur_reg += 1
-                    else:
-                        self.gen_expr(arg, target_reg=cur_reg)
-                        cur_reg += 1
+                self._gen_call_arg_list(expr.args, param_sigs, start_reg=1)
                 self.emit(f"RCALL   _{expr.name}")
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
+
+    def _gen_call_arg_list(self, args, param_sigs, start_reg=1):
+        cur_reg = start_reg
+        for i, arg in enumerate(args):
+            if cur_reg > 4:
+                break
+            p_sig = param_sigs[i] if i < len(param_sigs) else (None, False, False)
+            p_type, p_is_ptr = p_sig[0], p_sig[1]
+            p_open = p_sig[2] if len(p_sig) > 2 else False
+            if p_open:
+                if isinstance(arg, SliceNode):
+                    base_expr = arg.base
+                    base_name = getattr(base_expr, "name", None)
+                    elem_t, _ = self._get_expr_type(base_expr)
+                    elem_sz = self._get_elem_size(elem_t, False)
+                    if base_name and base_name in self.open_arrays:
+                        off = self.stack_offset - self.locals[base_name]
+                        self.emit_immediate(cur_reg, off)
+                        self.emit(f"ADD     R{cur_reg}, R15")
+                        self.emit(f"LD32    R{cur_reg}, (R{cur_reg})", f"Base of open array slice '{base_name}'")
+                    else:
+                        self._emit_lvalue_addr(base_expr, target_reg=cur_reg)
+                    if isinstance(arg.start_expr, IntLitNode):
+                        start_val = arg.start_expr.val
+                        if start_val > 0:
+                            self.emit_immediate(14, start_val * elem_sz)
+                            self.emit(f"ADD     R{cur_reg}, R14", "Add slice start offset")
+                    else:
+                        self.gen_expr(arg.start_expr, target_reg=14)
+                        if elem_sz == 2:
+                            self.emit("SHIFTL  R14, 1")
+                        elif elem_sz == 4:
+                            self.emit("SHIFTL  R14, 2")
+                        self.emit(f"ADD     R{cur_reg}, R14", "Add dynamic slice start offset")
+                    if isinstance(arg.start_expr, IntLitNode) and isinstance(arg.end_expr, IntLitNode):
+                        slice_len = max(0, arg.end_expr.val - arg.start_expr.val)
+                        self.emit_immediate(cur_reg + 1, slice_len)
+                    else:
+                        self.gen_expr(arg.end_expr, target_reg=cur_reg + 1)
+                        self.gen_expr(arg.start_expr, target_reg=14)
+                        self.emit(f"SUB     R{cur_reg + 1}, R14", "Slice length = end - start")
+                else:
+                    arg_name = getattr(arg, "name", None)
+                    if arg_name and arg_name in self.open_arrays:
+                        off = self.stack_offset - self.locals[arg_name]
+                        self.emit_immediate(cur_reg, off)
+                        self.emit(f"ADD     R{cur_reg}, R15")
+                        self.emit(f"LD32    R{cur_reg}, (R{cur_reg})", f"Forward open array ptr '{arg_name}'")
+                        len_off = self.stack_offset - self.locals[f"{arg_name}__len"]
+                        self.emit_immediate(cur_reg + 1, len_off)
+                        self.emit(f"ADD     R{cur_reg + 1}, R15")
+                        self.emit(f"LD32    R{cur_reg + 1}, (R{cur_reg + 1})", f"Forward open array len '{arg_name}'")
+                    else:
+                        self._emit_lvalue_addr(arg, target_reg=cur_reg)
+                        arr_sz = self.array_lens.get(arg_name, 0)
+                        self.emit_immediate(cur_reg + 1, arr_sz)
+                cur_reg += 2
+            elif p_type and p_type in self.structs and not p_is_ptr:
+                self._emit_lvalue_addr(arg, target_reg=cur_reg)
+                cur_reg += 1
+            else:
+                self.gen_expr(arg, target_reg=cur_reg)
+                cur_reg += 1
 
     def _emit_binary_calc(self, op, r_dst, r_src):
         if op == '+':
