@@ -539,6 +539,9 @@ class Parser:
                     else:
                         break
             self.consume('PUNCT', ')')
+            if self.peek().val == ';':
+                self.consume('PUNCT', ';')
+                return FuncDeclNode(t_name, is_ptr, name, params, None)
             body = self.parse_block()
             return FuncDeclNode(t_name, is_ptr, name, params, body)
         else:
@@ -996,7 +999,8 @@ class CodeGen:
             self.asm.append("")
 
         for f in func_decls:
-            self.gen_func(f)
+            if f.body is not None:
+                self.gen_func(f)
 
         if self.strings:
             self.asm.append("; ------------------------------------------------------------------------------")
