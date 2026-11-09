@@ -17,6 +17,7 @@ PYTHON="${PYTHON:-python3}"
 PASM="${PROJECT_ROOT}/tools/pasm.py"
 PASM_LINT="${PROJECT_ROOT}/tools/pasm_lint.py"
 ACT16C="${PROJECT_ROOT}/tools/act16c.py"
+PSIM="${PROJECT_ROOT}/tools/psim.py"
 LIB_DIR="${PROJECT_ROOT}/lib"
 
 print_usage() {
@@ -33,14 +34,20 @@ Options:
   -I, --include <dir>    Additional include search directory (repeatable)
   -D, --define <sym>     Predefine preprocessor symbol (repeatable)
       --format <fmt>     Output format: bin or hex (default: bin)
-  -fbounds-check         Enable array bounds checking (default)
-  -fno-bounds-check      Disable array bounds checking
+      --bounds-check, -fbounds-check
+                         Enable array bounds checking (default)
+      --no-bounds-check, -fno-bounds-check
+                         Disable array bounds checking
+      --sim              Run psim simulator after successful build
+      --debug            Pass --debug to psim when running with --sim
+      --base <addr>      Pass --base <addr> to psim when running with --sim
   -v, --verbose          Verbose output
   -h, --help             Show this help message and exit
 
 Workflow:
   - If input is .act: Compiles to .asm, runs pasm_lint, then assembles to binary.
   - If input is .asm: Runs pasm_lint, then assembles to binary.
+  - If --sim is specified: Executes tools/psim.py on the built binary.
 HELP_TEXT
 }
 
@@ -48,6 +55,9 @@ SOURCE=""
 OUTPUT=""
 FORMAT="bin"
 VERBOSE=0
+RUN_SIM=0
+SIM_DEBUG=0
+SIM_BASE=""
 INCLUDES=()
 DEFINES=()
 ACT16_FLAGS=()
@@ -90,14 +100,6 @@ while [[ $# -gt 0 ]]; do
             DEFINES+=("-D" "$2")
             shift 2
             ;;
-        -fbounds-check|--bounds-check)
-            ACT16_FLAGS+=("-fbounds-check")
-            shift
-            ;;
-        -fno-bounds-check|--no-bounds-check)
-            ACT16_FLAGS+=("-fno-bounds-check")
-            shift
-            ;;
         --format)
             if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo "Error: Option --format requires an argument (bin or hex)." >&2
@@ -108,6 +110,30 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             FORMAT="$2"
+            shift 2
+            ;;
+        --bounds-check|-fbounds-check)
+            ACT16_FLAGS+=("-fbounds-check")
+            shift
+            ;;
+        --no-bounds-check|-fno-bounds-check)
+            ACT16_FLAGS+=("-fno-bounds-check")
+            shift
+            ;;
+        --sim)
+            RUN_SIM=1
+            shift
+            ;;
+        --debug)
+            SIM_DEBUG=1
+            shift
+            ;;
+        --base)
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: Option --base requires an argument." >&2
+                exit 1
+            fi
+            SIM_BASE="$2"
             shift 2
             ;;
         -*)
@@ -192,4 +218,23 @@ fi
 
 if [ "$VERBOSE" -eq 1 ]; then
     echo "==> [pbuild] Successfully built $OUTPUT"
+fi
+
+# ------------------------------------------------------------------------------
+# Simulator Invocation
+# ------------------------------------------------------------------------------
+if [ "$RUN_SIM" -eq 1 ]; then
+    SIM_ARGS=()
+    if [ "$SIM_DEBUG" -eq 1 ]; then
+        SIM_ARGS+=("--debug")
+    fi
+    if [ -n "$SIM_BASE" ]; then
+        SIM_ARGS+=("--base" "$SIM_BASE")
+    fi
+
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo "==> [pbuild] Running simulator: $PYTHON $PSIM $OUTPUT ${SIM_ARGS[*]}"
+    fi
+
+    "$PYTHON" "$PSIM" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
 fi
