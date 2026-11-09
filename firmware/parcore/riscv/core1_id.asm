@@ -606,7 +606,10 @@ _emit_auipc:
 ; SYSTEM Instruction Decoder (Opcode 0x73: ECALL, EBREAK, MRET, CSR)
 ; ==============================================================================
 _emit_system:
-    ; funct3 is in R14 (inst[14:12])
+    ; Extract funct3 from R11[14:12]
+    LD      R14, R11
+    SHIFTR  R14, 12
+    AND     R14, 7
     FBRA.NZ R14, _emit_csr_rw
 
     ; funct3 == 0: ECALL, EBREAK, or MRET based on inst[31:20]

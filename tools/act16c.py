@@ -551,8 +551,8 @@ class Parser:
                     p_name = self.consume('IDENT').val
                     is_open_arr = False
                     if self.peek().val == '[':
-                        self.consume('PUNCT', '[')
-                        self.consume('PUNCT', ']')
+                        self.consume("PUNCT", "[")
+                        self.consume("PUNCT", "]")
                         is_open_arr = True
                         p_ptr = True
                     params.append((p_type, p_ptr, p_name, is_open_arr))
@@ -570,10 +570,10 @@ class Parser:
             array_dims = []
             bound_addr = None
             while self.peek().val == '[':
-                self.consume('PUNCT', '[')
+                self.consume("PUNCT", "[")
                 dim_tok = self.consume()
                 array_dims.append(int(dim_tok.val, 0))
-                self.consume('PUNCT', ']')
+                self.consume("PUNCT", "]")
             if self.peek().val == '@':
                 self.consume('PUNCT', '@')
                 addr_tok = self.consume()
@@ -708,9 +708,9 @@ class Parser:
             array_dims = []
             bound_addr = None
             while self.peek().val == '[':
-                self.consume('PUNCT', '[')
+                self.consume("PUNCT", "[")
                 array_dims.append(int(self.consume().val, 0))
-                self.consume('PUNCT', ']')
+                self.consume("PUNCT", "]")
             if self.peek().val == '@':
                 self.consume('PUNCT', '@')
                 bound_addr = int(self.consume().val, 0)
@@ -801,9 +801,9 @@ class Parser:
 
 
     def parse_array_access(self, base_node):
-        self.consume('PUNCT', '[')
+        self.consume("PUNCT", "[")
         idx = self.parse_expr()
-        self.consume('PUNCT', ']')
+        self.consume("PUNCT", "]")
         return ArrayAccessNode(base_node, idx)
 
     def parse_postfix(self):
@@ -827,16 +827,26 @@ class Parser:
                 else:
                     node = MemberAccessNode(node, member)
             elif self.peek().val == '[':
-                self.consume('PUNCT', '[')
-                start_expr = self.parse_expr()
+                self.consume("PUNCT", "[")
                 if self.peek().val == '..':
-                    self.consume('OP_RANGE', '..')
-                    end_expr = self.parse_expr()
-                    self.consume('PUNCT', ']')
-                    node = SliceNode(node, start_expr, end_expr)
+                    self.consume("OP_RANGE", "..")
+                    end_expr = None
+                    if self.peek().val != ']':
+                        end_expr = self.parse_expr()
+                    self.consume("PUNCT", "]")
+                    node = SliceNode(node, None, end_expr)
                 else:
-                    self.consume('PUNCT', ']')
-                    node = ArrayAccessNode(node, start_expr)
+                    start_expr = self.parse_expr()
+                    if self.peek().val == '..':
+                        self.consume("OP_RANGE", "..")
+                        end_expr = None
+                        if self.peek().val != ']':
+                            end_expr = self.parse_expr()
+                        self.consume("PUNCT", "]")
+                        node = SliceNode(node, start_expr, end_expr)
+                    else:
+                        self.consume("PUNCT", "]")
+                        node = ArrayAccessNode(node, start_expr)
             else:
                 break
         return node
@@ -2122,6 +2132,23 @@ class CodeGen:
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
 
+    def _emit_array_len(self, base_expr, target_reg=14):
+        base_name = getattr(base_expr, "name", "")
+        if base_name and base_name in self.open_arrays:
+            len_off = self.stack_offset - self.locals[f"{base_name}__len"]
+            self.emit_immediate(target_reg, len_off)
+            self.emit(f"ADD     R{target_reg}, R15")
+            self.emit(f"LD32    R{target_reg}, (R{target_reg})", f"Dynamic len for open array '{base_name}'")
+        elif isinstance(base_expr, MemberAccessNode):
+            parent_t, _ = self._get_expr_type(base_expr.expr)
+            s_name = self._clean_type(parent_t)
+            _, _, _, f_dim, *rest = self.structs.get(s_name, {}).get(base_expr.member, (0, "u32", False, None))
+            arr_len = f_dim[0] if isinstance(f_dim, list) else (f_dim or 0)
+            self.emit_immediate(target_reg, arr_len)
+        else:
+            arr_len = self.array_lens.get(base_name, 0)
+            self.emit_immediate(target_reg, arr_len)
+
     def _gen_call_arg_list(self, args, param_sigs, start_reg=1):
         cur_reg = start_reg
         for i, arg in enumerate(args):
@@ -2143,25 +2170,48 @@ class CodeGen:
                         self.emit(f"LD32    R{cur_reg}, (R{cur_reg})", f"Base of open array slice '{base_name}'")
                     else:
                         self._emit_lvalue_addr(base_expr, target_reg=cur_reg)
-                    if isinstance(arg.start_expr, IntLitNode):
-                        start_val = arg.start_expr.val
-                        if start_val > 0:
-                            self.emit_immediate(14, start_val * elem_sz)
-                            self.emit(f"ADD     R{cur_reg}, R14", "Add slice start offset")
+                    if arg.start_expr is not None:
+                        if isinstance(arg.start_expr, IntLitNode):
+                            start_val = arg.start_expr.val
+                            if start_val > 0:
+                                self.emit_immediate(14, start_val * elem_sz)
+                                self.emit(f"ADD     R{cur_reg}, R14", "Add slice start offset")
+                        else:
+                            self.gen_expr(arg.start_expr, target_reg=14)
+                            if elem_sz == 2:
+                                self.emit("SHIFTL  R14, 1")
+                            elif elem_sz == 4:
+                                self.emit("SHIFTL  R14, 2")
+                            elif elem_sz == 8:
+                                self.emit("SHIFTL  R14, 3")
+                            elif elem_sz != 1:
+                                self.emit_immediate(13, elem_sz)
+                                self.emit("MULL    R14, R13")
+                            self.emit(f"ADD     R{cur_reg}, R14", "Add dynamic slice start offset")
+                    len_reg = cur_reg + 1
+                    if arg.end_expr is None:
+                        self._emit_array_len(base_expr, target_reg=len_reg)
+                        if arg.start_expr is not None:
+                            if isinstance(arg.start_expr, IntLitNode):
+                                if arg.start_expr.val > 0:
+                                    self.emit_immediate(14, arg.start_expr.val)
+                                    self.emit(f"SUB     R{len_reg}, R14", "Slice len = total_len - const_start")
+                            else:
+                                self.gen_expr(arg.start_expr, target_reg=14)
+                                self.emit(f"SUB     R{len_reg}, R14", "Slice len = total_len - dynamic_start")
+                    elif arg.start_expr is None:
+                        if isinstance(arg.end_expr, IntLitNode):
+                            self.emit_immediate(len_reg, arg.end_expr.val)
+                        else:
+                            self.gen_expr(arg.end_expr, target_reg=len_reg)
                     else:
-                        self.gen_expr(arg.start_expr, target_reg=14)
-                        if elem_sz == 2:
-                            self.emit("SHIFTL  R14, 1")
-                        elif elem_sz == 4:
-                            self.emit("SHIFTL  R14, 2")
-                        self.emit(f"ADD     R{cur_reg}, R14", "Add dynamic slice start offset")
-                    if isinstance(arg.start_expr, IntLitNode) and isinstance(arg.end_expr, IntLitNode):
-                        slice_len = max(0, arg.end_expr.val - arg.start_expr.val)
-                        self.emit_immediate(cur_reg + 1, slice_len)
-                    else:
-                        self.gen_expr(arg.end_expr, target_reg=cur_reg + 1)
-                        self.gen_expr(arg.start_expr, target_reg=14)
-                        self.emit(f"SUB     R{cur_reg + 1}, R14", "Slice length = end - start")
+                        if isinstance(arg.start_expr, IntLitNode) and isinstance(arg.end_expr, IntLitNode):
+                            slice_len = max(0, arg.end_expr.val - arg.start_expr.val)
+                            self.emit_immediate(len_reg, slice_len)
+                        else:
+                            self.gen_expr(arg.end_expr, target_reg=len_reg)
+                            self.gen_expr(arg.start_expr, target_reg=14)
+                            self.emit(f"SUB     R{len_reg}, R14", "Slice length = end - start")
                 else:
                     arg_name = getattr(arg, "name", None)
                     if arg_name and arg_name in self.open_arrays:
