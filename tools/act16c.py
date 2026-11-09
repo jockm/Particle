@@ -948,6 +948,8 @@ class CodeGen:
         while hasattr(expr, 'expr') and not isinstance(expr, (MemberAccessNode, UnaryOpNode)):
             expr = expr.expr
         if isinstance(expr, VarAccessNode):
+            if expr.name in self.func_signatures:
+                return (f"fn_{expr.name}", False)
             info = self.types.get(expr.name, ('u32', False, False))
             return (info[0], info[1])
         
@@ -955,16 +957,21 @@ class CodeGen:
             return ('u32', False)
 
         elif isinstance(expr, MemberAccessNode):
-            possible_type = ""
             if isinstance(expr.expr, VarAccessNode) and expr.expr.name in self.structs:
-                possible_type = expr.expr.name
-            else:
-                p_t, _ = self._get_expr_type(expr.expr)
-                possible_type = self._clean_type(p_t)
+                mangled = f"{expr.expr.name}_{expr.member}"
+                if mangled in self.func_signatures:
+                    return (f"fn_{mangled}", False)
+                raise SyntaxError(f"Type '{expr.expr.name}' has no method '{expr.member}'")
 
+            p_t, _ = self._get_expr_type(expr.expr)
+            possible_type = self._clean_type(p_t)
             mangled = f"{possible_type}_{expr.member}"
             if mangled in self.func_signatures:
-                return (f"fn_{mangled}", True)
+                base_name = getattr(expr.expr, "name", "instance")
+                raise SyntaxError(
+                    f"Cannot extract unbound method reference from instance '{base_name}'. "
+                    f"Use '{possible_type}.{expr.member}' with signature fn({possible_type}, ...) instead."
+                )
 
             _, m_type, m_ptr, *rest = self.structs.get(possible_type, {}).get(expr.member, (0, 'u32', False, None))
             return (m_type, m_ptr)
@@ -1374,6 +1381,32 @@ class CodeGen:
         elif isinstance(node, WhileNode):
             self._collect_switch_labels(node.body, cases, default_holder)
 
+    def _validate_fn_type_assignment(self, target_type, rhs_expr):
+        if target_type in self.fn_types:
+            exp_params, exp_ret = self.fn_types[target_type]
+            rhs_t, _ = self._get_expr_type(rhs_expr)
+            if rhs_t.startswith("fn_"):
+                fn_name = rhs_t[3:]
+                sig = self.func_signatures.get(fn_name)
+                if not sig:
+                    raise TypeError(f"Unknown function '{fn_name}' in function pointer assignment")
+                act_ret, _, act_params_raw = sig
+                act_params = [self._clean_type(p[0]) for p in act_params_raw]
+                exp_params_clean = [self._clean_type(p) for p in exp_params]
+                if len(exp_params_clean) != len(act_params) or exp_params_clean != act_params or exp_ret != act_ret:
+                    exp_sig = f"fn({list(exp_params_clean)}) -> {exp_ret}"
+                    act_sig = f"fn({list(act_params)}) -> {act_ret}"
+                    raise TypeError(f"Function signature mismatch: cannot assign '{fn_name}' ({act_sig}) to type '{target_type}' ({exp_sig})")
+            elif rhs_t in self.fn_types:
+                if self.fn_types[target_type] != self.fn_types[rhs_t]:
+                    raise TypeError(f"Function type mismatch: cannot assign '{rhs_t}' to '{target_type}'")
+            else:
+                raise TypeError(f"Cannot assign non-function value of type '{rhs_t}' to function pointer '{target_type}'")
+        else:
+            rhs_t, _ = self._get_expr_type(rhs_expr)
+            if rhs_t.startswith("fn_") or rhs_t in self.fn_types:
+                raise TypeError(f"Cannot implicitly convert function reference to non-function type '{target_type}'")
+
     def gen_stmt(self, stmt):
         if isinstance(stmt, BlockNode):
             self.gen_block(stmt)
@@ -1445,6 +1478,7 @@ class CodeGen:
                 return
 
             if stmt.init_expr:
+                self._validate_fn_type_assignment(stmt.type_name, stmt.init_expr)
                 self.gen_expr(stmt.init_expr, target_reg=1)
                 name = stmt.name
                 t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
@@ -1797,18 +1831,23 @@ class CodeGen:
                     self.emit_immediate(target_reg, arr_len)
                     return
 
-            # Method function pointer introspection (Type.method or instance.method)
-            possible_type = ""
+            # Method function pointer introspection (unbound Type.method only)
             if isinstance(base_expr, VarAccessNode) and base_expr.name in self.structs:
-                possible_type = base_expr.name
-            else:
-                t_n, _ = self._get_expr_type(base_expr)
-                possible_type = self._clean_type(t_n)
+                mangled_func = f"{base_expr.name}_{member}"
+                if mangled_func in self.func_signatures:
+                    self.emit(f"LOAD32  R{target_reg}, _{mangled_func}", f"Method function address '{mangled_func}'")
+                    return
+                raise SyntaxError(f"Type '{base_expr.name}' has no method '{member}'")
 
+            t_n, _ = self._get_expr_type(base_expr)
+            possible_type = self._clean_type(t_n)
             mangled_func = f"{possible_type}_{member}"
             if mangled_func in self.func_signatures:
-                self.emit(f"LOAD32  R{target_reg}, _{mangled_func}", f"Method function address '{mangled_func}'")
-                return
+                base_name = getattr(base_expr, "name", "instance")
+                raise SyntaxError(
+                    f"Cannot extract unbound method reference from instance '{base_name}'. "
+                    f"Use '{possible_type}.{member}' with signature fn({possible_type}, ...) instead."
+                )
 
             t_name, is_ptr = self._get_expr_type(base_expr)
             s_name = self._clean_type(t_name)
@@ -1962,6 +2001,7 @@ class CodeGen:
                 elif isinstance(expr.left, VarAccessNode):
                     name = expr.left.name
                     t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
+                    self._validate_fn_type_assignment(t_name, expr.right)
                     if name in self.bound_addrs:
                         self.emit_immediate(14, self.bound_addrs[name])
                         self._emit_store_typed(14, 1, t_name, is_ptr)
@@ -2116,9 +2156,15 @@ class CodeGen:
 
             is_fn_var = expr.name in self.locals or expr.name in self.globals or expr.name in self.bound_addrs
             if is_fn_var:
-                # Evaluate arguments into R1..R4
-                for i, arg in enumerate(expr.args[:4]):
-                    self.gen_expr(arg, target_reg=i + 1)
+                t_info = self.types.get(expr.name, ("u32", False, False))
+                fn_t = t_info[0]
+                if fn_t in self.fn_types:
+                    p_types, _ = self.fn_types[fn_t]
+                    param_sigs = [(p, False, False) for p in p_types]
+                    self._gen_call_arg_list(expr.args, param_sigs, start_reg=1)
+                else:
+                    for i, arg in enumerate(expr.args[:4]):
+                        self.gen_expr(arg, target_reg=i + 1)
                 # Load indirect target into R13 (uses only R14 for address calc, preserving R1-R4)
                 self.gen_expr(VarAccessNode(expr.name), target_reg=13)
                 self.emit("JMP     R13, R14", f"Indirect call through '{expr.name}'")
