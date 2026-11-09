@@ -597,5 +597,141 @@ void main() {
       expect(regs[12], equals(0x560), reason: "x12 should be 0x560 (JALR link return address)");
       expect(regs[13], equals(0xAA), reason: "x13 should be 0xAA (JALR target taken; poison 0xBAD squashed)");
     });
+
+    // ------------------------------------------------------------------
+    // Section 7: System & CSR Architecture (CSRRW, CSRRS, CSRRC, CSRRWI)
+    // -------------------------------------------------------------------------
+    test("Guest instructions - System & CSR Architecture (CSRRW, CSRRS, CSRRC, CSRRWI)", () async {
+      final c0Kernel = loadBinary('../../build/parcore/riscv/core0_if_uart.bin');
+      final c1Kernel = loadBinary('../../build/parcore/riscv/core1_id.bin');
+      final c2Kernel = loadBinary('../../build/parcore/riscv/core2_ex.bin');
+      final c3Kernel = loadBinary('../../build/parcore/riscv/core3_mem.bin');
+
+      int encI(int imm, int rs1, int funct3, int rd, int opcode) =>
+          ((imm & 0xFFF) << 20) | ((rs1 & 0x1F) << 15) | ((funct3 & 0x7) << 12) | ((rd & 0x1F) << 7) | (opcode & 0x7F);
+
+      final guestInstructions = <int>[
+        // 1. lui x1, 0x12345; addi x1, x1, 0x678 (x1 = 0x12345678)
+        0x123450b7,
+        0x67808093,
+        // csrrw x2, mscratch, x1 (mscratch = CSR 0x340) -> x2 = old mscratch (0)
+        encI(0x340, 1, 1, 2, 0x73),
+
+        // 2. csrrs x3, mscratch, x0 -> read mscratch (0x12345678) into x3
+        encI(0x340, 0, 2, 3, 0x73),
+
+        // 3. addi x4, x0, 7; csrrs x5, mscratch, x4 -> x5 = 0x12345678, mscratch = 0x1234567F
+        0x00700213,
+        encI(0x340, 4, 2, 5, 0x73),
+
+        // 4. addi x6, x0, 15; csrrc x7, mscratch, x6 -> x7 = 0x1234567F, mscratch = 0x12345670
+        0x00f00313,
+        encI(0x340, 6, 3, 7, 0x73),
+
+        // 5. csrrs x8, mscratch, x0 -> x8 = 0x12345670
+        encI(0x340, 0, 2, 8, 0x73),
+
+        // 6. csrrwi x9, mscratch, 0x1A -> x9 = 0x12345670, mscratch = 0x1A
+        encI(0x340, 0x1A, 5, 9, 0x73),
+
+        // 7. csrrs x10, mscratch, x0 -> x10 = 0x1A
+        encI(0x340, 0, 2, 10, 0x73),
+
+        // Pipeline flush NOPs
+        0x00000013,
+        0x00000013,
+        0x00000013,
+        0x00000013,
+      ];
+
+      final c0Merged = Uint8List(0x2000);
+      for (int i = 0; i < c0Kernel.length; i++) {
+        c0Merged[i] = c0Kernel[i];
+      }
+      const guestOffsetInTcm = 0x0500 - 0x0100;
+      for (int i = 0; i < guestInstructions.length; i++) {
+        final inst = guestInstructions[i];
+        final ofs = guestOffsetInTcm + (i * 4);
+        c0Merged[ofs + 0] = inst & 0xFF;
+        c0Merged[ofs + 1] = (inst >> 8) & 0xFF;
+        c0Merged[ofs + 2] = (inst >> 16) & 0xFF;
+        c0Merged[ofs + 3] = (inst >> 24) & 0xFF;
+      }
+
+      final csrTop = ParcoreTop(
+        clk: clk.clk,
+        reset: reset,
+        uartRx: uartRx,
+        core0Binary: c0Merged,
+        core1Binary: c1Kernel,
+        core2Binary: c2Kernel,
+        core3Binary: c3Kernel,
+      );
+      await csrTop.build();
+
+      reset.put(1);
+      uartRx.put(1);
+
+      unawaited(Simulator.run());
+
+      await clk.waitCycles(5);
+      reset.put(0);
+
+      final core0 = csrTop.subModules.firstWhere((m) => m.name == 'core0_if');
+      final core1 = csrTop.subModules.firstWhere((m) => m.name == 'core1_id');
+      final core3 = csrTop.subModules.firstWhere((m) => m.name == 'core3_mem');
+
+      final c0FifoPush = core0.output('fifoPushEn');
+      final c1FifoPop  = core1.output('fifoPopEn');
+      final c3FifoPush = core3.output('fifoPushEn');
+
+      int pushes = 0;
+      int pops = 0;
+      int idleCycles = 0;
+
+      for (int cycle = 0; cycle < 12000; cycle++) {
+        await clk.waitCycles(1);
+        if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
+        if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
+          pops++;
+          idleCycles = 0;
+        } else if (c3FifoPush.value.isValid && c3FifoPush.value.toInt() == 1) {
+          idleCycles = 0;
+        } else {
+          idleCycles++;
+          if (pops >= guestInstructions.length && idleCycles > 500) break;
+        }
+      }
+
+      const regBase = 0x0600;
+      final c1Tcm = csrTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
+
+      final x2 = c1Tcm.readWord(regBase + 2 * 4);
+      final x3 = c1Tcm.readWord(regBase + 3 * 4);
+      final x5 = c1Tcm.readWord(regBase + 5 * 4);
+      final x7 = c1Tcm.readWord(regBase + 7 * 4);
+      final x8 = c1Tcm.readWord(regBase + 8 * 4);
+      final x9 = c1Tcm.readWord(regBase + 9 * 4);
+      final x10 = c1Tcm.readWord(regBase + 10 * 4);
+
+      print('=== Section 7: System & CSR Results ===');
+      print('  x2=0x${x2.toRadixString(16)} [csrrw old val, expected 0x0]');
+      print('  x3=0x${x3.toRadixString(16)} [csrrs read val, expected 0x12345678]');
+      print('  x5=0x${x5.toRadixString(16)} [csrrs set old val, expected 0x12345678]');
+      print('  x7=0x${x7.toRadixString(16)} [csrrc clr old val, expected 0x1234567f]');
+      print('  x8=0x${x8.toRadixString(16)} [csrrs clr result, expected 0x12345670]');
+      print('  x9=0x${x9.toRadixString(16)} [csrrwi old val, expected 0x12345670]');
+      print('  x10=0x${x10.toRadixString(16)} [csrrs imm result, expected 0x1a]');
+
+      expect(x2, equals(0), reason: 'mscratch initial reset value should be 0');
+      expect(x3, equals(0x12345678), reason: 'csrrw should write 0x12345678');
+      expect(x5, equals(0x12345678), reason: 'csrrs should return previous value');
+      expect(x7, equals(0x1234567F), reason: 'csrrc should return value before clear');
+      expect(x8, equals(0x12345670), reason: 'mscratch should have lower nibble cleared');
+      expect(x9, equals(0x12345670), reason: 'csrrwi should return previous value');
+      expect(x10, equals(0x1A), reason: 'csrrwi should write 5-bit immediate');
+
+      await Simulator.endSimulation();
+    });
   });
 }

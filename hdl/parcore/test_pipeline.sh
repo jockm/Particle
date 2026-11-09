@@ -7,6 +7,7 @@ TESTS=(
   "Multiply High"
   "Sub-word Memory"
   "Control Transfer"
+  "System & CSR"
 )
 
 echo "===================================================="
