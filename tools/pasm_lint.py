@@ -11,6 +11,32 @@ import argparse
 
 REG_NAMES = {f"r{i}" for i in range(16)} | {"sp"}
 
+ALL_VALID_MNEMONICS = {
+    # ALU / Arithmetic / Logic
+    'NOP', 'ADD', 'SUB', 'AND', 'OR', 'XOR', 'DIV', 'MOD',
+    'SADD', 'SSUB', 'SDIV', 'SMOD', 'SLT', 'SSLT', 'SGT', 'SGE', 'SLE',
+    'SEQ', 'SNE', 'SHIFTL', 'SHIFTR', 'ASHIFTR', 'REV32', 'NEG', 'NOT',
+    'NEZ', 'CLZ', 'BEXTR', 'BSET', 'BCLR', 'SEXT8', 'SEXT16',
+    'MULL', 'MULH', 'MULHU',
+
+    # Data Transfer / Memory
+    'LD', 'LD8', 'LD16', 'LD32', 'ST8', 'ST16', 'ST32',
+    'LOAD16', 'LOAD32', 'PUSH8', 'PUSH16', 'PUSH32',
+    'POP8', 'POP16', 'POP32',
+
+    # Flow Control
+    'FBRA', 'FBRA.Z', 'FBRA.NZ', 'FBRA.P', 'FBRA.N',
+    'BBRA', 'BBRA.Z', 'BBRA.NZ', 'BBRA.P', 'BBRA.N',
+    'RCALL', 'RRET', 'JMP', 'CALL', 'RET', 'TRAP',
+
+    # FIFO / Inter-core
+    'FIFO.W', 'FIFO.R', 'FIFO.STAT', 'FIFO.TRYW', 'FIFO.TRYR',
+
+    # Assembler Directives
+    '.BYTE', '.HALF', '.WORD', '.ORG', '.ALIGN', '.GLOBAL', '.EXTERN',
+    '.DEFINE', '.EQU', '.INCLUDE', '.STRING', '.ASCII', '.ASCIZ', '.BLOCK'
+}
+
 IMM4_ARITH_LOGIC = {
     'ADD', 'SUB', 'AND', 'OR', 'XOR', 'DIV', 'MOD',
     'SADD', 'SSUB', 'SDIV', 'SMOD', 'SLT', 'SSLT'
@@ -37,7 +63,7 @@ def parse_numeric(val_str):
 
 def lint_file(filepath, include_dirs=None):
     if not os.path.exists(filepath):
-        print(f"[ERROR] File not found: {filepath}")
+        print(f"[ERROR] File not found: {filepath}", file=sys.stderr)
         return 1
 
     with open(filepath, 'r', encoding='utf-8') as f:
@@ -45,6 +71,46 @@ def lint_file(filepath, include_dirs=None):
 
     errors = []
     warnings = []
+
+    # Search paths for .include files:
+    # 1. Directory of the asm file
+    # 2. Current working directory (.)
+    # 3. Explicit -I directories
+    # 4. Parent of file directory (common if file is in build/)
+    inc_dirs = [os.path.dirname(filepath) or ".", "."]
+    file_parent = os.path.dirname(os.path.abspath(filepath))
+    inc_dirs.append(os.path.dirname(file_parent))
+    if include_dirs:
+        inc_dirs.extend(include_dirs)
+
+    user_macros = set()
+
+    def scan_macros_from_file(path, visited=None):
+        if visited is None:
+            visited = set()
+        real_path = os.path.realpath(path)
+        if real_path in visited or not os.path.exists(path):
+            return
+        visited.add(real_path)
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as pf:
+                for pline in pf:
+                    pclean = re.sub(r";.*", "", pline).strip()
+                    m_m = re.match(r"^\.macro\s+([A-Za-z0-9_\.]+)", pclean, re.IGNORECASE)
+                    if m_m:
+                        user_macros.add(m_m.group(1).upper())
+                    m_inc = re.match(r'^\.include\s+["\']([^"\']+)["\']', pclean, re.IGNORECASE)
+                    if m_inc:
+                        inc_target = m_inc.group(1)
+                        for d in inc_dirs:
+                            cand = os.path.join(d, inc_target)
+                            if os.path.exists(cand):
+                                scan_macros_from_file(cand, visited)
+                                break
+        except Exception:
+            pass
+
+    scan_macros_from_file(filepath)
 
     # Pass 1: Collect label positions (line indices) and user defines
     labels = {}
@@ -55,12 +121,10 @@ def lint_file(filepath, include_dirs=None):
         if not cleaned:
             continue
 
-        # Check for .define
-        m_def = re.match(r'^\.define\s+([A-Za-z0-9_]+)', cleaned)
+        m_def = re.match(r'^\.(?:define|equ)\s+([A-Za-z0-9_]+)', cleaned, re.IGNORECASE)
         if m_def:
             defines.add(m_def.group(1))
 
-        # Check for labels
         m_lbl = re.match(r'^([A-Za-z0-9_\.]+):', cleaned)
         if m_lbl:
             labels[m_lbl.group(1)] = lno
@@ -71,7 +135,6 @@ def lint_file(filepath, include_dirs=None):
         if not cleaned:
             continue
 
-        # Strip leading label if inline
         if ':' in cleaned:
             parts = cleaned.split(':', 1)
             cleaned = parts[1].strip()
@@ -81,6 +144,10 @@ def lint_file(filepath, include_dirs=None):
         tokens = re.split(r'[\s,]+', cleaned)
         mnem = tokens[0].upper()
         ops = [t for t in tokens[1:] if t]
+
+        # 0. Check for valid mnemonic or user macro
+        if mnem not in ALL_VALID_MNEMONICS and mnem not in user_macros and not mnem.startswith('.'):
+            errors.append((lno, f"Unrecognized mnemonic '{mnem}'."))
 
         # 1. Check for illegal 3-operand forms on 2-operand instructions
         if mnem in (IMM4_SHIFTS | IMM4_ARITH_LOGIC | {'LD'}):
@@ -167,7 +234,6 @@ def lint_file(filepath, include_dirs=None):
                         (lno, f"Backward branch '{mnem} {target_label}' branches forward (target on line {tgt_lno}). Use FBRA/FBRA.* instead.")
                     )
 
-    # Print Report (silent on success)
     if not errors and not warnings:
         return 0
 

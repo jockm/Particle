@@ -93,8 +93,8 @@ test-particle: setup
 	@cd $(ROHD_DIR) && $(DART) test
 
 test-parcore: setup
-	@echo "==> Running Parcore multi-core ROHD tests..."
-	@cd $(PARCORE_DIR) && $(DART) test
+	@echo "==> Running Parcore RV32IM pipeline regression suite..."
+	@cd $(PARCORE_DIR) && ./test_pipeline.sh
 
 test-sim: apps
 	@echo "==> Running instruction-level simulation tests (psim.py)..."

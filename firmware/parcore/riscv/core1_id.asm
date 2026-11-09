@@ -617,7 +617,7 @@ _emit_system:
     ; Check 0x000: ECALL
     FBRA.NZ R7, ._chk_ebreak
     LOAD16  R4, 0x40            ; uop = 0x40 (ECALL)
-    BBRA    ._pack_system_ctrl
+    FBRA    ._pack_system_ctrl
 
 ._chk_ebreak:
     ; Check 0x001: EBREAK
@@ -625,13 +625,16 @@ _emit_system:
     SUB     R8, 1
     FBRA.NZ R8, ._chk_mret
     LOAD16  R4, 0x41            ; uop = 0x41 (EBREAK)
-    BBRA    ._pack_system_ctrl
+    FBRA    ._pack_system_ctrl
 
 ._chk_mret:
     ; Check 0x302: MRET
     LOAD16  R8, 0x302
     SUB     R8, R7
-    FBRA.NZ R8, _drop_unrecognized
+    FBRA.Z  R8, ._do_mret
+    LOAD16  R14, _drop_unrecognized
+    JMP     R14, R0
+._do_mret:
     LOAD16  R4, 0x42            ; uop = 0x42 (MRET)
 
 ._pack_system_ctrl:
@@ -673,7 +676,8 @@ _emit_csr_rw:
     SHIFTL  R8, 1               ; R8 = 24
     SHIFTL  R4, R8              ; uop << 24
     LD      R8, R14
-    SHIFTL  R8, 16              ; funct3 << 16
+    SHIFTL  R8, 12
+    SHIFTL  R8, 4               ; funct3 << 16
     OR      R4, R8
     LD      R8, R13             ; Rd
     SHIFTL  R8, 8               ; Rd << 8

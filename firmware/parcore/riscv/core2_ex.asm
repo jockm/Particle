@@ -6,9 +6,24 @@
 .include "lib/common.inc"
 
 .org 0x00000100
+.define CSR_BASE         0x0700
+.define CSR_OFS_CYCLE    0x00    ; 0xC00 (cycle), 0xC01 (time)
+.define CSR_OFS_CYCLEH   0x04    ; 0xC80 (cycleh), 0xC81 (timeh)
+.define CSR_OFS_INSTRET  0x08    ; 0xC02 (instret)
+.define CSR_OFS_STATUS   0x0C    ; 0x300 (mstatus)
+.define CSR_OFS_MTVEC    0x10    ; 0x305 (mtvec)
+.define CSR_OFS_MSCRATCH 0x14    ; 0x340 (mscratch)
+.define CSR_OFS_MEPC     0x18    ; 0x341 (mepc)
+.define CSR_OFS_MCAUSE   0x1C    ; 0x342 (mcause)
+
 _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 1 (ID)
     LD      R2, 1               ; FIFO Ch1: Outbound to Core 3 (MEM)
+
+    ; Initialize default trap vector address (0x00000480)
+    LOAD16  R4, CSR_BASE + CSR_OFS_MTVEC
+    LOAD32  R5, 0x00000480
+    ST32    (R4), R5
 
 ; ==============================================================================
 ; Main Execution Loop
@@ -237,6 +252,15 @@ _dispatch_alu:
     JMP     R4, R0
 
 _run_alu_lookup:
+    ; Check for System / CSR uops (0x40..0x45)
+    LOAD16  R4, 0x40
+    LD      R5, R3
+    SUB     R5, R4
+    FBRA.N  R5, ._not_system_uop
+    LOAD16  R14, _dispatch_system
+    JMP     R14, R0
+
+._not_system_uop:
     ; RV32I Base ALU (Opcode 0x00..0x07)
     FBRA.NZ R3, _skip_add
     LOAD16  R14, _do_add
@@ -973,6 +997,229 @@ _do_ror:
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
+; ==============================================================================
+; System & CSR Subsystem (Opcode 0x73 uops: 0x40..0x45)
+; ==============================================================================
+_dispatch_system:
+    ; uop in R3: 0x40=ECALL, 0x41=EBREAK, 0x42=MRET, 0x43=CSRRW, 0x44=CSRRS, 0x45=CSRRC
+    ; R10 = Control Word, R11 = OpA, R12 = OpB (12-bit CSR), R13 = Base PC
+
+    ; 0x40: ECALL
+    LOAD16  R4, 0x40
+    LD      R5, R3
+    SUB     R5, R4
+    FBRA.Z  R5, ._do_ecall
+    LOAD16  R14, ._chk_ebreak
+    JMP     R14, R0
+
+._do_ecall:
+    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
+    ST32    (R6), R13
+    LOAD16  R6, CSR_BASE + CSR_OFS_MCAUSE
+    LOAD16  R7, 11
+    ST32    (R6), R7
+    LOAD16  R14, ._system_trap_redirect
+    JMP     R14, R0
+
+._chk_ebreak:
+    ; 0x41: EBREAK
+    LOAD16  R4, 0x41
+    LD      R5, R3
+    SUB     R5, R4
+    FBRA.Z  R5, ._do_ebreak
+    LOAD16  R14, ._chk_mret
+    JMP     R14, R0
+
+._do_ebreak:
+    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
+    ST32    (R6), R13
+    LOAD16  R6, CSR_BASE + CSR_OFS_MCAUSE
+    LOAD16  R7, 3
+    ST32    (R6), R7
+    LOAD16  R14, ._system_trap_redirect
+    JMP     R14, R0
+
+._chk_mret:
+    ; 0x42: MRET
+    LOAD16  R4, 0x42
+    LD      R5, R3
+    SUB     R5, R4
+    FBRA.Z  R5, ._do_mret
+    LOAD16  R14, ._chk_csr_ops
+    JMP     R14, R0
+
+._do_mret:
+    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
+    LD32    R14, (R6)
+    MBOX    R14, 1
+    LOAD16  R14, _ex_main_loop
+    JMP     R14, R0
+
+._system_trap_redirect:
+    LOAD16  R6, CSR_BASE + CSR_OFS_MTVEC
+    LD32    R14, (R6)
+    FBRA.Z  R14, ._use_default_mtvec
+    LOAD16  R4, ._do_trap_strobe
+    JMP     R4, R0
+
+._use_default_mtvec:
+    LOAD32  R14, 0x00000480
+
+._do_trap_strobe:
+    MBOX    R14, 1
+    LOAD16  R14, _ex_main_loop
+    JMP     R14, R0
+
+._chk_csr_ops:
+    ; 0xC00: cycle
+    LOAD16  R6, CSR_BASE + CSR_OFS_CYCLE
+    LOAD16  R7, 0xC00
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c1
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c1:
+    ; 0xC01: time
+    LOAD16  R7, 0xC01
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c2
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c2:
+    ; 0xC80: cycleh
+    LOAD16  R6, CSR_BASE + CSR_OFS_CYCLEH
+    LOAD16  R7, 0xC80
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c3
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c3:
+    ; 0xC81: timeh
+    LOAD16  R7, 0xC81
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c4
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c4:
+    ; 0xC02: instret
+    LOAD16  R6, CSR_BASE + CSR_OFS_INSTRET
+    LOAD16  R7, 0xC02
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c5
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c5:
+    ; 0x300: mstatus
+    LOAD16  R6, CSR_BASE + CSR_OFS_STATUS
+    LOAD16  R7, 0x300
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c6
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c6:
+    ; 0x305: mtvec
+    LOAD16  R6, CSR_BASE + CSR_OFS_MTVEC
+    LOAD16  R7, 0x305
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c7
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c7:
+    ; 0x340: mscratch
+    LOAD16  R6, CSR_BASE + CSR_OFS_MSCRATCH
+    LOAD16  R7, 0x340
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c8
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c8:
+    ; 0x341: mepc
+    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
+    LOAD16  R7, 0x341
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c9
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c9:
+    ; 0x342: mcause
+    LOAD16  R6, CSR_BASE + CSR_OFS_MCAUSE
+    LOAD16  R7, 0x342
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._csr_unmapped
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._csr_unmapped:
+    LD      R15, 0
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
+
+._read_csr_val:
+    LD32    R15, (R6)           ; R15 = Old CSR Value
+
+    ; Compute New CSR Value in R4 based on uop in R3
+    LOAD16  R7, 0x43            ; CSRRW
+    LD      R8, R3
+    SUB     R8, R7
+    FBRA.Z  R8, ._is_csrrw
+    LOAD16  R14, ._try_csrrs
+    JMP     R14, R0
+
+._is_csrrw:
+    LD      R4, R11
+    LOAD16  R14, ._writeback_csr
+    JMP     R14, R0
+
+._try_csrrs:
+    LOAD16  R7, 0x44            ; CSRRS
+    LD      R8, R3
+    SUB     R8, R7
+    FBRA.Z  R8, ._is_csrrs
+    LOAD16  R14, ._try_csrrc
+    JMP     R14, R0
+
+._is_csrrs:
+    LD      R4, R15
+    OR      R4, R11
+    LOAD16  R14, ._writeback_csr
+    JMP     R14, R0
+
+._try_csrrc:
+    LD      R8, R11             ; CSRRC
+    NOT     R8, R8
+    LD      R4, R15
+    AND     R4, R8
+
+._writeback_csr:
+    FBRA.NZ R11, ._do_st_csr
+    LOAD16  R14, ._finish_csr
+    JMP     R14, R0
+
+._do_st_csr:
+    ST32    (R6), R4
+
+._finish_csr:
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
 ; ------------------------------------------------------------------------------
 ; Outbound Forwarding to Memory Stage (Core 3)
 ; ------------------------------------------------------------------------------

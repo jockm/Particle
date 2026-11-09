@@ -566,12 +566,12 @@ class Parser:
             body = self.parse_block()
             return FuncDeclNode(t_name, is_ptr, name, params, body, is_inline=is_inline)
         else:
-            array_dim = None
+            array_dims = []
             bound_addr = None
-            if self.peek().val == '[':
+            while self.peek().val == '[':
                 self.consume('PUNCT', '[')
                 dim_tok = self.consume()
-                array_dim = int(dim_tok.val, 0)
+                array_dims.append(int(dim_tok.val, 0))
                 self.consume('PUNCT', ']')
             if self.peek().val == '@':
                 self.consume('PUNCT', '@')
@@ -582,7 +582,8 @@ class Parser:
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
             node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const)
-            node.array_dim = array_dim
+            node.array_dims = array_dims if array_dims else None
+            node.array_dim = array_dims[0] if array_dims else None
             node.bound_addr = bound_addr
             return node
 
@@ -703,11 +704,11 @@ class Parser:
                 self.consume()
                 is_ptr = True
             name = self.consume('IDENT').val
-            array_dim = None
+            array_dims = []
             bound_addr = None
-            if self.peek().val == '[':
+            while self.peek().val == '[':
                 self.consume('PUNCT', '[')
-                array_dim = int(self.consume().val, 0)
+                array_dims.append(int(self.consume().val, 0))
                 self.consume('PUNCT', ']')
             if self.peek().val == '@':
                 self.consume('PUNCT', '@')
@@ -717,7 +718,8 @@ class Parser:
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
             node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const)
-            node.array_dim = array_dim
+            node.array_dims = array_dims if array_dims else None
+            node.array_dim = array_dims[0] if array_dims else None
             node.bound_addr = bound_addr
             return node
 
@@ -890,6 +892,7 @@ class CodeGen:
         self.type_records = {}
         self.structs = self.type_records
         self.array_lens = {}
+        self.array_dims = {}
         self.bound_addrs = {}
         self.func_signatures = {}
         self.fn_types = {}
@@ -1078,6 +1081,7 @@ class CodeGen:
             self.asm.append("; ------------------------------------------------------------------------------")
             self.asm.append(".org 0x00000100")
             self.emit_label("_vector_reset")
+            self.emit("LOAD32  R15, 0x00010000", "Initialize stack pointer SP")
             self.emit("LOAD32  R14, _main", "Load main entry address")
             self.emit("JMP     R14, R0", "Jump to _main (discard link)")
             self.emit(".align  64")
@@ -1088,36 +1092,22 @@ class CodeGen:
             self.emit(".align  64")
             self.asm.append("")
 
-        if data_decls:
-            self.asm.append("; ------------------------------------------------------------------------------")
-            self.asm.append("; Global Variable Allocation")
-            self.asm.append("; ------------------------------------------------------------------------------")
-            for d in data_decls:
-                if getattr(d, 'is_const', False):
-                    self.constants[d.name] = self._eval_const_expr(d.init_expr)
-                    continue
-                self.types[d.name] = (d.type_name, d.is_ptr, False)
-                if getattr(d, 'bound_addr', None) is not None:
-                    self.bound_addrs[d.name] = d.bound_addr
-                    if getattr(d, 'array_dim', None):
-                        self.array_lens[d.name] = d.array_dim
-                    continue
-
+        # Register global types, dims, constants upfront
+        for d in data_decls:
+            if getattr(d, 'is_const', False):
+                self.constants[d.name] = self._eval_const_expr(d.init_expr)
+                continue
+            self.types[d.name] = (d.type_name, d.is_ptr, False)
+            dims = getattr(d, 'array_dims', None)
+            if not dims and getattr(d, 'array_dim', None):
+                dims = [d.array_dim]
+            if dims:
+                self.array_dims[d.name] = dims
+                self.array_lens[d.name] = dims[0]
+            if getattr(d, 'bound_addr', None) is not None:
+                self.bound_addrs[d.name] = d.bound_addr
+            else:
                 self.globals.add(d.name)
-                if getattr(d, 'array_dim', None):
-                    self.array_lens[d.name] = d.array_dim
-                    self.emit_label(f"_{d.name}")
-                    elem_sz = 1 if d.type_name in ('u8', 's8') else (2 if d.type_name in ('u16', 's16') else 4)
-                    total_words = (elem_sz * d.array_dim + 3) // 4
-                    for _ in range(total_words):
-                        self.emit(".word   0")
-                else:
-                    self.emit_label(f"_{d.name}")
-                    if d.init_expr and isinstance(d.init_expr, IntLitNode):
-                        self.emit(f".word   {d.init_expr.val}")
-                    else:
-                        self.emit(".word   0")
-            self.asm.append("")
 
         for f in func_decls:
             if getattr(f, 'is_inline', False):
@@ -1125,6 +1115,33 @@ class CodeGen:
                 continue
             if f.body is not None:
                 self.gen_func(f)
+
+        # Emit global variable data section AFTER all code
+        emit_globals = [d for d in data_decls if not getattr(d, 'is_const', False) and getattr(d, 'bound_addr', None) is None]
+        if emit_globals:
+            self.asm.append("; ------------------------------------------------------------------------------")
+            self.asm.append("; Global Variable Allocation")
+            self.asm.append("; ------------------------------------------------------------------------------")
+            self.emit(".align  4")
+            for d in emit_globals:
+                dims = getattr(d, 'array_dims', None)
+                if not dims and getattr(d, 'array_dim', None):
+                    dims = [d.array_dim]
+                self.emit_label(f"_{d.name}")
+                if dims:
+                    elem_sz = 1 if d.type_name in ('u8', 's8') else (2 if d.type_name in ('u16', 's16') else 4)
+                    total_elems = 1
+                    for dm in dims:
+                        total_elems *= dm
+                    total_words = (elem_sz * total_elems + 3) // 4
+                    for _ in range(total_words):
+                        self.emit(".word   0")
+                else:
+                    if d.init_expr and isinstance(d.init_expr, IntLitNode):
+                        self.emit(f".word   {d.init_expr.val}")
+                    else:
+                        self.emit(".word   0")
+            self.asm.append("")
 
         if self.strings:
             self.asm.append("; ------------------------------------------------------------------------------")
@@ -1347,9 +1364,16 @@ class CodeGen:
             elif not stmt.is_ptr and clean_type in self.structs:
                 elem_size = self.structs[clean_type].get('__size__', 4)
 
-            if getattr(stmt, 'array_dim', None):
-                self.array_lens[stmt.name] = stmt.array_dim
-                var_size = elem_size * stmt.array_dim
+            dims = getattr(stmt, 'array_dims', None)
+            if not dims and getattr(stmt, 'array_dim', None):
+                dims = [stmt.array_dim]
+            if dims:
+                self.array_dims[stmt.name] = dims
+                self.array_lens[stmt.name] = dims[0]
+                total_elems = 1
+                for dm in dims:
+                    total_elems *= dm
+                var_size = elem_size * total_elems
             else:
                 var_size = elem_size
 
@@ -1572,36 +1596,64 @@ class CodeGen:
         return 4
 
     def _emit_array_elem_addr(self, node, addr_reg=14, idx_scratch=2):
-        base_name = getattr(node.base, 'name', None)
+        # 1. Flatten nested ArrayAccessNodes from outermost to innermost
+        indices = []
+        curr = node
+        while isinstance(curr, ArrayAccessNode):
+            indices.append(curr.index)
+            curr = curr.base
+        indices.reverse()
+        base_node = curr
+        base_name = getattr(base_node, 'name', None)
         is_open = base_name and (base_name in self.open_arrays)
 
-        # 1. Evaluate index into idx_scratch first
-        self.gen_expr(node.index, target_reg=idx_scratch)
+        dims = self.array_dims.get(base_name, [])
+        if not dims and base_name and base_name in self.array_lens:
+            dims = [self.array_lens[base_name]]
 
-        # 2. Runtime Bounds Check with Trap 15 (preserve idx_scratch in R3)
-        if self.bounds_check:
-            if is_open:
-                lbl_in_bounds = self.new_label("in_bounds")
-                len_off = self.stack_offset - self.locals[f"{base_name}__len"]
-                self.emit_immediate(14, len_off)
-                self.emit("ADD     R14, R15")
-                self.emit("LD32    R14, (R14)", f"Load dynamic length for '{base_name}'")
-                self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
-                self.emit("SLT     R3, R14", f"Check {base_name}[i] < dynamic length")
-                self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
-                self.emit("TRAP    15", f"Open array out-of-bounds trap ({base_name})")
-                self.emit_label(lbl_in_bounds)
-            elif base_name and base_name in self.array_lens:
-                arr_dim = self.array_lens[base_name]
-                lbl_in_bounds = self.new_label("in_bounds")
-                self.emit_immediate(14, arr_dim)
-                self.emit(f"LD      R3, R{idx_scratch}", "Preserve index for bounds check")
-                self.emit("SLT     R3, R14", f"Check {base_name}[i] < {arr_dim}")
-                self.emit(f"FBRA.NZ R3, {lbl_in_bounds}", "Branch if within array bounds")
-                self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
-                self.emit_label(lbl_in_bounds)
+        # 2. Evaluate flat offset across indices
+        # We accumulate into R{idx_scratch}
+        for dim_idx, idx_expr in enumerate(indices):
+            if dim_idx > 0:
+                self.emit(f"PUSH32  R{idx_scratch}", "Preserve accumulated flat index")
+                self.stack_offset += 4
 
-        # 3. Compute Base Address into addr_reg after index & bounds check
+            # Evaluate current index into R3
+            self.gen_expr(idx_expr, target_reg=3)
+
+            # Runtime Bounds Check with TRAP 15 (use R13 to avoid clobbering)
+            if self.bounds_check:
+                lbl_in_bounds = self.new_label("in_bounds")
+                if is_open and dim_idx == 0:
+                    len_off = self.stack_offset - self.locals[f"{base_name}__len"]
+                    self.emit_immediate(14, len_off)
+                    self.emit("ADD     R14, R15")
+                    self.emit("LD32    R14, (R14)", f"Load dynamic length for '{base_name}'")
+                    self.emit("LD      R13, R3", "Preserve index for bounds check")
+                    self.emit("SLT     R13, R14", f"Check {base_name}[i] < dynamic length")
+                    self.emit(f"FBRA.NZ R13, {lbl_in_bounds}", "Branch if within array bounds")
+                    self.emit("TRAP    15", f"Open array out-of-bounds trap ({base_name})")
+                    self.emit_label(lbl_in_bounds)
+                elif dim_idx < len(dims):
+                    arr_dim = dims[dim_idx]
+                    self.emit_immediate(14, arr_dim)
+                    self.emit("LD      R13, R3", "Preserve index for bounds check")
+                    self.emit("SLT     R13, R14", f"Check index < {arr_dim}")
+                    self.emit(f"FBRA.NZ R13, {lbl_in_bounds}", "Branch if within array bounds")
+                    self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
+                    self.emit_label(lbl_in_bounds)
+
+            if dim_idx == 0:
+                self.emit(f"LD      R{idx_scratch}, R3", "Initialize flat index")
+            else:
+                self.emit(f"POP32   R{idx_scratch}", "Restore accumulated flat index")
+                self.stack_offset -= 4
+                next_dim = dims[dim_idx] if dim_idx < len(dims) else 1
+                self.emit_immediate(14, next_dim)
+                self.emit(f"MULL    R{idx_scratch}, R14", f"Multiply by dimension {next_dim}")
+                self.emit(f"ADD     R{idx_scratch}, R3", "Add current dimension index")
+
+        # 3. Compute Base Address into addr_reg
         if is_open:
             offset = self.stack_offset - self.locals[base_name]
             self.emit_immediate(addr_reg, offset)
@@ -1616,19 +1668,27 @@ class CodeGen:
         elif base_name and base_name in self.globals:
             self.emit(f"LOAD32  R{addr_reg}, _{base_name}", f"Base of global array '{base_name}'")
         else:
-            self.gen_expr(node.base, target_reg=addr_reg)
+            self.gen_expr(base_node, target_reg=addr_reg)
 
-        # 4. Scale index by element size
-        base_type, _ = self._get_expr_type(node.base)
-        elem_sz = self._get_elem_size(base_type, False)
-        if elem_sz == 2:
+        # 4. Scale index by remaining element/slice size
+        base_type, _ = self._get_expr_type(base_node)
+        leaf_elem_sz = self._get_elem_size(base_type, False)
+        remaining_stride = 1
+        for d in dims[len(indices):]:
+            remaining_stride *= d
+        stride = leaf_elem_sz * remaining_stride
+
+        if stride == 2:
             self.emit(f"SHIFTL  R{idx_scratch}, 1", "Scale index by 2")
-        elif elem_sz == 4:
+        elif stride == 4:
             self.emit(f"SHIFTL  R{idx_scratch}, 2", "Scale index by 4")
+        elif stride != 1:
+            self.emit_immediate(14, stride)
+            self.emit(f"MULL    R{idx_scratch}, R14", f"Scale index by stride {stride}")
 
         # 5. Add offset to base address
         self.emit(f"ADD     R{addr_reg}, R{idx_scratch}", "Indexed element address")
-        return base_type, elem_sz
+        return base_type, leaf_elem_sz
 
     def gen_expr(self, expr, target_reg=1):
         if isinstance(expr, IntLitNode):
