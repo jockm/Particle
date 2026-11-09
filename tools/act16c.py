@@ -908,7 +908,7 @@ class CodeGen:
         lbl = self.new_label("str")
         self.strings.append((lbl, raw_str))
 
-        self.emit(f"LOAD32  R13, {lbl}", f"Load address of string literal '{raw_str}'")
+        self.emit(f"LOAD32  R13, {lbl}", f"Load address of string literal {repr(raw_str)}")
         offset = self.stack_offset - self.locals[name]
         if offset > 0:
             self.emit_immediate(14, offset)
@@ -926,6 +926,7 @@ class CodeGen:
         self.emit("ADD     R14, 1", "buffer_ptr++")
         self.emit(f"BBRA    {lbl_loop}", "Copy next byte")
         self.emit_label(lbl_done)
+        self.emit("LD8     (R14), R12", "Store null terminator")
 
     def _emit_string_scan_len(self, arr_name, target_reg):
         if arr_name in self.bound_addrs:
@@ -1116,6 +1117,28 @@ class CodeGen:
             elif expr.op == '>>': return (left >> (right & 31)) & 0xFFFFFFFF
         raise ValueError(f"Expression cannot be evaluated as constant: {type(expr).__name__}")
 
+    def _escape_asm_string(self, s):
+        out = []
+        for ch in s:
+            code = ord(ch)
+            if ch == '\\':
+                out.append('\\\\')
+            elif ch == '"':
+                out.append('\\"')
+            elif ch == '\n':
+                out.append('\\n')
+            elif ch == '\r':
+                out.append('\\r')
+            elif ch == '\t':
+                out.append('\\t')
+            elif ch == '\0':
+                out.append('\\0')
+            elif 32 <= code <= 126:
+                out.append(ch)
+            else:
+                out.append(f"\\x{code:02x}")
+        return "".join(out)
+
     def generate(self, root):
         self.asm.append("; ==============================================================================")
         self.asm.append("; Compiled from ACT16 Source via act16c.py")
@@ -1169,7 +1192,7 @@ class CodeGen:
                             elem_sz = 2
                         elif f_type in self.structs:
                             elem_sz = self.structs[f_type].get('__size__', 4)
-                        elif f_type in ('u8', 's8'):
+                        elif f_type in ('u8', 's8', 'string'):
                             elem_sz = 1
                         else:
                             elem_sz = 4
@@ -1265,7 +1288,7 @@ class CodeGen:
                     dims = [d.array_dim]
                 self.emit_label(f"_{d.name}")
                 if dims:
-                    elem_sz = 1 if d.type_name in ('u8', 's8') else (2 if d.type_name in ('u16', 's16') else 4)
+                    elem_sz = 1 if d.type_name in ('u8', 's8', 'string') else (2 if d.type_name in ('u16', 's16') else 4)
                     total_elems = 1
                     for dm in dims:
                         total_elems *= dm
@@ -1284,7 +1307,7 @@ class CodeGen:
             self.asm.append("; String Literal Table")
             self.asm.append("; ------------------------------------------------------------------------------")
             for lbl, s in self.strings:
-                escaped = s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+                escaped = self._escape_asm_string(s)
                 self.emit_label(lbl)
                 self.emit(f'.asciz  "{escaped}"')
             self.asm.append("")
@@ -1340,11 +1363,12 @@ class CodeGen:
         if func.body is not None:
             self._collect_local_decls(func.body, local_decls)
 
+        total_frame_words = 0
         for d in local_decls:
             self.types[d.name] = (d.type_name, d.is_ptr, False)
             elem_size = 4
             clean_type = self._clean_type(d.type_name)
-            if d.type_name in ("u8", "s8"):
+            if d.type_name in ("u8", "s8", "string"):
                 elem_size = 1
             elif d.type_name in ("u16", "s16"):
                 elem_size = 2
@@ -1365,10 +1389,34 @@ class CodeGen:
                 var_size = elem_size
 
             words = (var_size + 3) // 4
-            for _ in range(words):
-                self.emit("PUSH32  R0", f"Local frame slot for '{d.name}'")
             self.stack_offset += words * 4
             self.locals[d.name] = self.stack_offset
+            total_frame_words += words
+
+        if total_frame_words > 0:
+            frame_bytes = total_frame_words * 4
+            self.emit_immediate(14, frame_bytes)
+            self.emit("SUB     R15, R14", f"Allocate local stack frame ({frame_bytes} bytes)")
+            # Efficient zero-initialization of local frame
+            if total_frame_words <= 4:
+                for w_idx in range(total_frame_words):
+                    off = w_idx * 4
+                    if off == 0:
+                        self.emit("ST32    (R15), R0", "Zero-init local frame word")
+                    else:
+                        self.emit_immediate(14, off)
+                        self.emit("ADD     R14, R15")
+                        self.emit("ST32    (R14), R0", "Zero-init local frame word")
+            else:
+                lbl_clr_loop = self.new_label("frame_clr")
+                lbl_clr_done = self.new_label("frame_clr_done")
+                self.emit("LD      R14, R15", "Base of local frame for zero-init")
+                self.emit_immediate(13, total_frame_words)
+                self.emit_label(lbl_clr_loop)
+                self.emit("ST32    (R14), R0", "Clear frame word")
+                self.emit("ADD     R14, 4")
+                self.emit("SUB     R13, 1")
+                self.emit(f"BBRA.NZ R13, {lbl_clr_loop}")
 
         coro_steps = []
         if func.body is not None:
@@ -1870,6 +1918,12 @@ class CodeGen:
             offset = self.stack_offset - self.locals[base_name]
             self.emit_immediate(addr_reg, offset)
             self.emit(f"ADD     R{addr_reg}, R15", f"Base of local array '{base_name}'")
+            t_info = self.types.get(base_name, ('u32', False, False))
+            is_ptr = t_info[1] if len(t_info) > 1 else False
+            is_ref = t_info[2] if len(t_info) > 2 else False
+            is_local_fixed = base_name in self.array_dims or base_name in self.array_lens
+            if is_ref or is_ptr or not is_local_fixed:
+                self.emit(f"LD32    R{addr_reg}, (R{addr_reg})", f"Dereference pointer/param base '{base_name}'")
         elif base_name and base_name in self.globals:
             self.emit(f"LOAD32  R{addr_reg}, _{base_name}", f"Base of global array '{base_name}'")
         elif isinstance(base_node, MemberAccessNode):

@@ -262,15 +262,13 @@ _dispatch_alu:
     JMP     R4, R0
 
 _run_alu_lookup:
-    ; Check for System / CSR uops (strictly 0x40..0x45)
+    ; Check for System / CSR uops (0x40..0x45)
+    ; All base ALU and M-extension uops are < 0x38 (bit 6 clear)
     LOAD16  R4, 0x40
     LD      R5, R3
-    SUB     R5, R4
-    FBRA.N  R5, ._not_system_uop
-    LOAD16  R4, 0x45
-    LD      R5, R4
-    SUB     R5, R3              ; 0x45 - uop
-    FBRA.N  R5, ._not_system_uop
+    AND     R5, R4
+    FBRA.Z  R5, ._not_system_uop
+
     LOAD16  R14, _dispatch_system
     JMP     R14, R0
 
