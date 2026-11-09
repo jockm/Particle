@@ -489,6 +489,12 @@ class Parser:
                 fields = []
                 while self.peek().val != '}' and self.peek().type != 'EOF':
                     f_type = self.parse_type()
+                    if self.peek().val == ";":
+                        self.consume("PUNCT", ";")
+                        if f_type in ("u8", "s8", "u16", "s16", "u32", "s32", "void"):
+                            raise SyntaxError(f"Cannot anonymously embed primitive scalar type '{f_type}'")
+                        fields.append((f_type, False, f_type, None, True))
+                        continue
                     f_ptr = False
                     if self.peek().val == '*':
                         self.consume()
@@ -502,7 +508,7 @@ class Parser:
                     f_dim = f_dims if len(f_dims) > 1 else (f_dims[0] if f_dims else None)
                     if self.peek().val == ";":
                         self.consume("PUNCT", ";")
-                    fields.append((f_type, f_ptr, f_name, f_dim))
+                    fields.append((f_type, f_ptr, f_name, f_dim, False))
                 self.consume('PUNCT', '}')
                 if self.peek().val == ';':
                     self.consume('PUNCT', ';')
@@ -942,6 +948,17 @@ class CodeGen:
         else:
             self.emit(f"LOAD32  R{reg}, 0x{v:08X}", f"LOAD32 full word ({val})")
 
+    def _resolve_method(self, struct_name, method_name):
+        direct = f"{struct_name}_{method_name}"
+        if direct in self.func_signatures:
+            return direct, 0
+        s_info = self.structs.get(struct_name, {})
+        for embed_type, embed_offset in s_info.get("__embedded__", []):
+            sub_func, sub_off = self._resolve_method(embed_type, method_name)
+            if sub_func:
+                return sub_func, embed_offset + sub_off
+        return None, 0
+
     def _get_expr_type(self, expr):
         if isinstance(expr, UnaryOpNode) and expr.op == '&':
             return self._get_expr_type(expr.operand)
@@ -995,7 +1012,9 @@ class CodeGen:
                 m_name = expr.name.replace("__METHOD__", "")
                 rcv_t, _ = self._get_expr_type(expr.args[0])
                 s_name = self._clean_type(rcv_t)
-                fname = f"{s_name}_{m_name}"
+                fname, _ = self._resolve_method(s_name, m_name)
+                if not fname:
+                    fname = f"{s_name}_{m_name}"
             else:
                 fname = expr.name
             if fname in self.func_signatures:
@@ -1061,11 +1080,26 @@ class CodeGen:
                 if can_resolve:
                     offset = 0
                     fields = {}
+                    embedded_list = []
                     for field_tuple in d.fields:
                         f_type = field_tuple[0].replace("struct ", "").replace("type ", "").strip()
                         f_ptr = field_tuple[1]
                         f_name = field_tuple[2]
                         f_dim = field_tuple[3] if len(field_tuple) > 3 else None
+                        is_embedded = field_tuple[4] if len(field_tuple) > 4 else False
+                        if is_embedded:
+                            embed_sz = self.structs[f_type].get("__size__", 4)
+                            embed_base_off = offset
+                            embedded_list.append((f_type, embed_base_off))
+                            fields[f_name] = (embed_base_off, f_type, False, None)
+                            for sub_k, sub_v in self.structs[f_type].items():
+                                if sub_k.startswith("__"):
+                                    continue
+                                sub_off, sub_t, sub_p, sub_d = sub_v
+                                if sub_k not in fields:
+                                    fields[sub_k] = (embed_base_off + sub_off, sub_t, sub_p, sub_d)
+                            offset += embed_sz
+                            continue
                         if f_ptr:
                             elem_sz = 4
                         elif f_type in ('u32', 's32'):
@@ -1090,6 +1124,7 @@ class CodeGen:
                         fields[f_name] = (offset, f_type, f_ptr, f_dim)
                         offset += f_size
                     fields['__size__'] = offset
+                    fields['__embedded__'] = embedded_list
                     self.structs[d.name] = fields
                     progress = True
                 else:
@@ -2072,7 +2107,9 @@ class CodeGen:
                     rcv_node = rcv_node.operand
                 t_name, _ = self._get_expr_type(rcv_node)
                 s_name = self._clean_type(t_name)
-                target_func = f"{s_name}_{m_name}"
+                target_func, embed_offset = self._resolve_method(s_name, m_name)
+                if not target_func:
+                    target_func = f"{s_name}_{m_name}"
                 
                 if isinstance(rcv_node, CallNode):
                     # Evaluated receiver returned pointer in R1
@@ -2080,6 +2117,9 @@ class CodeGen:
                 else:
                     # Pass receiver by reference into R1
                     self._emit_lvalue_addr(rcv_node, target_reg=1)
+                    if embed_offset > 0:
+                        self.emit_immediate(2, embed_offset)
+                        self.emit("ADD     R1, R2", f"Adjust receiver for embedded type (+{embed_offset})")
                 
                 # If there are arguments, preserve receiver pointer (R1) across evaluation
                 sig_info = self.func_signatures.get(target_func, (None, False, []))
