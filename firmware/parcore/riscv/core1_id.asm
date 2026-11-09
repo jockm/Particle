@@ -255,17 +255,18 @@ _hazard_clear:
 _read_rs2:
     ; Read OpB (Rs2)
     LD      R6, 0               ; x0 is hardwired to 0
-    FBRA.Z  R7, _decode_immediates
+    FBRA.Z  R7, ._skip_rs2_read
     LOAD16  R14, REG_BASE
     LD      R9, R7
     SHIFTL  R9, 2
     ADD     R14, R9
     LD32    R6, (R14)           ; R6 = Rs2 Value
+._skip_rs2_read:
 
     ; --------------------------------------------------------------------------
     ; 6. Immediate Field Decoders & Format Steering
     ; --------------------------------------------------------------------------
-; Extract funct3 = inst[14:12] now that hazard checking is complete
+    ; Extract funct3 = inst[14:12] unconditionally
     LD      R14, R11
     SHIFTR  R14, 12
     AND     R14, 7              ; R14 = funct3
@@ -411,12 +412,12 @@ _pack_imm_ctrl:
 _dispatch_packet:
     ; If Rd != 0, set destination reservation in scoreboard
     FBRA.Z  R13, _push_to_ex
-    LOAD16  R6, SCOREBOARD_MASK
-    LD32    R8, (R6)
-    LD      R14, 1
-    SHIFTL  R14, R13
-    OR      R8, R14
-    ST32    (R6), R8
+    LOAD16  R14, SCOREBOARD_MASK
+    LD32    R8, (R14)
+    LD      R6, 1
+    SHIFTL  R6, R13
+    OR      R8, R6
+    ST32    (R14), R8
 
 _push_to_ex:
     FIFO.W  R4, R2              ; Word 0: Control Word [uop:8 | funct:8 | Rd:8 | flags:8]

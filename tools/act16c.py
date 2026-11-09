@@ -938,6 +938,12 @@ class CodeGen:
                 self.emit("ADD     R14, R15")
             else:
                 self.emit("LD      R14, R15")
+            t_info = self.types.get(arr_name, ('u32', False, False))
+            is_ptr = t_info[1] if len(t_info) > 1 else False
+            is_ref = t_info[2] if len(t_info) > 2 else False
+            is_local_fixed = arr_name in self.array_dims or arr_name in self.array_lens
+            if is_ref or is_ptr or not is_local_fixed:
+                self.emit(f"LD32    R14, (R14)", f"Dereference param/ptr string '{arr_name}'")
         elif arr_name in self.globals:
             self.emit(f"LOAD32  R14, _{arr_name}")
         else:
@@ -1660,7 +1666,7 @@ class CodeGen:
                 self._emit_store_typed(14, 1, t_name, is_ptr)
 
             elif isinstance(stmt.lhs, ArrayAccessNode):
-                t_name, _ = self._emit_array_elem_addr(stmt.lhs, addr_reg=14, idx_scratch=3)
+                t_name, _ = self._emit_array_elem_addr(stmt.lhs, addr_reg=14, idx_scratch=3, is_write=True)
                 self._emit_load_typed(1, 14, t_name, False)
                 self.emit("POP32   R2", "Restore compound RHS")
                 self.stack_offset -= 4
@@ -1836,7 +1842,7 @@ class CodeGen:
             return self.structs[clean].get('__size__', 4)
         return 4
 
-    def _emit_array_elem_addr(self, node, addr_reg=14, idx_scratch=2):
+    def _emit_array_elem_addr(self, node, addr_reg=14, idx_scratch=2, is_write=False):
         # 1. Flatten nested ArrayAccessNodes from outermost to innermost
         indices = []
         curr = node
@@ -1885,9 +1891,13 @@ class CodeGen:
                     self.emit_label(lbl_in_bounds)
                 elif dim_idx < len(dims):
                     arr_dim = dims[dim_idx]
-                    self.emit_immediate(14, arr_dim)
+                    bnd = arr_dim
+                    base_t, _ = self._get_expr_type(base_node)
+                    if is_write and self._clean_type(base_t) == 'string' and dim_idx == len(indices) - 1:
+                        bnd = max(0, arr_dim - 1)
+                    self.emit_immediate(14, bnd)
                     self.emit("LD      R13, R3", "Preserve index for bounds check")
-                    self.emit("SLT     R13, R14", f"Check index < {arr_dim}")
+                    self.emit("SLT     R13, R14", f"Check index < {bnd}")
                     self.emit(f"FBRA.NZ R13, {lbl_in_bounds}", "Branch if within array bounds")
                     self.emit("TRAP    15", f"Array out-of-bounds trap ({base_name})")
                     self.emit_label(lbl_in_bounds)
@@ -1966,9 +1976,19 @@ class CodeGen:
             base_expr = expr.expr
             member = expr.member
             if member == "capacity":
+                if isinstance(base_expr, MemberAccessNode):
+                    p_t, _ = self._get_expr_type(base_expr.expr)
+                    s_name = self._clean_type(p_t)
+                    _, _, _, f_dim, *rest = self.structs.get(s_name, {}).get(base_expr.member, (0, "u32", False, None))
+                    arr_cap = f_dim[-1] if isinstance(f_dim, list) else (f_dim or 0)
+                    self.emit_immediate(target_reg, arr_cap)
+                    return
                 arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
-                cap = self.array_lens.get(arr_name, 0)
-                self.emit_immediate(target_reg, cap)
+                if arr_name in self.array_dims:
+                    arr_cap = self.array_dims[arr_name][-1]
+                else:
+                    arr_cap = self.array_lens.get(arr_name, 0)
+                self.emit_immediate(target_reg, arr_cap)
                 return
             elif member == "len":
                 arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
@@ -2157,7 +2177,7 @@ class CodeGen:
                 elif isinstance(expr.left, ArrayAccessNode):
                     self.emit("PUSH32  R1", "Preserve RHS")
                     self.stack_offset += 4
-                    t_name, _ = self._emit_array_elem_addr(expr.left, addr_reg=14, idx_scratch=2)
+                    t_name, _ = self._emit_array_elem_addr(expr.left, addr_reg=14, idx_scratch=2, is_write=True)
                     self.emit("POP32   R1", "Restore RHS")
                     self.stack_offset -= 4
                     self._emit_store_typed(14, 1, t_name, False)

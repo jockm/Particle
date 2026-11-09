@@ -233,8 +233,10 @@ if [ "$RUN_SIM" -eq 1 ]; then
     fi
 
     if [ "$VERBOSE" -eq 1 ]; then
-        echo "==> [pbuild] Running simulator: $PYTHON $PSIM $OUTPUT ${SIM_ARGS[*]}"
+        # echo "==> [pbuild] Running simulator: $PYTHON $PSIM $OUTPUT ${SIM_ARGS[*]}"
+        echo "==> [pbuild] Running simulator: dart ${PROJECT_ROOT}/tools/psim.dart $OUTPUT ${SIM_ARGS[*]}"
     fi
 
-    "$PYTHON" "$PSIM" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
+    # "$PYTHON" "$PSIM" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
+    dart "${PROJECT_ROOT}/tools/psim.dart" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
 fi
