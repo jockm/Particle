@@ -1,0 +1,67 @@
+// Advanced string verification: ABI parameter passing and slicing
+
+u32 test_ptr(u8* s) {
+    // Check first byte is 'P' (80)
+    if (*s != 80) {
+        trap(15);
+    }
+    return 1;
+}
+
+u32 test_open_array(u8 buf[]) {
+    // buf.len should be dynamic string length (8), NOT buffer capacity (16)
+    if (buf.len != 8) {
+        trap(15);
+    }
+    if (buf[0] != 80) { // 'P'
+        trap(15);
+    }
+    if (buf[7] != 101) { // 'e'
+        trap(15);
+    }
+    return 1;
+}
+
+u32 test_slice(u8 slice[]) {
+    // Expecting 4 bytes: 'P', 'a', 'r', 't'
+    if (slice.len != 4) {
+        trap(15);
+    }
+    if (slice[0] != 80) { // 'P'
+        trap(15);
+    }
+    if (slice[3] != 116) { // 't'
+        trap(15);
+    }
+    return 1;
+}
+
+u32 test_open_ended_slice(u8 slice[]) {
+    // msg[2..] -> length should be 8 - 2 = 6, first byte 'r' (114)
+    if (slice.len != 6) {
+        trap(15);
+    }
+    if (slice[0] != 114) { // 'r'
+        trap(15);
+    }
+    return 1;
+}
+
+u32 main() {
+    string msg[16] = "Particle";
+
+    // 1. Pass as bare pointer
+    test_ptr(msg);
+
+    // 2. Pass as open array
+    test_open_array(msg);
+
+    // 3. Slicing with explicit bounds [0..4]
+    test_slice(msg[0..4]);
+
+    // 4. Open-ended slice [2..]
+    test_open_ended_slice(msg[2..]);
+
+    trap(14); // Success quit
+    return 0;
+}

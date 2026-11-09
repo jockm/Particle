@@ -1,0 +1,35 @@
+// apps/act16/string_test.act
+// Hardware verification suite for ACT16 string types
+
+string vram[8] @ 0x00008000;
+
+void main() {
+    // 1. Local initialized string
+    string msg[16] = "Particle";
+
+    // Introspection
+    if (msg.capacity != 16) { trap(15); }
+    if (msg.len != 8) { trap(15); }
+
+    // Check payload bytes within bounds (0..15)
+    if (msg[0] != 80) { trap(15); } // 'P' == 80
+    if (msg[7] != 101) { trap(15); } // 'e' == 101
+    if (msg[8] != 0) { trap(15); }   // First null terminator
+
+    // 2. Element mutation
+    msg[0] = 112; // 'p'
+    if (msg[0] != 112) { trap(15); }
+    if (msg.len != 8) { trap(15); }
+
+    // 3. Uninitialized string (zero-fill verification across bounds)
+    string empty[32];
+    if (empty.capacity != 32) { trap(15); }
+    if (empty.len != 0) { trap(15); }
+    if (empty[0] != 0 || empty[15] != 0 || empty[31] != 0) { trap(15); }
+
+    // 4. Memory-mapped @ string
+    if (vram.capacity != 8) { trap(15); }
+
+    // Signal completion cleanly via Trap 14
+    trap(14);
+}

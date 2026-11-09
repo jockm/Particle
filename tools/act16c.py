@@ -21,7 +21,7 @@ TOKEN_TYPES = [
     ('HEX',       r'0x[0-9a-fA-F]+'),
     ('INT',       r'\d+'),
     ('STRING',    r'"(?:\\.|[^"\\])*"'),
-    ('KEYWORD',   r'\b(?:u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until)\b'),
+    ('KEYWORD',   r'\b(?:string|u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until)\b'),
     ('IDENT',     r'[a-zA-Z_]\w*'),
     ('OP_ARROW',  r'->'),
     ('OP_EQ',     r'=='),
@@ -444,7 +444,7 @@ class Parser:
             self.consume()
             s_name = self.consume('IDENT').val
             return s_name
-        elif t.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void'):
+        elif t.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void'):
             return self.consume().val
         elif t.type == 'IDENT':
             return self.consume().val
@@ -704,7 +704,7 @@ class Parser:
             is_const = True
             tok = self.peek()
 
-        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32') or tok.val == 'type' or (tok.type == 'IDENT' and (self.tokens[self.pos+1].type == 'IDENT' or self.tokens[self.pos+1].val == '*')):
+        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string') or tok.val == 'type' or (tok.type == 'IDENT' and (self.tokens[self.pos+1].type == 'IDENT' or self.tokens[self.pos+1].val == '*')):
             t_name = self.parse_type()
             is_ptr = False
             if self.peek().val == '*':
@@ -895,6 +895,66 @@ class Parser:
 # ------------------------------------------------------------------------------
 
 class CodeGen:
+    
+    def _emit_string_init(self, name, init_expr, capacity):
+        if not (hasattr(init_expr, 'val') and isinstance(init_expr.val, str)):
+            raise SyntaxError(f"String variable '{name}' must be initialized with a string literal")
+        raw_str = init_expr.val
+        if len(raw_str) > capacity:
+            raise SyntaxError(
+                f"String literal length ({len(raw_str)}) exceeds capacity ({capacity}) of string {name}[{capacity}]"
+            )
+        self.string_lens[name] = len(raw_str)
+        lbl = self.new_label("str")
+        self.strings.append((lbl, raw_str))
+
+        self.emit(f"LOAD32  R13, {lbl}", f"Load address of string literal '{raw_str}'")
+        offset = self.stack_offset - self.locals[name]
+        if offset > 0:
+            self.emit_immediate(14, offset)
+            self.emit("ADD     R14, R15", f"Base address of local string '{name}'")
+        else:
+            self.emit("LD      R14, R15", f"Base address of local string '{name}'")
+        lbl_loop = self.new_label("str_cpy")
+        lbl_done = self.new_label("str_done")
+
+        self.emit_label(lbl_loop)
+        self.emit("LD8     R12, (R13)", "Fetch literal byte")
+        self.emit(f"FBRA.Z  R12, {lbl_done}", "End of literal reached")
+        self.emit("LD8     (R14), R12", "Store byte into string buffer")
+        self.emit("ADD     R13, 1", "literal_ptr++")
+        self.emit("ADD     R14, 1", "buffer_ptr++")
+        self.emit(f"BBRA    {lbl_loop}", "Copy next byte")
+        self.emit_label(lbl_done)
+
+    def _emit_string_scan_len(self, arr_name, target_reg):
+        if arr_name in self.bound_addrs:
+            self.emit_immediate(14, self.bound_addrs[arr_name])
+        elif arr_name in self.locals:
+            offset = self.stack_offset - self.locals[arr_name]
+            if offset > 0:
+                self.emit_immediate(14, offset)
+                self.emit("ADD     R14, R15")
+            else:
+                self.emit("LD      R14, R15")
+        elif arr_name in self.globals:
+            self.emit(f"LOAD32  R14, _{arr_name}")
+        else:
+            self.emit_immediate(target_reg, 0)
+            return
+
+        lbl_scan = self.new_label("str_scan")
+        lbl_done = self.new_label("str_scan_done")
+
+        self.emit(f"LD      R{target_reg}, 0", f"Init .len scan counter for '{arr_name}'")
+        self.emit_label(lbl_scan)
+        self.emit("LD8     R13, (R14)", "Load byte from string buffer")
+        self.emit(f"FBRA.Z  R13, {lbl_done}", "Null terminator reached")
+        self.emit(f"ADD     R{target_reg}, 1", "len++")
+        self.emit("ADD     R14, 1", "ptr++")
+        self.emit(f"BBRA    {lbl_scan}", "Check next byte")
+        self.emit_label(lbl_done)
+
     def _clean_type(self, t):
         if not t:
             return ""
@@ -909,6 +969,7 @@ class CodeGen:
         self.type_records = {}
         self.structs = self.type_records
         self.array_lens = {}
+        self.string_lens = {}
         self.array_dims = {}
         self.bound_addrs = {}
         self.func_signatures = {}
@@ -974,7 +1035,7 @@ class CodeGen:
             return ('u32', False)
 
         elif isinstance(expr, MemberAccessNode):
-            if isinstance(expr.expr, VarAccessNode) and expr.expr.name in self.structs:
+            if isinstance(expr.expr, VarAccessNode) and expr.expr.name in self.structs and expr.expr.name not in self.locals and expr.expr.name not in self.globals and expr.expr.name not in self.bound_addrs:
                 mangled = f"{expr.expr.name}_{expr.member}"
                 if mangled in self.func_signatures:
                     return (f"fn_{mangled}", False)
@@ -1073,7 +1134,7 @@ class CodeGen:
                 for field_tuple in d.fields:
                     f_type = field_tuple[0].replace("struct ", "").replace("type ", "").strip()
                     f_ptr = field_tuple[1]
-                    if not f_ptr and f_type not in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void'):
+                    if not f_ptr and f_type not in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void'):
                         if f_type not in self.structs:
                             can_resolve = False
                             break
@@ -1513,6 +1574,10 @@ class CodeGen:
                 return
 
             if stmt.init_expr:
+                if stmt.type_name == 'string':
+                    cap = getattr(stmt, 'array_dim', self.array_lens.get(stmt.name, 0))
+                    self._emit_string_init(stmt.name, stmt.init_expr, cap)
+                    return
                 self._validate_fn_type_assignment(stmt.type_name, stmt.init_expr)
                 self.gen_expr(stmt.init_expr, target_reg=1)
                 name = stmt.name
@@ -1715,7 +1780,7 @@ class CodeGen:
         if is_ptr:
             return 4
         clean = self._clean_type(t_name)
-        if clean in ('u8', 's8'):
+        if clean in ('u8', 's8', 'string'):
             return 1
         elif clean in ('u16', 's16'):
             return 2
@@ -1846,7 +1911,17 @@ class CodeGen:
         elif isinstance(expr, MemberAccessNode):
             base_expr = expr.expr
             member = expr.member
-            if member == "len":
+            if member == "capacity":
+                arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
+                cap = self.array_lens.get(arr_name, 0)
+                self.emit_immediate(target_reg, cap)
+                return
+            elif member == "len":
+                arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
+                t_name = self.types.get(arr_name, ('', False, False))[0]
+                if t_name == 'string':
+                    self._emit_string_scan_len(arr_name, target_reg)
+                    return
                 if isinstance(base_expr, VarAccessNode):
                     arr_name = base_expr.name
                     if arr_name in self.open_arrays:
@@ -1867,7 +1942,7 @@ class CodeGen:
                     return
 
             # Method function pointer introspection (unbound Type.method only)
-            if isinstance(base_expr, VarAccessNode) and base_expr.name in self.structs:
+            if isinstance(base_expr, VarAccessNode) and base_expr.name in self.structs and base_expr.name not in self.locals and base_expr.name not in self.globals and base_expr.name not in self.bound_addrs:
                 mangled_func = f"{base_expr.name}_{member}"
                 if mangled_func in self.func_signatures:
                     self.emit(f"LOAD32  R{target_reg}, _{mangled_func}", f"Method function address '{mangled_func}'")
@@ -2231,6 +2306,8 @@ class CodeGen:
             _, _, _, f_dim, *rest = self.structs.get(s_name, {}).get(base_expr.member, (0, "u32", False, None))
             arr_len = f_dim[0] if isinstance(f_dim, list) else (f_dim or 0)
             self.emit_immediate(target_reg, arr_len)
+        elif self._clean_type(self._get_expr_type(base_expr)[0]) == 'string':
+            self._emit_string_scan_len(base_name, target_reg)
         else:
             arr_len = self.array_lens.get(base_name, 0)
             self.emit_immediate(target_reg, arr_len)
@@ -2311,8 +2388,12 @@ class CodeGen:
                         self.emit(f"LD32    R{cur_reg + 1}, (R{cur_reg + 1})", f"Forward open array len '{arg_name}'")
                     else:
                         self._emit_lvalue_addr(arg, target_reg=cur_reg)
-                        arr_sz = self.array_lens.get(arg_name, 0)
-                        self.emit_immediate(cur_reg + 1, arr_sz)
+                        arg_t, _ = self._get_expr_type(arg)
+                        if self._clean_type(arg_t) == 'string':
+                            self._emit_string_scan_len(arg_name, cur_reg + 1)
+                        else:
+                            arr_sz = self.array_lens.get(arg_name, 0)
+                            self.emit_immediate(cur_reg + 1, arr_sz)
                 cur_reg += 2
             elif p_type and p_type in self.structs and not p_is_ptr:
                 self._emit_lvalue_addr(arg, target_reg=cur_reg)
@@ -2344,7 +2425,7 @@ class CodeGen:
     def _emit_load_typed(self, dst, addr_reg, t_name, is_ptr):
         if is_ptr or t_name in ('u32', 's32') or t_name in self.fn_types:
             self.emit(f"LD32    R{dst}, (R{addr_reg})")
-        elif t_name == 'u8':
+        elif t_name in ('u8', 'string'):
             self.emit(f"LD8     R{dst}, (R{addr_reg})")
         elif t_name == 's8':
             self.emit(f"LD8     R{dst}, (R{addr_reg})")
@@ -2358,7 +2439,7 @@ class CodeGen:
     def _emit_store_typed(self, addr_reg, src, t_name, is_ptr):
         if is_ptr or t_name in ('u32', 's32') or t_name in self.fn_types:
             self.emit(f"LD32    (R{addr_reg}), R{src}")
-        elif t_name in ('u8', 's8'):
+        elif t_name in ('u8', 's8', 'string'):
             self.emit(f"LD8     (R{addr_reg}), R{src}")
         elif t_name in ('u16', 's16'):
             self.emit(f"LD16    (R{addr_reg}), R{src}")

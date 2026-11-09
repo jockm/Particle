@@ -137,9 +137,10 @@ def lint_file(filepath, include_dirs=None):
         if not cleaned:
             continue
 
-        if ':' in cleaned:
-            parts = cleaned.split(':', 1)
-            cleaned = parts[1].strip()
+        # Strip label only if it matches a valid label pattern at start of line
+        m_lbl_inline = re.match(r'^([A-Za-z0-9_.]+):\s*(.*)', cleaned)
+        if m_lbl_inline:
+            cleaned = m_lbl_inline.group(2).strip()
             if not cleaned:
                 continue
 
