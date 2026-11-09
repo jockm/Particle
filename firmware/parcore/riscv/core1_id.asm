@@ -659,26 +659,24 @@ _emit_csr_rw:
     SHIFTR  R7, 15
     SHIFTR  R7, 5               ; R7 = CSR Address (inst[31:20])
 
-    ; If immediate form (funct3 bit 2 is set), OpA is zero-extended rs1 field
+    ; Check if immediate form (funct3 bit 2 is set)
     LD      R8, R14
     AND     R8, 4
     FBRA.Z  R8, ._csr_reg_op
-    LD      R5, R15             ; R15 holds inst[19:15]
+    LD      R5, R15             ; Immediate operand = 5-bit zext(rs1)
 
 ._csr_reg_op:
     ; Base uop: 0x43 (CSRRW), 0x44 (CSRRS), 0x45 (CSRRC)
     LD      R8, R14
     AND     R8, 3
     LOAD16  R4, 0x42
-    ADD     R4, R8
+    ADD     R4, R8              ; R4 = uop (0x43, 0x44, or 0x45)
 
     LD      R8, 12
     SHIFTL  R8, 1               ; R8 = 24
     SHIFTL  R4, R8              ; uop << 24
-    LD      R8, R14
-    SHIFTL  R8, 12
-    SHIFTL  R8, 4               ; funct3 << 16
-    OR      R4, R8
+
+    ; DO NOT pack funct3 into bits [19:16] - that is reserved for mem_op!
     LD      R8, R13             ; Rd
     SHIFTL  R8, 8               ; Rd << 8
     OR      R4, R8

@@ -1199,6 +1199,41 @@ class CodeGen:
                     self.locals[p_name] = self.stack_offset
                     r_idx += 1
 
+        # Pre-scan and allocate function-level local stack frame
+        local_decls = []
+        if func.body is not None:
+            self._collect_local_decls(func.body, local_decls)
+
+        for d in local_decls:
+            self.types[d.name] = (d.type_name, d.is_ptr, False)
+            elem_size = 4
+            clean_type = self._clean_type(d.type_name)
+            if d.type_name in ("u8", "s8"):
+                elem_size = 1
+            elif d.type_name in ("u16", "s16"):
+                elem_size = 2
+            elif not d.is_ptr and clean_type in self.structs:
+                elem_size = self.structs[clean_type].get("__size__", 4)
+
+            dims = getattr(d, "array_dims", None)
+            if not dims and getattr(d, "array_dim", None):
+                dims = [d.array_dim]
+            if dims:
+                self.array_dims[d.name] = dims
+                self.array_lens[d.name] = dims[0]
+                total_elems = 1
+                for dm in dims:
+                    total_elems *= dm
+                var_size = elem_size * total_elems
+            else:
+                var_size = elem_size
+
+            words = (var_size + 3) // 4
+            for _ in range(words):
+                self.emit("PUSH32  R0", f"Local frame slot for '{d.name}'")
+            self.stack_offset += words * 4
+            self.locals[d.name] = self.stack_offset
+
         coro_steps = []
         if func.body is not None:
             self._collect_coroutine_steps(func.body, coro_steps)
@@ -1257,6 +1292,24 @@ class CodeGen:
         for stmt in block.stmts:
             self.gen_stmt(stmt)
 
+
+    def _collect_local_decls(self, node, decls):
+        if node is None:
+            return
+        if isinstance(node, BlockNode):
+            for s in node.stmts:
+                self._collect_local_decls(s, decls)
+        elif isinstance(node, IfNode):
+            self._collect_local_decls(node.then_body, decls)
+            if node.else_body:
+                self._collect_local_decls(node.else_body, decls)
+        elif isinstance(node, WhileNode):
+            self._collect_local_decls(node.body, decls)
+        elif isinstance(node, SwitchNode):
+            self._collect_local_decls(node.body, decls)
+        elif isinstance(node, VarDeclNode):
+            if not getattr(node, "is_const", False) and getattr(node, "bound_addr", None) is None:
+                decls.append(node)
 
     def _collect_coroutine_steps(self, node, steps):
         if isinstance(node, (YieldNode, WaitUntilNode)):
@@ -1354,45 +1407,18 @@ class CodeGen:
             if getattr(stmt, 'is_const', False):
                 self.constants[stmt.name] = self._eval_const_expr(stmt.init_expr)
                 return
-            self.types[stmt.name] = (stmt.type_name, stmt.is_ptr, False)
-            elem_size = 4
-            clean_type = self._clean_type(stmt.type_name)
-            if stmt.type_name in ('u8', 's8'):
-                elem_size = 1
-            elif stmt.type_name in ('u16', 's16'):
-                elem_size = 2
-            elif not stmt.is_ptr and clean_type in self.structs:
-                elem_size = self.structs[clean_type].get('__size__', 4)
-
-            dims = getattr(stmt, 'array_dims', None)
-            if not dims and getattr(stmt, 'array_dim', None):
-                dims = [stmt.array_dim]
-            if dims:
-                self.array_dims[stmt.name] = dims
-                self.array_lens[stmt.name] = dims[0]
-                total_elems = 1
-                for dm in dims:
-                    total_elems *= dm
-                var_size = elem_size * total_elems
-            else:
-                var_size = elem_size
-
             if getattr(stmt, 'bound_addr', None) is not None:
                 self.bound_addrs[stmt.name] = stmt.bound_addr
                 return
 
             if stmt.init_expr:
                 self.gen_expr(stmt.init_expr, target_reg=1)
-                self.emit("PUSH32  R1", f"Local '{stmt.name}' with initial value")
-                alloc_size = 4
-            else:
-                words = (var_size + 3) // 4
-                for _ in range(words):
-                    self.emit("PUSH32  R0", f"Local '{stmt.name}' zero initialized")
-                alloc_size = words * 4
-
-            self.stack_offset += alloc_size
-            self.locals[stmt.name] = self.stack_offset
+                name = stmt.name
+                t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
+                offset = self.stack_offset - self.locals[name]
+                self.emit_immediate(14, offset)
+                self.emit("ADD     R14, R15")
+                self._emit_store_typed(14, 1, t_name, is_ptr)
 
         
         elif isinstance(stmt, CompoundAssignNode):

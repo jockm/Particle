@@ -5,9 +5,8 @@ u16 g_grid[3][3];
 void test_local_2d() {
     u32 mat[3][4];
     u32 r = 0;
-    u32 c = 0;
     while (r < 3) {
-        c = 0;
+        u32 c = 0;
         while (c < 4) {
             mat[r][c] = (r * 10) + c;
             c = c + 1;
