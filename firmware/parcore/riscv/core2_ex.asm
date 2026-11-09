@@ -20,7 +20,17 @@ _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 1 (ID)
     LD      R2, 1               ; FIFO Ch1: Outbound to Core 3 (MEM)
 
-    ; Initialize default trap vector address (0x00000480)
+    ; Zero-initialize 16-word CSR block (0x0700..0x073C)
+    LOAD16  R4, CSR_BASE
+    LOAD16  R5, 16              ; 16 words
+    LD      R6, 0
+._zero_csr_loop:
+    ST32    (R4), R6
+    ADD     R4, 4
+    SUB     R5, 1
+    BBRA.NZ R5, ._zero_csr_loop
+
+    ; Set default trap vector address mtvec = 0x00000480
     LOAD16  R4, CSR_BASE + CSR_OFS_MTVEC
     LOAD32  R5, 0x00000480
     ST32    (R4), R5

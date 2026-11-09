@@ -494,13 +494,14 @@ class Parser:
                         self.consume()
                         f_ptr = True
                     f_name = self.consume('IDENT').val
-                    f_dim = None
-                    if self.peek().val == '[':
-                        self.consume('PUNCT', '[')
-                        f_dim = int(self.consume('INT').val, 0)
-                        self.consume('PUNCT', ']')
-                    if self.peek().val == ';':
-                        self.consume('PUNCT', ';')
+                    f_dims = []
+                    while self.peek().val == "[":
+                        self.consume("PUNCT", "[")
+                        f_dims.append(int(self.consume("INT").val, 0))
+                        self.consume("PUNCT", "]")
+                    f_dim = f_dims if len(f_dims) > 1 else (f_dims[0] if f_dims else None)
+                    if self.peek().val == ";":
+                        self.consume("PUNCT", ";")
                     fields.append((f_type, f_ptr, f_name, f_dim))
                 self.consume('PUNCT', '}')
                 if self.peek().val == ';':
@@ -958,6 +959,20 @@ class CodeGen:
             _, m_type, m_ptr, *rest = self.structs.get(possible_type, {}).get(expr.member, (0, 'u32', False, None))
             return (m_type, m_ptr)
 
+        elif isinstance(expr, ArrayAccessNode):
+            curr = expr
+            while isinstance(curr, ArrayAccessNode):
+                curr = curr.base
+            if isinstance(curr, VarAccessNode):
+                t_name, is_ptr, *rest = self.types.get(curr.name, ("u32", False, False))
+                return (t_name, False)
+            elif isinstance(curr, MemberAccessNode):
+                base_t, _ = self._get_expr_type(curr.expr)
+                s_name = self._clean_type(base_t)
+                _, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(curr.member, (0, "u32", False, None))
+                return (m_type, False)
+            return ("u32", False)
+
         elif isinstance(expr, CallNode):
             if expr.name.startswith("__METHOD__"):
                 m_name = expr.name.replace("__METHOD__", "")
@@ -1046,7 +1061,15 @@ class CodeGen:
                             elem_sz = 1
                         else:
                             elem_sz = 4
-                        f_size = (elem_sz * f_dim) if f_dim is not None else elem_sz
+                        if isinstance(f_dim, list):
+                            total_elems = 1
+                            for dm in f_dim:
+                                total_elems *= dm
+                            f_size = elem_sz * total_elems
+                        elif f_dim is not None:
+                            f_size = elem_sz * f_dim
+                        else:
+                            f_size = elem_sz
                         fields[f_name] = (offset, f_type, f_ptr, f_dim)
                         offset += f_size
                     fields['__size__'] = offset
@@ -1636,6 +1659,14 @@ class CodeGen:
         dims = self.array_dims.get(base_name, [])
         if not dims and base_name and base_name in self.array_lens:
             dims = [self.array_lens[base_name]]
+        elif not dims and isinstance(base_node, MemberAccessNode):
+            p_t, _ = self._get_expr_type(base_node.expr)
+            s_name = self._clean_type(p_t)
+            _, m_type, _, m_dim, *rest = self.structs.get(s_name, {}).get(base_node.member, (0, "u32", False, None))
+            if isinstance(m_dim, list):
+                dims = m_dim
+            elif m_dim is not None:
+                dims = [m_dim]
 
         # 2. Evaluate flat offset across indices
         # We accumulate into R{idx_scratch}
@@ -1679,6 +1710,10 @@ class CodeGen:
                 self.emit(f"MULL    R{idx_scratch}, R14", f"Multiply by dimension {next_dim}")
                 self.emit(f"ADD     R{idx_scratch}, R3", "Add current dimension index")
 
+        # Save accumulated index before computing base address (which may clobber scratch registers like R2)
+        self.emit(f"PUSH32  R{idx_scratch}", "Save flat index across base address computation")
+        self.stack_offset += 4
+
         # 3. Compute Base Address into addr_reg
         if is_open:
             offset = self.stack_offset - self.locals[base_name]
@@ -1693,8 +1728,14 @@ class CodeGen:
             self.emit(f"ADD     R{addr_reg}, R15", f"Base of local array '{base_name}'")
         elif base_name and base_name in self.globals:
             self.emit(f"LOAD32  R{addr_reg}, _{base_name}", f"Base of global array '{base_name}'")
+        elif isinstance(base_node, MemberAccessNode):
+            self._emit_lvalue_addr(base_node, target_reg=addr_reg)
         else:
             self.gen_expr(base_node, target_reg=addr_reg)
+
+        # Restore accumulated index
+        self.emit(f"POP32   R{idx_scratch}", "Restore flat index")
+        self.stack_offset -= 4
 
         # 4. Scale index by remaining element/slice size
         base_type, _ = self._get_expr_type(base_node)
@@ -1708,9 +1749,12 @@ class CodeGen:
             self.emit(f"SHIFTL  R{idx_scratch}, 1", "Scale index by 2")
         elif stride == 4:
             self.emit(f"SHIFTL  R{idx_scratch}, 2", "Scale index by 4")
+        elif stride == 8:
+            self.emit(f"SHIFTL  R{idx_scratch}, 3", "Scale index by 8")
         elif stride != 1:
-            self.emit_immediate(14, stride)
-            self.emit(f"MULL    R{idx_scratch}, R14", f"Scale index by stride {stride}")
+            stride_reg = 13 if addr_reg == 14 else 14
+            self.emit_immediate(stride_reg, stride)
+            self.emit(f"MULL    R{idx_scratch}, R{stride_reg}", f"Scale index by stride {stride}")
 
         # 5. Add offset to base address
         self.emit(f"ADD     R{addr_reg}, R{idx_scratch}", "Indexed element address")
@@ -1721,20 +1765,27 @@ class CodeGen:
             self.emit_immediate(target_reg, expr.val)
 
         elif isinstance(expr, MemberAccessNode):
-            if expr.member == 'len':
-                arr_name = expr.expr.name if hasattr(expr.expr, 'name') else ""
-                if arr_name in self.open_arrays:
-                    len_off = self.stack_offset - self.locals[f"{arr_name}__len"]
-                    self.emit_immediate(14, len_off)
-                    self.emit("ADD     R14, R15")
-                    self.emit(f"LD32    R{target_reg}, (R14)", f"Dynamic .len for open array '{arr_name}'")
-                else:
-                    arr_len = self.array_lens.get(arr_name, 0)
-                    self.emit_immediate(target_reg, arr_len)
-                return
-
             base_expr = expr.expr
             member = expr.member
+            if member == "len":
+                if isinstance(base_expr, VarAccessNode):
+                    arr_name = base_expr.name
+                    if arr_name in self.open_arrays:
+                        len_off = self.stack_offset - self.locals[f"{arr_name}__len"]
+                        self.emit_immediate(14, len_off)
+                        self.emit("ADD     R14, R15")
+                        self.emit(f"LD32    R{target_reg}, (R14)", f"Dynamic .len for open array '{arr_name}'")
+                    else:
+                        arr_len = self.array_lens.get(arr_name, 0)
+                        self.emit_immediate(target_reg, arr_len)
+                    return
+                elif isinstance(base_expr, MemberAccessNode):
+                    parent_t, _ = self._get_expr_type(base_expr.expr)
+                    s_name = self._clean_type(parent_t)
+                    _, _, _, f_dim, *rest = self.structs.get(s_name, {}).get(base_expr.member, (0, "u32", False, None))
+                    arr_len = f_dim[0] if isinstance(f_dim, list) else (f_dim or 0)
+                    self.emit_immediate(target_reg, arr_len)
+                    return
 
             # Method function pointer introspection (Type.method or instance.method)
             possible_type = ""

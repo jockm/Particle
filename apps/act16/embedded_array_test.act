@@ -1,0 +1,75 @@
+// Test embedded fixed arrays in type records and recursive field nesting
+
+type Point {
+    u32 x;
+    u32 y;
+}
+
+type Window {
+    u8 title[16];
+    u32 values[4];
+    Point corners[4];
+    Point origin;
+}
+
+void test_embedded_arrays() {
+    Window win;
+
+    // Check .len compile-time introspection on embedded array
+    if (win.title.len != 16) { trap(15); }
+    if (win.values.len != 4) { trap(15); }
+    if (win.corners.len != 4) { trap(15); }
+
+    // Test scalar embedded array mutations
+    u32 i = 0;
+    while (i < 4) {
+        win.values[i] = (i + 1) * 100; // 100, 200, 300, 400
+        i = i + 1;
+    }
+
+    if (win.values[0] != 100) { trap(15); }
+    if (win.values[1] != 200) { trap(15); }
+    if (win.values[2] != 300) { trap(15); }
+    if (win.values[3] != 400) { trap(15); }
+
+    // Compound assignment on embedded array element
+    win.values[1] += 55;
+    if (win.values[1] != 255) { trap(15); }
+}
+
+void test_nested_struct_array() {
+    Window win;
+
+    // Initialize regular nested struct
+    win.origin.x = 10;
+    win.origin.y = 20;
+
+    // Initialize array of structs inside struct
+    win.corners[0].x = 100;
+    win.corners[0].y = 200;
+
+    win.corners[1].x = 300;
+    win.corners[1].y = 400;
+
+    win.corners[2].x = 500;
+    win.corners[2].y = 600;
+
+    win.corners[3].x = 700;
+    win.corners[3].y = 800;
+
+    if (win.origin.x != 10 || win.origin.y != 20) { trap(15); }
+    if (win.corners[0].x != 100 || win.corners[0].y != 200) { trap(15); }
+    if (win.corners[1].x != 300 || win.corners[1].y != 400) { trap(15); }
+    if (win.corners[2].x != 500 || win.corners[2].y != 600) { trap(15); }
+    if (win.corners[3].x != 700 || win.corners[3].y != 800) { trap(15); }
+
+    // Compound operation on chained struct member of array element
+    win.corners[2].x += 25;
+    if (win.corners[2].x != 525) { trap(15); }
+}
+
+void main() {
+    test_embedded_arrays();
+    test_nested_struct_array();
+    trap(14); // Clean exit trap
+}

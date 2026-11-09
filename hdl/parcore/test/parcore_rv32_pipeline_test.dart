@@ -702,6 +702,8 @@ void main() {
           if (pops >= guestInstructions.length && idleCycles > 500) break;
         }
       }
+      print('=== Section 7 Pipeline Activity ===');
+      print('  Pushes (C0): $pushes, Pops (C1): $pops');
 
       const regBase = 0x0600;
       final c1Tcm = csrTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;

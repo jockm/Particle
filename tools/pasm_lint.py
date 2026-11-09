@@ -35,6 +35,8 @@ ALL_VALID_MNEMONICS = {
     # Assembler Directives
     '.BYTE', '.HALF', '.WORD', '.ORG', '.ALIGN', '.GLOBAL', '.EXTERN',
     '.DEFINE', '.EQU', '.INCLUDE', '.STRING', '.ASCII', '.ASCIZ', '.BLOCK'
+,
+    "ROTR", "MULHSU", "ROTL", "SMULH", "MBOX"
 }
 
 IMM4_ARITH_LOGIC = {
