@@ -18,4 +18,4 @@ _c0_entry:
     FIFO.W  R2, 0
 
 _c0_done:
-    FBRA    _c0_done
+    BBRA    _c0_done

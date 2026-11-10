@@ -29,7 +29,7 @@ APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 APP_ACT_SRCS  := $(wildcard apps/act16/*.act)
 APP_ACT_BINS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
-.PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests \
+.PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         firmware apps clean help
 
@@ -127,6 +127,26 @@ compiler-tests:
 	else \
 		echo "==> [PASS] All ACT16 compiler tests passed successfully."; \
 	fi
+
+# ------------------------------------------------------------------------------
+# Linter Test Suite (pasm_lint)
+# ------------------------------------------------------------------------------
+LINT_FAIL_SRCS := $(wildcard apps/asm/lint_failures/*.asm)
+
+test-lint: pasm-lint
+	@echo "==> Running pasm_lint test suite..."
+	@echo "  -> Validating production assembly sources (must pass)..."
+	@for f in apps/asm/*.asm; do \
+		build/tools/pasm_lint "$$f" -I lib > /dev/null || { echo "[FAIL] Unexpected lint failure on valid file: $$f"; exit 1; }; \
+	done
+	@echo "  -> Validating negative fixture constraints (must fail)..."
+	@for f in $(LINT_FAIL_SRCS); do \
+		if build/tools/pasm_lint "$$f" -I lib > /dev/null 2>&1; then \
+			echo "[FAIL] Expected lint violation not detected for: $$f"; \
+			exit 1; \
+		fi; \
+	done
+	@echo "==> [PASS] All positive and negative pasm_lint tests passed successfully."
 
 # ------------------------------------------------------------------------------
 # Firmware & Application Targets (via pbuild)

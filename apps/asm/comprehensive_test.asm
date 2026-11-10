@@ -72,7 +72,7 @@ _main:
     LOAD16  R10, 0xCAFE
 
 _success_loop:
-    FBRA    _success_loop
+    BBRA    _success_loop
 
 ; --- Test Subroutine ---
 _test_subroutine:

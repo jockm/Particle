@@ -931,7 +931,7 @@ class Parser:
             self.consume()
             raw = bytes(tok.val[1:-1], 'utf-8').decode('unicode_escape')
             return StringLitNode(raw)
-        if tok.type == 'IDENT' or (tok.val == 'string' and self.tokens[self.pos+1].val == '.'):
+        if tok.type == 'IDENT' or ((tok.val in ('string', 'u8', 's8', 'u16', 's16', 'u32', 's32')) and self.pos + 1 < len(self.tokens) and self.tokens[self.pos+1].val == '.'):
             name = self.consume().val
             if self.peek().val == '(':
                 self.consume('PUNCT', '(')

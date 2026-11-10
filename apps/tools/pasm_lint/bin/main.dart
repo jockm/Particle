@@ -2,116 +2,70 @@
 // File: apps/tools/pasm_lint/bin/main.dart
 // Project: Particle RISC Architecture
 // Description: Static assembly linter for Particle RISC (.asm) sources.
-//
-// Responsibilities:
-//   1. Verify immediate operand bounds (4-bit unsigned, 8-bit unsigned R14).
-//   2. Verify branch direction constraints (FBRA forwards, BBRA backwards).
-//   3. Enforce 2-operand instruction limits for native Particle ALU/shift ops.
-//   4. Scan user macros (.macro) and included files (.include) to prevent
-//      false-positive unrecognized mnemonic errors on macro expansions.
-//   5. Remain completely silent on success (exit 0) for clean pipeline builds.
+// Full parity with tools/pasm_lint.py.
 // =============================================================================
 
 import "dart:io";
 
-// -----------------------------------------------------------------------------
-// ISA Instruction Classification Sets
-// -----------------------------------------------------------------------------
+final Set<String> regNames = {
+  for (int i = 0; i < 16; i++) "r$i",
+  "sp",
+};
 
-/// Forward conditional and unconditional branches.
-/// The target label must be located at a higher line number than the branch.
 const Set<String> branchForward = {
-  "FBRA",
-  "FBRA.Z",
-  "FBRA.NZ",
-  "FBRA.P",
-  "FBRA.N",
+  "FBRA", "FBRA.Z", "FBRA.NZ", "FBRA.P", "FBRA.N",
 };
 
-/// Backward conditional and unconditional branches.
-/// The target label must be located at an earlier line number than the branch.
 const Set<String> branchBackward = {
-  "BBRA",
-  "BBRA.Z",
-  "BBRA.NZ",
-  "BBRA.P",
-  "BBRA.N",
+  "BBRA", "BBRA.Z", "BBRA.NZ", "BBRA.P", "BBRA.N",
 };
 
-/// 2-operand shift and rotate instructions that accept a 4-bit immediate (0..15).
 const Set<String> imm4Shifts = {
-  "SHIFTL",
-  "SHIFTR",
-  "ASHIFTR",
-  "ROTL",
-  "ROTR",
+  "SHIFTL", "SHIFTR", "ASHIFTR", "ROTL", "ROTR",
 };
 
-/// 2-operand ALU operations that accept a 4-bit immediate (0..15).
 const Set<String> imm4ArithLogic = {
-  "ADD",
-  "SUB",
-  "DIV",
-  "MOD",
-  "SADD",
-  "SSUB",
-  "SDIV",
-  "SMOD",
-  "AND",
-  "OR",
-  "XOR",
-  "MULL",
-  "MULH",
-  "SMULH",
-  "MULHSU",
-  "BSET",
-  "BCLR",
-  "BINV",
-  "BGET",
+  "ADD", "SUB", "DIV", "MOD", "SADD", "SSUB", "SDIV", "SMOD",
+  "SLT", "SSLT", "AND", "OR", "XOR", "MULL", "MULH", "SMULH", "MULHSU",
 };
 
-/// Full canonical set of valid native Particle RISC mnemonics.
-const Set<String> allValidMnemonics = {
-  // System & Control
-  "NOP", "HALT", "RESET", "WAIT", "INTR", "RET", "RETI", "TRAP",
-  "RCALL", "RRET", "BRANCH", "JUMP", "JMP", "RJUMP",
+const Set<String> imm4BitOps = {
+  "BSET", "BCLR", "BINV", "BGET",
+};
 
-  // PC-Relative Branching
+const Set<String> memIndirectDisallowed = {
+  "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR",
+  "LD", "ADD", "SUB", "AND", "OR", "XOR", "SHIFTL", "SHIFTR", "ASHIFTR",
+  "REV32", "NEG", "NOT", "NEZ", "CLZ", "BEXTR", "SEXT8", "SEXT16"
+};
+
+const Set<String> allValidMnemonics = {
+  // ALU / Arithmetic / Logic
+  "NOP", "ADD", "SUB", "AND", "OR", "XOR", "DIV", "MOD",
+  "SADD", "SSUB", "SDIV", "SMOD", "SLT", "SSLT", "SGT", "SGE", "SLE", "SSLE",
+  "SEQ", "SNE", "SHIFTL", "SHIFTR", "ASHIFTR", "REV32", "NEG", "NOT",
+  "NEZ", "CLZ", "BEXTR", "BSET", "BCLR", "BINV", "BGET", "SEXT8", "SEXT16",
+  "MULL", "MULH", "MULHU", "MULHSU", "SMULH", "ROTL", "ROTR",
+
+  // Data Transfer / Memory
+  "LD", "LD8", "LD16", "LD32", "ST8", "ST16", "ST32", "TAS",
+  "LOAD16", "LOAD24", "LOAD32", "PUSH8", "PUSH16", "PUSH32",
+  "POP8", "POP16", "POP32", "PUSH4",
+
+  // Flow Control
   "FBRA", "FBRA.Z", "FBRA.NZ", "FBRA.P", "FBRA.N",
   "BBRA", "BBRA.Z", "BBRA.NZ", "BBRA.P", "BBRA.N",
+  "RCALL", "RRET", "BRANCH", "JUMP", "JMP", "RJUMP", "CALL", "RET", "TRAP", "JTBL",
+  "HALT", "RESET", "WAIT", "INTR", "FAST_ENTER_TRAP", "FAST_EXIT_TRAP",
 
-  // Multi-byte Pseudo-ops / Macros
-  "LOAD16", "LOAD24", "LOAD32", "PUSH32", "POP32",
-  "PUSH4", "PUSH8",
-  "FAST_ENTER_TRAP", "FAST_EXIT_TRAP",
+  // FIFO / Inter-core
+  "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR", "MBOX", "XCHG", "XCHGALL", "XCHGMOST", "RBASE",
 
-  // Comparisons (Signed and Unsigned)
-  "SLT", "SLE", "SEQ", "SNE", "SSLT", "SSLE",
-
-  // Streaming FIFOs & Inter-core Mailbox
-  "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR", "MBOX",
-
-  // Memory Operations
-  "LD", "LD8", "LD16", "LD32", "ST8", "ST16", "ST32", "TAS",
-
-  // Arithmetic & Logic
-  "ADD", "SUB", "DIV", "MOD",
-  "SADD", "SSUB", "SDIV", "SMOD",
-  "AND", "OR", "XOR", "SHIFTL", "SHIFTR", "ASHIFTR", "ROTL", "ROTR",
-  "MULL", "MULH", "SMULH", "MULHSU",
-
-  // Bit Manipulation & System Registers
-  "REV32", "NEG", "NOT", "NEZ", "CLZ", "JTBL", "BEXTR",
-  "BSET", "BCLR", "BINV", "BGET",
-  "SEXT8", "SEXT16", "XCHG", "XCHGALL", "XCHGMOST", "RBASE"
+  // Assembler Directives
+  ".BYTE", ".HALF", ".WORD", ".ORG", ".ALIGN", ".GLOBAL", ".EXTERN",
+  ".DEFINE", ".EQU", ".INCLUDE", ".STRING", ".ASCII", ".ASCIZ", ".BLOCK"
 };
 
-// -----------------------------------------------------------------------------
-// Helper Routines
-// -----------------------------------------------------------------------------
-
-/// Parses integer literals supporting hexadecimal (0x), binary (0b),
-/// and standard base-10 representations.
 int? parseNumeric(String valStr) {
   final clean = valStr.trim();
   if (clean.isEmpty) return null;
@@ -123,8 +77,6 @@ int? parseNumeric(String valStr) {
   return int.tryParse(clean, radix: 10);
 }
 
-/// Recursively scans an assembly file and any referenced .include files
-/// to register declared .macro <NAME> identifiers.
 void scanMacrosFromFile(
   String path,
   List<String> incDirs,
@@ -139,28 +91,21 @@ void scanMacrosFromFile(
   visited.add(realPath);
 
   final macroRegex = RegExp(r"^\s*\.macro\s+([A-Za-z0-9_\.]+)", caseSensitive: false);
-  final incRegex = RegExp(r"^\s*\.include\s+(.+)$", caseSensitive: false);
+  final incRegex = RegExp(r'''^\s*\.include\s+["']([^"']+)["']''', caseSensitive: false);
 
   for (final rawLine in file.readAsLinesSync()) {
-    // Strip trailing line comments
     final line = rawLine.replaceAll(RegExp(r";.*"), "").trim();
     if (line.isEmpty) continue;
 
-    // Detect .macro definitions
     final mMacro = macroRegex.firstMatch(line);
     if (mMacro != null) {
       userMacros.add(mMacro.group(1)!.toUpperCase());
       continue;
     }
 
-    // Follow .include dependencies (stripping quotes cleanly)
     final mInc = incRegex.firstMatch(line);
     if (mInc != null) {
-      var target = mInc.group(1)!.trim();
-      if ((target.startsWith('"') && target.endsWith('"')) ||
-          (target.startsWith("'") && target.endsWith("'"))) {
-        target = target.substring(1, target.length - 1);
-      }
+      final target = mInc.group(1)!.trim();
       for (final d in incDirs) {
         final cand = File("$d/$target");
         if (cand.existsSync()) {
@@ -171,10 +116,6 @@ void scanMacrosFromFile(
     }
   }
 }
-
-// -----------------------------------------------------------------------------
-// Main Linting Engine
-// -----------------------------------------------------------------------------
 
 int lintFile(String filepath, List<String> includeDirs) {
   final file = File(filepath);
@@ -187,7 +128,6 @@ int lintFile(String filepath, List<String> includeDirs) {
   final errors = <(int, String)>[];
   final warnings = <(int, String)>[];
 
-  // Build standard search paths for includes
   final fileParent = file.parent.path;
   final incDirs = <String>[
     if (fileParent.isNotEmpty) fileParent else ".",
@@ -197,40 +137,31 @@ int lintFile(String filepath, List<String> includeDirs) {
     ...includeDirs,
   ];
 
-  // Pre-scan all macros to avoid false-positive unknown mnemonic warnings
   final userMacros = <String>{};
   scanMacrosFromFile(filepath, incDirs, userMacros, <String>{});
 
-  // Pass 1: Record all label positions and directive definitions
   final labels = <String, int>{};
   final defines = <String>{};
 
-  final labelRegex = RegExp(r"^\s*([A-Za-z0-9_\.]+):");
-  final defineRegex = RegExp(r"^\s*\.define\s+([A-Za-z0-9_\.]+)", caseSensitive: false);
-  final equRegex = RegExp(r"^\s*([A-Za-z0-9_\.]+)\s+\.equ\b", caseSensitive: false);
+  final labelRegex = RegExp(r"^([A-Za-z0-9_\.]+):");
+  final defineRegex = RegExp(r"^\.(?:define|equ)\s+([A-Za-z0-9_]+)", caseSensitive: false);
+  final equRegex = RegExp(r"^([A-Za-z0-9_\.]+)\s+\.equ\b", caseSensitive: false);
 
   for (var i = 0; i < lines.length; i++) {
     final lno = i + 1;
     final line = lines[i].replaceAll(RegExp(r";.*"), "").trim();
     if (line.isEmpty) continue;
 
-    final mLabel = labelRegex.firstMatch(line);
-    if (mLabel != null) {
-      labels[mLabel.group(1)!] = lno;
-    }
-
     final mDef = defineRegex.firstMatch(line);
-    if (mDef != null) {
-      defines.add(mDef.group(1)!);
-    }
+    if (mDef != null) defines.add(mDef.group(1)!);
 
     final mEqu = equRegex.firstMatch(line);
-    if (mEqu != null) {
-      defines.add(mEqu.group(1)!);
-    }
+    if (mEqu != null) defines.add(mEqu.group(1)!);
+
+    final mLabel = labelRegex.firstMatch(line);
+    if (mLabel != null) labels[mLabel.group(1)!] = lno;
   }
 
-  // Pass 2: Verify instructions, operand counts, and immediate ranges
   final inlineLabelRegex = RegExp(r"^([A-Za-z0-9_\.]+):\s*(.*)");
 
   for (var i = 0; i < lines.length; i++) {
@@ -238,94 +169,120 @@ int lintFile(String filepath, List<String> includeDirs) {
     var cleaned = lines[i].replaceAll(RegExp(r";.*"), "").trim();
     if (cleaned.isEmpty) continue;
 
-    // Strip out leading labels on the same line as code
     final mInline = inlineLabelRegex.firstMatch(cleaned);
     if (mInline != null) {
       cleaned = mInline.group(2)!.trim();
       if (cleaned.isEmpty) continue;
     }
 
-    // Directives (.ascii, .word, .org, etc.) are skipped by instruction linter
-    if (cleaned.startsWith(".")) continue;
-
     final tokens = cleaned.split(RegExp(r"[\s,]+")).where((t) => t.isNotEmpty).toList();
     if (tokens.isEmpty) continue;
 
     final mnem = tokens[0].toUpperCase();
+    final ops = tokens.sublist(1);
 
-    // 1. Verify mnemonic or user macro existence
-    if (!allValidMnemonics.contains(mnem) && !userMacros.contains(mnem)) {
+    // 0. Check for valid mnemonic, user macro, or directive
+    if (!allValidMnemonics.contains(mnem) && !userMacros.contains(mnem) && !mnem.startsWith(".")) {
       errors.add((lno, "Unrecognized mnemonic '$mnem'."));
       continue;
     }
 
-    // 2. Validate immediate shift and rotate limits (4-bit unsigned: 0..15)
-    if (imm4Shifts.contains(mnem)) {
-      if (tokens.length == 3) {
-        final imm = parseNumeric(tokens[2]);
-        if (imm != null && (imm < 0 || imm > 15)) {
-          errors.add((lno, "Immediate $imm (${tokens[2]}) out of 4-bit unsigned range (0..15) for $mnem ${tokens[1]}."));
-        }
-      } else if (tokens.length > 3) {
-        errors.add((lno, "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${tokens.length - 1} operands."));
+    // Directives skipped for instruction checks
+    if (mnem.startsWith(".")) continue;
+
+    // 1. Check for illegal 3-operand forms on 2-operand instructions
+    if (imm4Shifts.contains(mnem) || imm4ArithLogic.contains(mnem) || mnem == "LD") {
+      if (ops.length > 2) {
+        errors.add((lno, "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands: '${ops.join(", ")}'"));
       }
     }
 
-    // 3. Validate arithmetic / logic immediate bounds (4-bit unsigned: 0..15)
-    if (imm4ArithLogic.contains(mnem)) {
-      if (tokens.length == 3) {
-        final imm = parseNumeric(tokens[2]);
-        if (imm != null && (imm < 0 || imm > 15)) {
-          errors.add((lno, "Immediate $imm (${tokens[2]}) out of 4-bit unsigned range (0..15) for $mnem ${tokens[1]}."));
+    // 2. Check illegal indirect parentheses operands
+    for (final op in ops) {
+      if (op.startsWith("(") && op.endsWith(")")) {
+        if (memIndirectDisallowed.contains(mnem)) {
+          errors.add((lno, "Instruction '$mnem' does not accept indirect memory operand '$op'. Use plain register or direct channel ID."));
         }
-      } else if (tokens.length > 3) {
-        errors.add((lno, "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${tokens.length - 1} operands."));
       }
     }
 
-    // 4. Validate LD immediate bounds:
-    //    LD R14, Imm8     -> 0..255
-    //    LD R0..R13, Imm4 -> 0..15
-    if (mnem == "LD") {
-      if (tokens.length == 3) {
-        final destReg = tokens[1].toUpperCase();
-        final imm = parseNumeric(tokens[2]);
-        if (destReg == "R14") {
-          if (imm != null && (imm < 0 || imm > 255)) {
-            errors.add((lno, "Immediate $imm (${tokens[2]}) out of 8-bit unsigned range (0..255) for LD R14. Use LOAD16/LOAD32."));
-          }
-        } else {
-          if (imm != null && (imm < 0 || imm > 15)) {
-            errors.add((lno, "Immediate $imm (${tokens[2]}) out of 4-bit unsigned range (0..15) for LD ${tokens[1]}. Use LOAD16/LOAD32 or load via R14."));
+    // 3. Check LD immediate ranges
+    if (mnem == "LD" && ops.length >= 2) {
+      final dest = ops[0].toLowerCase();
+      final valStr = ops[1];
+      if (!regNames.contains(valStr.toLowerCase()) && !(valStr.startsWith("(") && valStr.endsWith(")"))) {
+        final val = parseNumeric(valStr);
+        if (val != null) {
+          if (dest == "r14") {
+            if (val < 0 || val > 255) {
+              errors.add((lno, "Immediate $valStr ($val) out of 8-bit unsigned range (0..255) for LD R14."));
+            }
+          } else {
+            if (val < 0 || val > 15) {
+              errors.add((lno, "Immediate $valStr ($val) out of 4-bit unsigned range (0..15) for LD ${ops[0].toUpperCase()}. Use LOAD16/LOAD32 or load via R14."));
+            }
           }
         }
-      } else if (tokens.length > 3) {
-        errors.add((lno, "LD is strictly a 2-operand instruction in Particle RISC, but got ${tokens.length - 1} operands."));
       }
     }
 
-    // 5. Enforce branch directions (FBRA forward, BBRA backward)
+    // 4. Check ALU arithmetic/logic Imm4 ranges
+    if (imm4ArithLogic.contains(mnem) && ops.length >= 2) {
+      final valStr = ops[1];
+      if (!regNames.contains(valStr.toLowerCase())) {
+        final val = parseNumeric(valStr);
+        if (val != null && (val < 0 || val > 15)) {
+          errors.add((lno, "Immediate $valStr ($val) out of 4-bit unsigned range (0..15) for $mnem. Load into register first."));
+        }
+      }
+    }
+
+    // 5. Check Shift Imm4 counts
+    if (imm4Shifts.contains(mnem) && ops.length >= 2) {
+      final valStr = ops[1];
+      if (!regNames.contains(valStr.toLowerCase())) {
+        final val = parseNumeric(valStr);
+        if (val != null && (val < 0 || val > 15)) {
+          errors.add((lno, "Shift count $valStr ($val) out of 4-bit range (0..15) for $mnem. Shifting > 15 must use a register operand."));
+        }
+      }
+    }
+
+    // 6. Check Bit manipulation Imm4 ranges
+    if (imm4BitOps.contains(mnem) && ops.length >= 2) {
+      final valStr = ops[1];
+      if (!regNames.contains(valStr.toLowerCase())) {
+        final val = parseNumeric(valStr);
+        if (val != null && (val < 0 || val > 15)) {
+          errors.add((lno, "Bit position $valStr ($val) out of 4-bit range (0..15) for $mnem."));
+        }
+      }
+    }
+
+    // 7. Check Forward / Backward branch direction consistency
+    String? targetLabel;
     if (branchForward.contains(mnem) || branchBackward.contains(mnem)) {
-      if (tokens.length >= 2) {
-        final targetLabel = tokens[1];
-        if (labels.containsKey(targetLabel)) {
-          final tgtLno = labels[targetLabel]!;
-          if (branchForward.contains(mnem) && tgtLno < lno) {
-            errors.add((lno, "Forward branch '$mnem $targetLabel' branches backward (target on line $tgtLno). Use BBRA/BBRA.* instead."));
-          } else if (branchBackward.contains(mnem) && tgtLno > lno) {
-            errors.add((lno, "Backward branch '$mnem $targetLabel' branches forward (target on line $tgtLno). Use FBRA/FBRA.* instead."));
-          }
+      if (ops.length == 1 && !regNames.contains(ops[0].toLowerCase()) && parseNumeric(ops[0]) == null) {
+        targetLabel = ops[0];
+      } else if (ops.length == 2 && !regNames.contains(ops[1].toLowerCase()) && parseNumeric(ops[1]) == null) {
+        targetLabel = ops[1];
+      }
+
+      if (targetLabel != null && labels.containsKey(targetLabel)) {
+        final tgtLno = labels[targetLabel]!;
+        if (branchForward.contains(mnem) && tgtLno < lno) {
+          errors.add((lno, "Forward branch '$mnem $targetLabel' branches backward (target on line $tgtLno). Use BBRA/BBRA.* instead."));
+        } else if (branchBackward.contains(mnem) && tgtLno > lno) {
+          errors.add((lno, "Backward branch '$mnem $targetLabel' branches forward (target on line $tgtLno). Use FBRA/FBRA.* instead."));
         }
       }
     }
   }
 
-  // Silence is golden on success
   if (errors.isEmpty && warnings.isEmpty) {
     return 0;
   }
 
-  // Display human-readable error diagnostics
   stderr.writeln("=== Particle Assembly Lint: $filepath ===");
   for (final err in errors) {
     stderr.writeln("[ERROR] Line ${err.$1.toString().padLeft(4)}: ${err.$2}");
@@ -338,10 +295,6 @@ int lintFile(String filepath, List<String> includeDirs) {
   return errors.isNotEmpty ? 1 : 0;
 }
 
-// -----------------------------------------------------------------------------
-// CLI Entry Point
-// -----------------------------------------------------------------------------
-
 void main(List<String> args) {
   String? source;
   final includes = <String>[];
@@ -349,9 +302,7 @@ void main(List<String> args) {
   for (var i = 0; i < args.length; i++) {
     final arg = args[i];
     if (arg == "-I" || arg == "--include") {
-      if (i + 1 < args.length) {
-        includes.add(args[++i]);
-      }
+      if (i + 1 < args.length) includes.add(args[++i]);
     } else if (arg.startsWith("-I")) {
       includes.add(arg.substring(2));
     } else if (!arg.startsWith("-")) {

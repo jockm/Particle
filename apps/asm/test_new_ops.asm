@@ -26,9 +26,9 @@ _reset:
 _fail:
     LOAD16  R10, 0xDEAD
 _spin_fail:
-    FBRA    _spin_fail
+    BBRA    _spin_fail
 
 _pass:
     LOAD16  R10, 0xCAFE         ; Sentinel flag: Success!
 _spin_pass:
-    FBRA    _spin_pass
+    BBRA    _spin_pass
