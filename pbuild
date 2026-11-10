@@ -15,7 +15,14 @@ PROJECT_ROOT="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
 # Toolchain paths
 PYTHON="${PYTHON:-python3}"
 ACT16C="${PROJECT_ROOT}/tools/act16c.py"
-PSIM="${PROJECT_ROOT}/tools/psim.py"
+# ------------------------------------------------------------------------------
+# Simulator Selection
+# ------------------------------------------------------------------------------
+# Default: Python reference simulator (${PROJECT_ROOT}/tools/psim.py)
+# To use the native compiled Dart simulator, comment out the line below and
+# uncomment the Dart binary definition.
+PSIM_CMD=("$PYTHON" "${PROJECT_ROOT}/tools/psim.py")
+# PSIM_CMD=("${PROJECT_ROOT}/build/tools/psim")
 LIB_DIR="${PROJECT_ROOT}/lib"
 
 # Resolve assembler command (compiled Dart binary preferred)
@@ -23,6 +30,13 @@ if [ -x "${PROJECT_ROOT}/build/tools/pasm" ]; then
     CMD_PASM=("${PROJECT_ROOT}/build/tools/pasm")
 else
     CMD_PASM=("$PYTHON" "${PROJECT_ROOT}/tools/pasm.py")
+fi
+
+# Resolve simulator command (compiled Dart binary preferred)
+if [ -x "${PROJECT_ROOT}/build/tools/psim" ]; then
+    CMD_PSIM=("${PROJECT_ROOT}/build/tools/psim")
+else
+    CMD_PSIM=("$PYTHON" "${PROJECT_ROOT}/tools/psim.py")
 fi
 
 # Resolve linter command (compiled Dart binary preferred)
@@ -250,8 +264,8 @@ if [ "$RUN_SIM" -eq 1 ]; then
     fi
 
     if [ "$VERBOSE" -eq 1 ]; then
-        echo "==> [pbuild] Running simulator: $PYTHON $PSIM $OUTPUT ${SIM_ARGS[*]}"
+        echo "==> [pbuild] Running simulator: ${PSIM_CMD[*]} $OUTPUT ${SIM_ARGS[*]}"
     fi
 
-    "$PYTHON" "$PSIM" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
+    "${PSIM_CMD[@]}" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
 fi

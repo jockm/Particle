@@ -724,6 +724,9 @@ class Debugger:
                         break
             elif cmd == 'c':
                 try:
+                    # Step once first if currently halted on a breakpoint
+                    if self.core.pc in self.breakpoints and not self.core.halted:
+                        self.core.step()
                     while not self.core.halted and self.core.cycle_count < 1000000:
                         if self.core.pc in self.breakpoints:
                             print(f"Breakpoint hit at 0x{self.core.pc:08X}")
@@ -811,6 +814,8 @@ class Debugger:
                 print(f"Unknown command: {cmd}. Type 'help' for available commands.")                
 
 def main():
+    import sys
+    sys.stderr.write("[DEPRECATION] tools/psim.py is deprecated in favor of compiled Dart psim in apps/tools/psim.\n")
     parser = argparse.ArgumentParser(description="Particle Simulator & Debugger")
     parser.add_argument("binary", nargs="?", help="Path to binary file")
     parser.add_argument("-d", "--debug", action="store_true", help="Launch interactive debugger")

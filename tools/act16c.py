@@ -1411,14 +1411,15 @@ class CodeGen:
             if isinstance(d, FnTypeNode):
                 self.fn_types[d.name] = (d.param_types, d.ret_type)
         data_decls = [d for d in root.decls if isinstance(d, VarDeclNode)]
-        func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
-        for f in func_decls:
+        raw_func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
+        for f in raw_func_decls:
             self.func_signatures[f.name] = (
                 self._clean_type(f.ret_type),
                 f.ret_ptr,
                 [(p[0].replace("struct ", "").replace("type ", "").strip(), p[1], len(p) > 3 and p[3]) for p in f.params]
             )
-        has_main = any(f.name == "main" for f in func_decls)
+        has_main = any(f.name == "main" for f in raw_func_decls)
+        func_decls = raw_func_decls
 
         if has_main:
             self.asm.append("; ------------------------------------------------------------------------------")
@@ -1498,6 +1499,10 @@ class CodeGen:
                 self.emit(f'.asciz  "{escaped}"')
             self.asm.append("")
 
+        self.asm.append('; ------------------------------------------------------------------------------')
+        self.asm.append('; Runtime Memory Allocator')
+        self.asm.append('; ------------------------------------------------------------------------------')
+        self.asm.append('.include "lib/alloc.asm"\n')
         return "\n".join(self.asm)
 
     def gen_func(self, func):
@@ -1648,8 +1653,9 @@ class CodeGen:
                 self.emit_immediate(14, self.stack_offset)
                 self.emit("ADD     R15, R14", "Deallocate stack frame")
             spin_lbl = f"._halt_{func.name}"
+            self.emit(f"LOAD32  R14, {spin_lbl}")
             self.emit_label(spin_lbl)
-            self.emit(f"BBRA    {spin_lbl}", "Halt loop upon main completion")
+            self.emit("JMP     R14, R0", "Halt loop upon main completion")
         else:
             frame_locals = self.stack_offset - 4
             if frame_locals > 0:
@@ -1809,13 +1815,15 @@ class CodeGen:
                 return
 
             if stmt.init_expr:
-                if stmt.type_name == 'string':
+                if stmt.type_name == 'string' and isinstance(stmt.init_expr, StringLitNode):
                     cap = getattr(stmt, 'array_dim', self.array_lens.get(stmt.name, 0))
                     self._emit_string_init(stmt.name, stmt.init_expr, cap)
                     return
                 self._validate_fn_type_assignment(stmt.type_name, stmt.init_expr)
                 self.gen_expr(stmt.init_expr, target_reg=1)
                 name = stmt.name
+                if isinstance(stmt.init_expr, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
+                    self.affine_state[name] = 'VALID'
                 t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                 offset = self.stack_offset - self.locals[name]
                 self.emit_immediate(14, offset)
@@ -2002,10 +2010,12 @@ class CodeGen:
         elif isinstance(node, MemberAccessNode):
             base_expr = node.expr
             member = node.member
-            t_name, _ = self._get_expr_type(base_expr)
+            t_name, base_is_ptr = self._get_expr_type(base_expr)
             s_name = self._clean_type(t_name)
             m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
             self._emit_lvalue_addr(base_expr, target_reg=target_reg)
+            if base_is_ptr:
+                self.emit(f"LD32    R{target_reg}, (R{target_reg})", f"Dereference pointer base '{getattr(base_expr, 'name', '')}'")
             if m_offset > 0:
                 self.emit_immediate(2, m_offset)
                 self.emit(f"ADD     R{target_reg}, R2", f"Offset {m_offset} for field '{member}'")
@@ -2178,8 +2188,9 @@ class CodeGen:
             if target_var and target_var in self.affine_state:
                 if self.affine_state[target_var] == 'MOVED':
                     raise SyntaxError(f"act16c: cannot destroy already moved/destroyed reference '{target_var}'")
-                self.affine_state[target_var] = 'MOVED'
             self.gen_expr(expr.expr, target_reg=1)
+            if target_var and target_var in self.affine_state:
+                self.affine_state[target_var] = 'MOVED'
             self.backend.gen_heap_free(1)
             if target_var and target_var in self.locals:
                 off = self.stack_offset - self.locals[target_var]
@@ -2193,8 +2204,9 @@ class CodeGen:
             if target_var and target_var in self.affine_state:
                 if self.affine_state[target_var] == 'MOVED':
                     raise SyntaxError(f"act16c: cannot destroy already moved/destroyed reference '{target_var}'")
-                self.affine_state[target_var] = 'MOVED'
             self.gen_expr(expr.expr, target_reg=1)
+            if target_var and target_var in self.affine_state:
+                self.affine_state[target_var] = 'MOVED'
             self.backend.gen_array_free(1)
             if target_var and target_var in self.locals:
                 off = self.stack_offset - self.locals[target_var]
@@ -2204,7 +2216,22 @@ class CodeGen:
             return
 
         elif isinstance(expr, ExistsNode):
-            self.gen_expr(expr.expr, target_reg=target_reg)
+            # Check liveness: if VarAccessNode and currently MOVED, we know it was destroyed -> evaluate to 0
+            # Otherwise, read value from stack slot and check NEZ
+            if isinstance(expr.expr, VarAccessNode):
+                var_name = expr.expr.name
+                if var_name in self.locals:
+                    offset = self.stack_offset - self.locals[var_name]
+                    self.emit_immediate(14, offset)
+                    self.emit("ADD     R14, R15")
+                    self.emit(f"LD32    R{target_reg}, (R14)", f"Read reference for .exists() ('{var_name}')")
+                elif var_name in self.globals:
+                    self.emit(f"LOAD32  R14, _{var_name}")
+                    self.emit(f"LD32    R{target_reg}, (R14)", f"Read global reference for .exists() ('{var_name}')")
+                else:
+                    self.emit_immediate(target_reg, 0)
+            else:
+                self.gen_expr(expr.expr, target_reg=target_reg)
             self.emit(f"NEZ     R{target_reg}, R{target_reg}", "Check reference != 0 (.exists())")
             return
 
@@ -2296,10 +2323,7 @@ class CodeGen:
             t_name, is_ptr = self._get_expr_type(base_expr)
             s_name = self._clean_type(t_name)
             m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
-            self._emit_lvalue_addr(base_expr, target_reg=14)
-            if m_offset > 0:
-                self.emit_immediate(2, m_offset)
-                self.emit("ADD     R14, R2", f"Offset {m_offset} for field '{member}'")
+            self._emit_lvalue_addr(expr, target_reg=14)
             self._emit_load_typed(target_reg, 14, m_type, m_ptr)
 
         elif isinstance(expr, ArrayAccessNode):
@@ -2415,20 +2439,15 @@ class CodeGen:
             if expr.op == '=':
                 self.gen_expr(expr.right, target_reg=1)
                 if isinstance(expr.left, MemberAccessNode):
-                    base_expr = expr.left.expr
-                    member = expr.left.member
-                    t_name, is_ptr = self._get_expr_type(base_expr)
-                    s_name = self._clean_type(t_name)
-                    m_offset, m_type, m_ptr, *rest = self.structs.get(s_name, {}).get(member, (0, 'u32', False, None))
-                    self.emit("PUSH32  R1", "Preserve RHS")
+                    # Compute lvalue address into R13 BEFORE evaluating RHS or altering stack offset
+                    self._emit_lvalue_addr(expr.left, target_reg=13)
+                    self.emit("PUSH32  R13", "Preserve lvalue address")
                     self.stack_offset += 4
-                    self._emit_lvalue_addr(base_expr, target_reg=14)
-                    if m_offset > 0:
-                        self.emit_immediate(2, m_offset)
-                        self.emit("ADD     R14, R2", f"Offset {m_offset} for field '{member}'")
-                    self.emit("POP32   R1", "Restore RHS")
+                    self.gen_expr(expr.right, target_reg=1)
+                    self.emit("POP32   R13", "Restore lvalue address")
                     self.stack_offset -= 4
-                    self._emit_store_typed(14, 1, m_type, m_ptr)
+                    t_name, is_ptr = self._get_expr_type(expr.left)
+                    self._emit_store_typed(13, 1, t_name, is_ptr)
                     return
                 elif isinstance(expr.left, UnaryOpNode) and expr.left.op == '*':
                     self.gen_expr(expr.left.operand, target_reg=14)
@@ -2445,6 +2464,8 @@ class CodeGen:
                     return
                 elif isinstance(expr.left, VarAccessNode):
                     name = expr.left.name
+                    if isinstance(expr.right, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
+                        self.affine_state[name] = "VALID" 
                     # Affine move semantics
                     if isinstance(expr.right, VarAccessNode):
                         rhs_name = expr.right.name

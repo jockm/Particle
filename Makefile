@@ -8,7 +8,15 @@ DART         ?= dart
 PYTHON       ?= python3
 
 PBUILD       := ./pbuild
+
+# ------------------------------------------------------------------------------
+# Simulator Selection
+# ------------------------------------------------------------------------------
+# Default: Python reference simulator (tools/psim.py)
+# To switch to compiled native Dart simulator, comment out this line and uncomment
+# the Dart definition below:
 PSIM         := $(PYTHON) tools/psim.py
+# PSIM       := $(BUILD_DIR)/tools/psim
 
 ROHD_DIR     := hdl/rohd
 PARCORE_DIR  := hdl/parcore
@@ -101,11 +109,15 @@ test-parcore: setup
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
 	@cd $(PARCORE_DIR) && ./test_pipeline.sh
 
-test-sim: apps
-	@echo "==> Running instruction-level simulation tests (psim.py)..."
-	@if [ -f "$(BUILD_DIR)/branch_suite.bin" ]; then \
-		$(PSIM) $(BUILD_DIR)/branch_suite.bin; \
-	fi
+# Run instruction-level simulation tests.
+# Uses $(PSIM) as defined above (currently tools/psim.py).
+# To test compiled Dart instead: make psim && build/tools/psim $(BUILD_DIR)/branch_suite.bin
+test-sim: $(BUILD_DIR)/branch_suite.bin
+	@echo "==> Running instruction-level simulation tests ($(PSIM))..."
+	$(PSIM) $(BUILD_DIR)/branch_suite.bin
+
+	@echo "==> Running instruction-level simulation tests (build/tools/psim)..."
+	build/tools/psim $(BUILD_DIR)/branch_suite.bin
 
 ACT_TEST_SRCS := $(wildcard apps/act16/*_test.act)
 
@@ -152,7 +164,7 @@ test-lint: pasm-lint
 # Firmware & Application Targets (via pbuild)
 # ------------------------------------------------------------------------------
 
-build: firmware apps generate
+build: firmware apps
 
 firmware: $(FIRMWARE_BINS)
 
@@ -162,12 +174,17 @@ $(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
 
 apps: $(APP_ASM_BINS) $(APP_ACT_BINS)
 
-$(BUILD_DIR)/%.bin: apps/asm/%.asm | $(BUILD_DIR)
+$(BUILD_DIR)/branch_suite.bin: apps/asm/branch_suite.asm
+	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@"
 
-$(BUILD_DIR)/%.bin: apps/act16/%.act | $(BUILD_DIR)
+$(BUILD_DIR)/%.bin: apps/asm/%.asm
+	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@"
 
+$(BUILD_DIR)/%.bin: apps/act16/%.act
+	@mkdir -p $(BUILD_DIR)
+	@$(PBUILD) "$<" -o "$@" 
 $(BUILD_DIR):
 	@mkdir -p $@
 
@@ -182,30 +199,9 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
+.PHONY: tools pasm-lint psim pasm lint-tool
 
-
-
-
-
-
-
-# ------------------------------------------------------------------------------
-# Toolchain Targets
-# ------------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-# ------------------------------------------------------------------------------
-# Toolchain Targets
-# ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint pasm lint-tool
-
-tools: pasm-lint pasm
+tools: pasm-lint pasm psim
 
 lint-tool: pasm-lint
 pasm-lint: $(PASM_LINT_BIN)
@@ -230,3 +226,11 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -rf $(ROHD_DIR)/.dart_tool $(ROHD_DIR)/particle_top.sv $(ROHD_DIR)/*.synth.json $(ROHD_DIR)/*.bit
 	@rm -rf $(PARCORE_DIR)/.dart_tool $(PARCORE_DIR)/parcore_top.sv $(PARCORE_DIR)/*.synth.json $(PARCORE_DIR)/*.bit
+
+psim: $(BUILD_DIR)/tools/psim
+
+$(BUILD_DIR)/tools/psim: apps/tools/psim/bin/main.dart apps/tools/psim/lib/core.dart apps/tools/psim/lib/line_reader.dart
+	@mkdir -p $(BUILD_DIR)/tools
+	@echo "==> Compiling psim..."
+	dart compile exe apps/tools/psim/bin/main.dart -o $(BUILD_DIR)/tools/psim
+
