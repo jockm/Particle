@@ -21,6 +21,7 @@ TOKEN_TYPES = [
     ('HEX',       r'0x[0-9a-fA-F]+'),
     ('INT',       r'\d+'),
     ('STRING',    r'"(?:\\.|[^"\\])*"'),
+    ('CHAR',      r"'(?:\\.|[^'\\])'"),
     ('KEYWORD',   r'\b(?:string|u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until)\b'),
     ('IDENT',     r'[a-zA-Z_]\w*'),
     ('OP_ARROW',  r'->'),
@@ -862,6 +863,11 @@ class Parser:
         if tok.type in ('INT', 'HEX'):
             self.consume()
             return IntLitNode(int(tok.val, 0))
+        if tok.type == 'CHAR':
+            self.consume()
+            raw = bytes(tok.val[1:-1], 'utf-8').decode('unicode_escape')
+            val = ord(raw) if len(raw) > 0 else 0
+            return IntLitNode(val)
         if tok.type == 'STRING':
             self.consume()
             raw = bytes(tok.val[1:-1], 'utf-8').decode('unicode_escape')
@@ -1416,8 +1422,8 @@ class CodeGen:
             else:
                 lbl_clr_loop = self.new_label("frame_clr")
                 lbl_clr_done = self.new_label("frame_clr_done")
-                self.emit("LD      R14, R15", "Base of local frame for zero-init")
                 self.emit_immediate(13, total_frame_words)
+                self.emit("LD      R14, R15", "Base of local frame for zero-init")
                 self.emit_label(lbl_clr_loop)
                 self.emit("ST32    (R14), R0", "Clear frame word")
                 self.emit("ADD     R14, 4")
@@ -1771,6 +1777,11 @@ class CodeGen:
             self.stack_offset -= 4
 
             op = cond_expr.op
+            l_t, _ = self._get_expr_type(cond_expr.left)
+            r_t, _ = self._get_expr_type(cond_expr.right)
+            is_signed = (l_t in ('s8', 's16', 's32') or r_t in ('s8', 's16', 's32'))
+            sle_op = "SSLE" if is_signed else "SLE"
+
             if op == '==':
                 self.emit("SEQ      R1, R2", "Single-cycle equal")
                 self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false (not equal)")
@@ -1778,16 +1789,16 @@ class CodeGen:
                 self.emit("SNE      R1, R2", "Single-cycle not-equal")
                 self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false (equal)")
             elif op == '<=':
-                self.emit("SLE      R1, R2", "Single-cycle less-equal")
+                self.emit(f"{sle_op:<8} R1, R2", f"Single-cycle {'signed' if is_signed else 'unsigned'} less-equal")
                 self.emit(f"FBRA.Z   R1, {lbl_hop}", "Hop if condition false (!(L <= R))")
             elif op == '>=':
-                self.emit("SLE      R2, R1", "Single-cycle greater-equal (swapped <=)")
+                self.emit(f"{sle_op:<8} R2, R1", f"Single-cycle {'signed' if is_signed else 'unsigned'} greater-equal (swapped <=)")
                 self.emit(f"FBRA.Z   R2, {lbl_hop}", "Hop if condition false (!(R <= L))")
             elif op == '<':
-                self.emit("SLE      R2, R1", "Single-cycle less check via inverted SLE")
+                self.emit(f"{sle_op:<8} R2, R1", f"Single-cycle {'signed' if is_signed else 'unsigned'} less check via inverted SLE")
                 self.emit(f"FBRA.NZ  R2, {lbl_hop}", "Hop if condition false (R <= L)")
             elif op == '>':
-                self.emit("SLE      R1, R2", "Single-cycle greater check via inverted SLE")
+                self.emit(f"{sle_op:<8} R1, R2", f"Single-cycle {'signed' if is_signed else 'unsigned'} greater check via inverted SLE")
                 self.emit(f"FBRA.NZ  R1, {lbl_hop}", "Hop if condition false (L <= R)")
         else:
             self.gen_expr(cond_expr, target_reg=1)
@@ -1984,7 +1995,13 @@ class CodeGen:
                     self.emit_immediate(target_reg, arr_cap)
                     return
                 arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
-                if arr_name in self.array_dims:
+                if arr_name in self.open_arrays:
+                    len_off = self.stack_offset - self.locals[f"{arr_name}__len"]
+                    self.emit_immediate(14, len_off)
+                    self.emit("ADD     R14, R15")
+                    self.emit(f"LD32    R{target_reg}, (R14)", f"Dynamic .capacity for open array \'{arr_name}\'")
+                    return
+                elif arr_name in self.array_dims:
                     arr_cap = self.array_dims[arr_name][-1]
                 else:
                     arr_cap = self.array_lens.get(arr_name, 0)
@@ -2237,7 +2254,10 @@ class CodeGen:
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
             elif expr.op in ('==', '!=', '<', '<=', '>', '>='):
-                self._gen_relational(expr.op, target_reg)
+                l_t, _ = self._get_expr_type(expr.left)
+                r_t, _ = self._get_expr_type(expr.right)
+                is_signed = (l_t in ('s8', 's16', 's32') or r_t in ('s8', 's16', 's32'))
+                self._gen_relational(expr.op, target_reg, is_signed=is_signed)
 
         elif isinstance(expr, StringLitNode):
             lbl = self.new_label("str")
@@ -2270,17 +2290,44 @@ class CodeGen:
                         self.emit_immediate(2, embed_offset)
                         self.emit("ADD     R1, R2", f"Adjust receiver for embedded type (+{embed_offset})")
                 
-                # If there are arguments, preserve receiver pointer (R1) across evaluation
+                # Check if receiver parameter expects an open array (companion capacity register in R2)
                 sig_info = self.func_signatures.get(target_func, (None, False, []))
                 param_sigs = sig_info[2] if isinstance(sig_info, tuple) and len(sig_info) > 2 else []
-                method_param_sigs = param_sigs[1:] if len(param_sigs) > 1 else []
-                has_args = len(expr.args) > 1
-                if has_args:
-                    self.emit("PUSH32   R1", "Preserve receiver pointer")
-                    self.stack_offset += 4
-                    self._gen_call_arg_list(expr.args[1:], method_param_sigs, start_reg=2)
-                    self.emit("POP32    R1", "Restore receiver pointer")
-                    self.stack_offset -= 4
+                rcv_p_sig = param_sigs[0] if param_sigs else (None, False, False)
+                rcv_is_open = rcv_p_sig[2] if len(rcv_p_sig) > 2 else False
+
+                if rcv_is_open:
+                    rcv_name = getattr(rcv_node, "name", None)
+                    if rcv_name and rcv_name in self.open_arrays:
+                        len_off = self.stack_offset - self.locals[f"{rcv_name}__len"]
+                        self.emit_immediate(2, len_off)
+                        self.emit("ADD     R2, R15")
+                        self.emit(f"LD32    R2, (R2)", f"Dynamic capacity for open array receiver '{rcv_name}'")
+                    elif rcv_name and rcv_name in self.array_dims:
+                        self.emit_immediate(2, self.array_dims[rcv_name][-1])
+                    else:
+                        arr_sz = self.array_lens.get(rcv_name, 0)
+                        self.emit_immediate(2, arr_sz)
+
+                    method_param_sigs = param_sigs[1:] if len(param_sigs) > 1 else []
+                    has_args = len(expr.args) > 1
+                    if has_args:
+                        self.emit("PUSH32   R1", "Preserve receiver pointer")
+                        self.emit("PUSH32   R2", "Preserve receiver capacity")
+                        self.stack_offset += 8
+                        self._gen_call_arg_list(expr.args[1:], method_param_sigs, start_reg=3)
+                        self.emit("POP32    R2", "Restore receiver capacity")
+                        self.emit("POP32    R1", "Restore receiver pointer")
+                        self.stack_offset -= 8
+                else:
+                    method_param_sigs = param_sigs[1:] if len(param_sigs) > 1 else []
+                    has_args = len(expr.args) > 1
+                    if has_args:
+                        self.emit("PUSH32   R1", "Preserve receiver pointer")
+                        self.stack_offset += 4
+                        self._gen_call_arg_list(expr.args[1:], method_param_sigs, start_reg=2)
+                        self.emit("POP32    R1", "Restore receiver pointer")
+                        self.stack_offset -= 4
                 
                 self.emit(f"RCALL   _{target_func}")
                 if target_reg != 1:
@@ -2518,24 +2565,25 @@ class CodeGen:
         elif t_name in ('u16', 's16'):
             self.emit(f"LD16    (R{addr_reg}), R{src}")
 
-    def _gen_relational(self, op, target_reg):
+    def _gen_relational(self, op, target_reg, is_signed=False):
         # Native single-cycle Particle comparisons (SEQ, SNE, SLE, SSLE)
         # R1 is LHS, R2 is RHS
+        sle_op = "SSLE" if is_signed else "SLE"
         if op == '==':
             self.emit("SEQ     R1, R2", "Single-cycle equal")
         elif op == '!=':
             self.emit("SNE     R1, R2", "Single-cycle not-equal")
         elif op == '<=':
-            self.emit("SLE     R1, R2", "Single-cycle unsigned less-equal")
+            self.emit(f"{sle_op:<7} R1, R2", f"Single-cycle {'signed' if is_signed else 'unsigned'} less-equal")
         elif op == '>=':
-            self.emit("SLE     R2, R1", "Single-cycle unsigned greater-equal (swapped)")
+            self.emit(f"{sle_op:<7} R2, R1", f"Single-cycle {'signed' if is_signed else 'unsigned'} greater-equal (swapped)")
             self.emit("LD      R1, R2")
         elif op == '<':
-            self.emit("SLE     R2, R1", "Single-cycle unsigned less (< <=> !(R2 <= R1))")
+            self.emit(f"{sle_op:<7} R2, R1", f"Single-cycle {'signed' if is_signed else 'unsigned'} less (< <=> !(R2 <= R1))")
             self.emit("XOR     R2, 1")
             self.emit("LD      R1, R2")
         elif op == '>':
-            self.emit("SLE     R1, R2", "Single-cycle unsigned greater (> <=> !(R1 <= R2))")
+            self.emit(f"{sle_op:<7} R1, R2", f"Single-cycle {'signed' if is_signed else 'unsigned'} greater (> <=> !(R1 <= R2))")
             self.emit("XOR     R1, 1")
         if target_reg != 1:
             self.emit(f"LD      R{target_reg}, R1")

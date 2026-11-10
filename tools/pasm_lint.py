@@ -14,7 +14,7 @@ REG_NAMES = {f"r{i}" for i in range(16)} | {"sp"}
 ALL_VALID_MNEMONICS = {
     # ALU / Arithmetic / Logic
     'NOP', 'ADD', 'SUB', 'AND', 'OR', 'XOR', 'DIV', 'MOD',
-    'SADD', 'SSUB', 'SDIV', 'SMOD', 'SLT', 'SSLT', 'SGT', 'SGE', 'SLE',
+    'SADD', 'SSUB', 'SDIV', 'SMOD', 'SLT', 'SSLT', 'SGT', 'SGE', 'SLE', 'SSLE',
     'SEQ', 'SNE', 'SHIFTL', 'SHIFTR', 'ASHIFTR', 'REV32', 'NEG', 'NOT',
     'NEZ', 'CLZ', 'BEXTR', 'BSET', 'BCLR', 'SEXT8', 'SEXT16',
     'MULL', 'MULH', 'MULHU',
