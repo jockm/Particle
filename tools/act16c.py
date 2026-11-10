@@ -1031,8 +1031,8 @@ class ParticleAsmBackend(BackendBase):
 
     def gen_array_alloc(self, dst_reg: int, elem_size: int, count_reg: int):
         # Calculate total = 4 + (count * elem_size)
-        # Preserve count in R3 across call
-        self.emit(f"LD      R3, R{count_reg}", "Preserve count for header")
+        # Preserve count across _rt_alloc on hardware stack
+        self.emit(f"PUSH32  R{count_reg}", "Preserve count for header")
         self.emit(f"LD      R1, R{count_reg}")
         if elem_size == 2:
             self.emit("SHIFTL  R1, 1")
@@ -1043,8 +1043,9 @@ class ParticleAsmBackend(BackendBase):
             self.emit("MUL     R1, R2")
         self.emit("ADD     R1, 4", "Include 4-byte length prefix header")
         self.emit("RCALL   _rt_alloc", "Allocate dynamic array")
+        self.emit("POP32   R2", "Restore count for header")
         # Store count in prefix header [Offset 0: count]
-        self.emit("LD32    (R1), R3", "Store array length header")
+        self.emit("LD32    (R1), R2", "Store array length header")
         # Advance pointer to payload [Offset 4: elements]
         self.emit("ADD     R1, 4", "Point to array payload")
         if dst_reg != 1:
@@ -1059,12 +1060,13 @@ class ParticleAsmBackend(BackendBase):
 
     def gen_string_alloc(self, dst_reg: int, cap_reg: int):
         # Total size = 4 (capacity header) + capacity bytes
-        self.emit(f"LD      R3, R{cap_reg}", "Preserve capacity for header")
+        self.emit(f"PUSH32  R{cap_reg}", "Preserve capacity for header")
         self.emit(f"LD      R1, R{cap_reg}")
         self.emit("ADD     R1, 4", "Include 4-byte capacity prefix header")
         self.emit("RCALL   _rt_alloc", "Allocate dynamic string")
+        self.emit("POP32   R2", "Restore capacity for header")
         # Store capacity header
-        self.emit("LD32    (R1), R3", "Store string capacity header")
+        self.emit("LD32    (R1), R2", "Store string capacity header")
         self.emit("ADD     R1, 4", "Point to string buffer payload")
         # Null terminate initially
         self.emit("LD8     (R1), R0", "Null terminate empty dynamic string")
@@ -2232,7 +2234,7 @@ class CodeGen:
                     self.emit_immediate(target_reg, 0)
             else:
                 self.gen_expr(expr.expr, target_reg=target_reg)
-            self.emit(f"NEZ     R{target_reg}, R{target_reg}", "Check reference != 0 (.exists())")
+            self.emit(f"NEZ     R{target_reg}", "Check reference != 0 (.exists())")
             return
 
         elif isinstance(expr, IntLitNode):
@@ -2268,15 +2270,22 @@ class CodeGen:
                     arr_cap = self.array_lens.get(arr_name, 0)
                 self.emit_immediate(target_reg, arr_cap)
                 return
-            elif member == "len":
+            elif member in ("len", "capacity"):
                 arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
                 t_name = self.types.get(arr_name, ('', False, False))[0]
                 is_p = self.types.get(arr_name, ('', False, False))[1]
-                if is_p and t_name != 'string':
+                is_dynamic = is_p or (arr_name in self.affine_state)
+                if is_dynamic and t_name != 'string':
                     # Dynamic heap array length header at base[-4]
                     self.gen_expr(base_expr, target_reg=14)
                     self.emit("SUB     R14, 4", "Point to prefix header")
                     self.emit(f"LD32    R{target_reg}, (R14)", "Read dynamic array length header")
+                    return
+                elif is_dynamic and t_name == 'string' and member == "capacity":
+                    # Dynamic heap string capacity header at base[-4]
+                    self.gen_expr(base_expr, target_reg=14)
+                    self.emit("SUB     R14, 4", "Point to prefix header")
+                    self.emit(f"LD32    R{target_reg}, (R14)", "Read dynamic string capacity header")
                     return
                 arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
                 t_name = self.types.get(arr_name, ('', False, False))[0]
@@ -2519,12 +2528,12 @@ class CodeGen:
                 self.emit(f"SHIFTR  R{target_reg}, R2")
             elif expr.op == '&&':
                 self.emit(f"AND     R1, R2")
-                self.emit(f"NEZ     R1, R1", "Logical AND boolean normalization")
+                self.emit("NEZ     R1", "Logical AND boolean normalization")
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
             elif expr.op == '||':
                 self.emit(f"OR      R1, R2")
-                self.emit(f"NEZ     R1, R1", "Logical OR boolean normalization")
+                self.emit("NEZ     R1", "Logical OR boolean normalization")
                 if target_reg != 1:
                     self.emit(f"LD      R{target_reg}, R1")
             elif expr.op in ('==', '!=', '<', '<=', '>', '>='):
@@ -2818,27 +2827,29 @@ class CodeGen:
             self.emit(f"SHIFTR  R{r_dst}, R{r_src}")
 
     def _emit_load_typed(self, dst, addr_reg, t_name, is_ptr):
-        if is_ptr or t_name in ('u32', 's32') or t_name in self.fn_types:
-            self.emit(f"LD32    R{dst}, (R{addr_reg})")
-        elif t_name in ('u8', 'string'):
-            self.emit(f"LD8     R{dst}, (R{addr_reg})")
+        if is_ptr or t_name in ('u32', 's32', 'string') or t_name in self.fn_types or t_name in self.structs:
+            self.emit(f"LD32     R{dst}, (R{addr_reg})")
+        elif t_name == 'u8':
+            self.emit(f"LD8      R{dst}, (R{addr_reg})")
         elif t_name == 's8':
-            self.emit(f"LD8     R{dst}, (R{addr_reg})")
+            self.emit(f"LD8      R{dst}, (R{addr_reg})")
             self.emit(f"SEXT8   R{dst}")
         elif t_name == 'u16':
-            self.emit(f"LD16    R{dst}, (R{addr_reg})")
+            self.emit(f"LD16     R{dst}, (R{addr_reg})")
         elif t_name == 's16':
-            self.emit(f"LD16    R{dst}, (R{addr_reg})")
+            self.emit(f"LD16     R{dst}, (R{addr_reg})")
             self.emit(f"SEXT16  R{dst}")
-
+        else:
+            self.emit(f"LD32     R{dst}, (R{addr_reg})")
     def _emit_store_typed(self, addr_reg, src, t_name, is_ptr):
-        if is_ptr or t_name in ('u32', 's32') or t_name in self.fn_types:
-            self.emit(f"LD32    (R{addr_reg}), R{src}")
-        elif t_name in ('u8', 's8', 'string'):
-            self.emit(f"LD8     (R{addr_reg}), R{src}")
+        if is_ptr or t_name in ('u32', 's32', 'string') or t_name in self.fn_types or t_name in self.structs:
+            self.emit(f"LD32     (R{addr_reg}), R{src}")
+        elif t_name in ('u8', 's8'):
+            self.emit(f"LD8      (R{addr_reg}), R{src}")
         elif t_name in ('u16', 's16'):
-            self.emit(f"LD16    (R{addr_reg}), R{src}")
-
+            self.emit(f"LD16     (R{addr_reg}), R{src}")
+        else:
+            self.emit(f"LD32     (R{addr_reg}), R{src}")
     def _gen_relational(self, op, target_reg, is_signed=False):
         # Native single-cycle Particle comparisons (SEQ, SNE, SLE, SSLE)
         # R1 is LHS, R2 is RHS

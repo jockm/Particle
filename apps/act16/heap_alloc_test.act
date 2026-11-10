@@ -1,0 +1,120 @@
+// =============================================================================
+// ACT16 Dynamic Heap Allocation & Affine Safety Verification Test
+// =============================================================================
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+type Node {
+    u32 val;
+    Node* next;
+};
+
+void test_point_alloc() {
+    Point p = 0;
+    if (p.exists() != 0) {
+        trap(15);
+    }
+
+    p = Point.create();
+    if (p.exists() != 1) {
+        trap(15);
+    }
+
+    p.x = 42;
+    p.y = 84;
+
+    if (p.x != 42 || p.y != 84) {
+        trap(15);
+    }
+
+    p.destroy();
+
+    // Verify p is zeroed out by destructor
+    if (p.exists() != 0) {
+        trap(15);
+    }
+}
+
+void test_array_alloc() {
+    u32 arr = u32.createArray(5);
+    if (arr.exists() != 1) {
+        trap(15);
+    }
+
+    // Verify dynamic .len introspection via prefix header
+    if (arr.len != 5) {
+        trap(15);
+    }
+
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+    arr[4] = 50;
+
+    u32 sum = arr[0] + arr[1] + arr[2] + arr[3] + arr[4];
+    if (sum != 150) {
+        trap(15);
+    }
+
+    arr.destroyArray();
+    if (arr.exists() != 0) {
+        trap(15);
+    }
+}
+
+void test_string_alloc() {
+    string s = string.create(32);
+    if (s.exists() != 1) {
+        trap(15);
+    }
+
+    // Verify dynamic .capacity introspection via prefix header
+    if (s.capacity != 32) {
+        trap(15);
+    }
+
+    s[0] = 65; // 'A'
+    s[1] = 66; // 'B'
+    s[2] = 67; // 'C'
+    s[3] = 0;
+
+    if (s.len != 3) {
+        trap(15);
+    }
+
+    s.destroy();
+    if (s.exists() != 0) {
+        trap(15);
+    }
+}
+
+void test_affine_move() {
+    Point a = Point.create();
+    a.x = 100;
+
+    // Move ownership from a to b
+    Point b = a;
+
+    if (b.x != 100) {
+        trap(15);
+    }
+
+    b.destroy();
+    if (b.exists() != 0) {
+        trap(15);
+    }
+}
+
+u32 main() {
+    test_point_alloc();
+    test_array_alloc();
+    test_string_alloc();
+    test_affine_move();
+
+    trap(14); // Success quit
+    return 0;
+}
