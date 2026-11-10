@@ -79,6 +79,12 @@ class ParticleCore:
             self.halted = True
             return
 
+        # Trap 15 Out-of-Bounds / Sentinel Overwrite Hook
+        if trap_idx == 15:
+            print(f"\n[SIM] Out-of-Bounds / Sentinel Trap 15 triggered at PC: 0x{return_pc:08X} (Cycles={self.cycle_count})")
+            self.halted = True
+            return
+
         self.pc = (self.trap_base + (trap_idx * self.trap_stride)) & MASK32
 
     def read8(self, addr):

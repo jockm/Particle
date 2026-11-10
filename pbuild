@@ -210,10 +210,14 @@ if [ "$EXT" = "act" ]; then
     mkdir -p "$(dirname "$STAGE_ASM")"
     run_step "Compiling ACT16: $SOURCE -> $STAGE_ASM" "$PYTHON" "$ACT16C" "$SOURCE" -o "$STAGE_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
     run_step "Linting: $STAGE_ASM" "$PYTHON" "$PASM_LINT" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"}
+    # run_step "Linting: $STAGE_ASM" dart "${PROJECT_ROOT}/tools/pasm_lint.dart" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"}
     run_step "Assembling: $STAGE_ASM -> $OUTPUT" "$PYTHON" "$PASM" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+    # run_step "Assembling: $STAGE_ASM -> $OUTPUT" dart "${PROJECT_ROOT}/tools/pasm.dart" "$STAGE_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
 elif [ "$EXT" = "asm" ]; then
     run_step "Linting: $SOURCE" "$PYTHON" "$PASM_LINT" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"}
+    # run_step "Linting: $SOURCE" dart "${PROJECT_ROOT}/tools/pasm_lint.dart" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"}
     run_step "Assembling: $SOURCE -> $OUTPUT" "$PYTHON" "$PASM" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+    # run_step "Assembling: $SOURCE -> $OUTPUT" dart "${PROJECT_ROOT}/tools/pasm.dart" "$SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
 fi
 
 if [ "$VERBOSE" -eq 1 ]; then
@@ -237,6 +241,6 @@ if [ "$RUN_SIM" -eq 1 ]; then
         echo "==> [pbuild] Running simulator: dart ${PROJECT_ROOT}/tools/psim.dart $OUTPUT ${SIM_ARGS[*]}"
     fi
 
-    # "$PYTHON" "$PSIM" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
-    dart "${PROJECT_ROOT}/tools/psim.dart" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
+    "$PYTHON" "$PSIM" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
+    # dart "${PROJECT_ROOT}/tools/psim.dart" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
 fi
