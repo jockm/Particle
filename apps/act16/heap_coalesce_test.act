@@ -1,0 +1,36 @@
+type ChunkNode {
+    u32 f1;
+    u32 f2;
+};
+
+void main() {
+    // 1. Allocate 3 adjacent chunks: A, B, C
+    ChunkNode n1 = ChunkNode.create();
+    ChunkNode n2 = ChunkNode.create();
+    ChunkNode n3 = ChunkNode.create();
+
+    n1.f1 = 11;
+    n2.f1 = 22;
+    n3.f1 = 33;
+
+    // 2. Free n1 and n3
+    n1.destroy();
+    n3.destroy();
+
+    // 3. Free middle chunk n2 -> triggers coalescing with both n3 (fwd) and n1 (bwd)
+    n2.destroy();
+
+    // 4. Allocate dynamic array requiring more space than a single chunk (16 bytes),
+    // but fitting inside the coalesced span (48 bytes total)
+    u32 arr = u32.createArray(6);
+    arr[0] = 111;
+    arr[5] = 555;
+
+    if (arr[0] + arr[5] != 666) {
+        trap(15);
+    }
+
+    arr.destroyArray();
+
+    trap(14);
+}
