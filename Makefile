@@ -15,8 +15,8 @@ PBUILD       := ./pbuild
 # Default: Python reference simulator (tools/psim.py)
 # To switch to compiled native Dart simulator, comment out this line and uncomment
 # the Dart definition below:
-PSIM         := $(BUILD_DIR)/tools/psim
-# PSIM       := $(BUILD_DIR)/tools/psim
+PSIM         := build/tools/psim
+# PSIM         := build/tools/psim
 
 ROHD_DIR     := hdl/rohd
 PARCORE_DIR  := hdl/parcore

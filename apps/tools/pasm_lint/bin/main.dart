@@ -319,10 +319,23 @@ int lintFile(String filepath, List<String> includeDirs) {
 
     // Directives: check for bounds or quote errors, then skip instruction checks
     if (cleaned.startsWith(".") && !cleaned.startsWith("._")) {
-      // Validate string closing quotes
+      // Validate string closing quotes (ignoring escaped quotes)
       if (cleaned.startsWith(".ascii") || cleaned.startsWith(".asciz") || cleaned.startsWith(".string")) {
-        final quoteCount = cleaned.split("").where((c) => c == '"').length;
-        if (quoteCount < 2 || quoteCount % 2 != 0) {
+        var unescapedQuotes = 0;
+        for (var idx = 0; idx < cleaned.length; idx++) {
+          if (cleaned[idx] == '"') {
+            var slashCount = 0;
+            var sIdx = idx - 1;
+            while (sIdx >= 0 && cleaned[sIdx] == r"\") {
+              slashCount++;
+              sIdx--;
+            }
+            if (slashCount % 2 == 0) {
+              unescapedQuotes++;
+            }
+          }
+        }
+        if (unescapedQuotes < 2 || unescapedQuotes % 2 != 0) {
           errors.add((lno, "Unterminated or malformed string literal in directive."));
         }
       }

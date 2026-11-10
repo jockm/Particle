@@ -1623,7 +1623,8 @@ class CodeGen:
             self.emit("LD16     R1, (R14)", "Read continuation counter")
             lbl_entry_0 = f"._step_{func.name}_0"
             lbl_skip_0 = self.new_label("coro_skip")
-            self.emit("SEQ      R3, R1, R0", "Check if initial entry (lc == 0)")
+            self.emit("LD       R3, R1", "Copy lc for check")
+            self.emit("SEQ      R3, R0", "Check if initial entry (lc == 0)")
             self.emit(f"FBRA.Z   R3, {lbl_skip_0}", "Hop if not lc == 0")
             self.emit(f"FBRA     {lbl_entry_0}", "Wide branch to initial entry (8-bit)")
             self.emit_label(lbl_skip_0)
@@ -1634,7 +1635,8 @@ class CodeGen:
                     lbl_s = f"._step_{func.name}_{s_val}"
                     lbl_skip_s = self.new_label("coro_skip")
                     self.emit_immediate(2, s_val)
-                    self.emit("SEQ      R3, R1, R2", f"Check step {s_val}")
+                    self.emit("LD       R3, R1", "Copy lc for check")
+                    self.emit("SEQ      R3, R2", f"Check step {s_val}")
                     self.emit(f"FBRA.Z   R3, {lbl_skip_s}", "Hop if not matched")
                     self.emit(f"FBRA     {lbl_s}", f"Wide branch to step {s_val} (8-bit)")
                     self.emit_label(lbl_skip_s)
@@ -2086,6 +2088,22 @@ class CodeGen:
                     self.emit("SLT     R13, R14", f"Check {base_name}[i] < dynamic length")
                     self.emit(f"FBRA.NZ R13, {lbl_in_bounds}", "Branch if within array bounds")
                     self.emit("TRAP    15", f"Open array out-of-bounds trap ({base_name})")
+                    self.emit_label(lbl_in_bounds)
+                elif base_name and (base_name in self.affine_state) and dim_idx == 0:
+                    # Dynamic heap array / string bounds check via prefix header at (base - 4)
+                    len_off = self.stack_offset - self.locals[base_name]
+                    self.emit_immediate(14, len_off)
+                    self.emit("ADD     R14, R15")
+                    self.emit("LD32    R14, (R14)", f"Load heap pointer for '{base_name}'")
+                    self.emit("SUB     R14, 4", "Point to prefix header")
+                    self.emit("LD32    R14, (R14)", "Read dynamic bound from prefix header")
+                    base_t, _ = self._get_expr_type(base_node)
+                    if is_write and self._clean_type(base_t) == 'string':
+                        self.emit("SUB     R14, 1", "Reserve null terminator for dynamic string write")
+                    self.emit("LD      R13, R3", "Preserve index for bounds check")
+                    self.emit("SLT     R13, R14", f"Check dynamic {base_name}[i] < bound")
+                    self.emit(f"FBRA.NZ R13, {lbl_in_bounds}", "Branch if within array bounds")
+                    self.emit("TRAP    15", f"Dynamic heap out-of-bounds trap ({base_name})")
                     self.emit_label(lbl_in_bounds)
                 elif dim_idx < len(dims):
                     arr_dim = dims[dim_idx]
