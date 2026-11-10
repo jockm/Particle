@@ -21,8 +21,8 @@ ACT16C="${PROJECT_ROOT}/tools/act16c.py"
 # Default: Python reference simulator (${PROJECT_ROOT}/tools/psim.py)
 # To use the native compiled Dart simulator, comment out the line below and
 # uncomment the Dart binary definition.
-PSIM_CMD=("$PYTHON" "${PROJECT_ROOT}/tools/psim.py")
-# PSIM_CMD=("${PROJECT_ROOT}/build/tools/psim")
+# PSIM_CMD=("$PYTHON" "${PROJECT_ROOT}/tools/psim.py")
+PSIM_CMD=("${PROJECT_ROOT}/build/tools/psim")
 LIB_DIR="${PROJECT_ROOT}/lib"
 
 # Resolve assembler command (compiled Dart binary preferred)
