@@ -4,6 +4,7 @@
 
 SHELL        := /bin/bash
 DART         ?= dart
+
 PYTHON       ?= python3
 
 PBUILD       := ./pbuild
@@ -12,6 +13,10 @@ PSIM         := $(PYTHON) tools/psim.py
 ROHD_DIR     := hdl/rohd
 PARCORE_DIR  := hdl/parcore
 BUILD_DIR    := build
+TOOL_DIR     := apps/tools
+TOOL_BIN_DIR := $(BUILD_DIR)/tools
+PASM_LINT_BIN:= $(TOOL_BIN_DIR)/pasm_lint
+PASM_BIN     := $(TOOL_BIN_DIR)/pasm
 PARCORE_BLD  := $(BUILD_DIR)/parcore
 
 # Recursive wildcard across firmware/parcore
@@ -149,6 +154,56 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Cleanup
 # ------------------------------------------------------------------------------
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# Toolchain Targets
+# ------------------------------------------------------------------------------
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# Toolchain Targets
+# ------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+# ------------------------------------------------------------------------------
+# Toolchain Targets
+# ------------------------------------------------------------------------------
+.PHONY: tools pasm-lint pasm lint-tool
+
+tools: pasm-lint pasm
+
+lint-tool: pasm-lint
+pasm-lint: $(PASM_LINT_BIN)
+
+$(PASM_LINT_BIN): $(shell find apps/tools/pasm_lint -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
+	@echo "==> Compiling pasm_lint..."
+	@cd apps/tools/pasm_lint && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/pasm_lint/bin/main.dart -o $@
+
+pasm: $(PASM_BIN)
+
+$(PASM_BIN): $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
+	@echo "==> Compiling pasm..."
+	@cd apps/tools/pasm && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/pasm/bin/main.dart -o $@
+
+$(TOOL_BIN_DIR):
+	@mkdir -p $@
 
 clean:
 	@echo "==> Cleaning build artifacts and generated SV files..."

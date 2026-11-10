@@ -58,8 +58,8 @@ _branch_fwd_dest:
     ; --------------------------------------------------------------------------
     ; Test 5: BRANCH Rr Backward
     ; --------------------------------------------------------------------------
-    LD      R8, 4
-    NEG     R8                  ; R8 = -4 (jump backward 4 halfwords / -8 bytes)
+    LD      R8, 2               ; Jump backward 2 halfwords (4 bytes)
+    NEG     R8                  ; R8 = -2
     FBRA    _trigger_bwd_branch
 _branch_bwd_dest:
     LD      R9, 5               ; Marker 5 passed

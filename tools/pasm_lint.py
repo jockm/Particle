@@ -251,6 +251,8 @@ def lint_file(filepath, include_dirs=None):
 
 
 def main():
+    import sys
+    sys.stderr.write("[DEPRECATION] tools/pasm_lint.py is deprecated in favor of the compiled Dart version in apps/tools/pasm_lint.\n")
     parser = argparse.ArgumentParser(description="Particle Assembly Linter")
     parser.add_argument("source", help="Assembly file to lint")
     parser.add_argument("-I", "--include", action="append", help="Include search path")

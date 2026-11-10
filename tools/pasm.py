@@ -779,6 +779,8 @@ class ParticleAssembler:
         raise AssemblerError(f"Unimplemented instruction mnemonic '{mnem}'", fname, lno)
 
 def main():
+    import sys
+    sys.stderr.write("[DEPRECATION] tools/pasm.py is deprecated in favor of compiled Dart pasm in apps/tools/pasm.\n")
     parser = argparse.ArgumentParser(description="Particle Two-Pass Macro Assembler")
     parser.add_argument("source", help="Source assembly file (.asm)")
     parser.add_argument("-I", "--include", action="append", default=[], help="Include directory")

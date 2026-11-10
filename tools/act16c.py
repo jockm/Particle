@@ -407,6 +407,32 @@ class IntLitNode(ASTNode):
     def __init__(self, val):
         self.val = val
 
+class HeapAllocNode(ASTNode):
+    def __init__(self, type_name, args=None):
+        self.type_name = type_name
+        self.args = args or []
+
+class HeapArrayAllocNode(ASTNode):
+    def __init__(self, type_name, count_expr):
+        self.type_name = type_name
+        self.count_expr = count_expr
+
+class HeapStringAllocNode(ASTNode):
+    def __init__(self, cap_expr):
+        self.cap_expr = cap_expr
+
+class HeapFreeNode(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
+class HeapArrayFreeNode(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
+class ExistsNode(ASTNode):
+    def __init__(self, expr):
+        self.expr = expr
+
 # ------------------------------------------------------------------------------
 # Parser
 # ------------------------------------------------------------------------------
@@ -821,7 +847,7 @@ class Parser:
                 member = self.consume('IDENT').val
                 if self.peek().val == '(':
                     self.consume('PUNCT', '(')
-                    args = [node]
+                    args = []
                     if self.peek().val != ')':
                         while True:
                             args.append(self.parse_expr())
@@ -830,7 +856,40 @@ class Parser:
                             else:
                                 break
                     self.consume('PUNCT', ')')
-                    node = CallNode(f"__METHOD__{member}", args)
+
+                    # Intercept dynamic allocation pseudo-constructors
+                    # Receiver node is a VarAccessNode naming a type, or identifier 'string'
+                    rcv_name = node.name if isinstance(node, VarAccessNode) else None
+
+                    if member == 'create':
+                        if rcv_name == 'string':
+                            if len(args) != 1:
+                                raise SyntaxError("string.create(capacity) requires exactly 1 argument (capacity)")
+                            node = HeapStringAllocNode(args[0])
+                        elif rcv_name:
+                            node = HeapAllocNode(rcv_name, args)
+                        else:
+                            node = CallNode(f"__METHOD__{member}", [node] + args)
+                    elif member == 'createArray':
+                        if not rcv_name:
+                            raise SyntaxError("createArray(N) must be called on a type identifier (e.g. Type.createArray(N))")
+                        if len(args) != 1:
+                            raise SyntaxError("createArray(N) requires exactly 1 argument (element count)")
+                        node = HeapArrayAllocNode(rcv_name, args[0])
+                    elif member == 'destroy':
+                        if len(args) != 0:
+                            raise SyntaxError("destroy() takes no arguments")
+                        node = HeapFreeNode(node)
+                    elif member == 'destroyArray':
+                        if len(args) != 0:
+                            raise SyntaxError("destroyArray() takes no arguments")
+                        node = HeapArrayFreeNode(node)
+                    elif member == 'exists':
+                        if len(args) != 0:
+                            raise SyntaxError("exists() takes no arguments")
+                        node = ExistsNode(node)
+                    else:
+                        node = CallNode(f"__METHOD__{member}", [node] + args)
                 else:
                     node = MemberAccessNode(node, member)
             elif self.peek().val == '[':
@@ -872,7 +931,7 @@ class Parser:
             self.consume()
             raw = bytes(tok.val[1:-1], 'utf-8').decode('unicode_escape')
             return StringLitNode(raw)
-        if tok.type == 'IDENT':
+        if tok.type == 'IDENT' or (tok.val == 'string' and self.tokens[self.pos+1].val == '.'):
             name = self.consume().val
             if self.peek().val == '(':
                 self.consume('PUNCT', '(')
@@ -897,7 +956,123 @@ class Parser:
         raise SyntaxError(f"{tok.fname}:{tok.lineno}:{tok.col}: Unexpected token '{tok.val}'")
 
 # ------------------------------------------------------------------------------
-# Code Generator (Emits Particle Assembly)
+# Pluggable Backend Architecture
+# ------------------------------------------------------------------------------
+
+class BackendBase:
+    """Abstract code generation backend interface."""
+    def __init__(self):
+        self.asm = []
+        self.label_counter = 0
+
+    def emit(self, line: str, comment: str = ""):
+        if comment:
+            self.asm.append(f"    {line:<24} ; {comment}")
+        else:
+            self.asm.append(f"    {line}")
+
+    def emit_label(self, label: str):
+        self.asm.append(f"{label}:")
+
+    def new_label(self, prefix: str = "L") -> str:
+        self.label_counter += 1
+        return f"._{prefix}_{self.label_counter}"
+
+    def emit_immediate(self, reg: int, val: int):
+        raise NotImplementedError
+
+    def gen_heap_alloc(self, dst_reg: int, size_bytes: int):
+        """Allocate size_bytes on heap; return base pointer in dst_reg."""
+        raise NotImplementedError
+
+    def gen_heap_free(self, addr_reg: int):
+        """Free memory block at addr_reg."""
+        raise NotImplementedError
+
+    def gen_array_alloc(self, dst_reg: int, elem_size: int, count_reg: int):
+        """Allocate dynamic array with 4-byte count header; return payload pointer in dst_reg."""
+        raise NotImplementedError
+
+    def gen_array_free(self, addr_reg: int):
+        """Free dynamic array given its payload pointer."""
+        raise NotImplementedError
+
+    def gen_string_alloc(self, dst_reg: int, cap_reg: int):
+        """Allocate dynamic string with 4-byte capacity header and null byte; return payload pointer."""
+        raise NotImplementedError
+
+
+class ParticleAsmBackend(BackendBase):
+    """Particle 32-bit RISC Bare-Metal Assembly Backend."""
+
+    def emit_immediate(self, reg: int, val: int):
+        v = val & 0xFFFFFFFF
+        if 0 <= val <= 15:
+            self.emit(f"LD      R{reg}, {val}", f"Imm4 load ({val})")
+        elif -15 <= val < 0:
+            self.emit(f"LD      R{reg}, -{abs(val)}", f"-Imm4 load ({val})")
+        elif v <= 0xFFFF:
+            self.emit(f"LOAD16  R{reg}, 0x{v:04X}", f"LOAD16 tiered ({val})")
+        elif v <= 0xFFFFFF:
+            self.emit(f"LOAD24  R{reg}, 0x{v:06X}", f"LOAD24 tiered ({val})")
+        else:
+            self.emit(f"LOAD32  R{reg}, 0x{v:08X}", f"LOAD32 full word ({val})")
+
+    def gen_heap_alloc(self, dst_reg: int, size_bytes: int):
+        self.emit_immediate(1, size_bytes)
+        self.emit("RCALL   _rt_alloc", f"Heap alloc {size_bytes} bytes")
+        if dst_reg != 1:
+            self.emit(f"LD      R{dst_reg}, R1")
+
+    def gen_heap_free(self, addr_reg: int):
+        if addr_reg != 1:
+            self.emit(f"LD      R1, R{addr_reg}")
+        self.emit("RCALL   _rt_free", "Heap free block")
+
+    def gen_array_alloc(self, dst_reg: int, elem_size: int, count_reg: int):
+        # Calculate total = 4 + (count * elem_size)
+        # Preserve count in R3 across call
+        self.emit(f"LD      R3, R{count_reg}", "Preserve count for header")
+        self.emit(f"LD      R1, R{count_reg}")
+        if elem_size == 2:
+            self.emit("SHIFTL  R1, 1")
+        elif elem_size == 4:
+            self.emit("SHIFTL  R1, 2")
+        elif elem_size != 1:
+            self.emit_immediate(2, elem_size)
+            self.emit("MUL     R1, R2")
+        self.emit("ADD     R1, 4", "Include 4-byte length prefix header")
+        self.emit("RCALL   _rt_alloc", "Allocate dynamic array")
+        # Store count in prefix header [Offset 0: count]
+        self.emit("LD32    (R1), R3", "Store array length header")
+        # Advance pointer to payload [Offset 4: elements]
+        self.emit("ADD     R1, 4", "Point to array payload")
+        if dst_reg != 1:
+            self.emit(f"LD      R{dst_reg}, R1")
+
+    def gen_array_free(self, addr_reg: int):
+        # Adjust backwards to include length header
+        self.emit(f"SUB     R{addr_reg}, 4", "Adjust pointer to array header")
+        if addr_reg != 1:
+            self.emit(f"LD      R1, R{addr_reg}")
+        self.emit("RCALL   _rt_free", "Free dynamic array block")
+
+    def gen_string_alloc(self, dst_reg: int, cap_reg: int):
+        # Total size = 4 (capacity header) + capacity bytes
+        self.emit(f"LD      R3, R{cap_reg}", "Preserve capacity for header")
+        self.emit(f"LD      R1, R{cap_reg}")
+        self.emit("ADD     R1, 4", "Include 4-byte capacity prefix header")
+        self.emit("RCALL   _rt_alloc", "Allocate dynamic string")
+        # Store capacity header
+        self.emit("LD32    (R1), R3", "Store string capacity header")
+        self.emit("ADD     R1, 4", "Point to string buffer payload")
+        # Null terminate initially
+        self.emit("LD8     (R1), R0", "Null terminate empty dynamic string")
+        if dst_reg != 1:
+            self.emit(f"LD      R{dst_reg}, R1")
+
+# ------------------------------------------------------------------------------
+# Code Generator (Frontend & AST Lowering)
 # ------------------------------------------------------------------------------
 
 class CodeGen:
@@ -968,14 +1143,19 @@ class CodeGen:
         self.emit(f"BBRA    {lbl_scan}", "Check next byte")
         self.emit_label(lbl_done)
 
+    def _check_affine_access(self, name):
+        if name in self.affine_state and self.affine_state[name] == 'MOVED':
+            raise SyntaxError(f"act16c: use of moved or deallocated affine reference '{name}'")
+
     def _clean_type(self, t):
         if not t:
             return ""
         return t.replace("struct ", "").replace("type ", "").strip()
-    def __init__(self, bounds_check: bool = True):
+    def __init__(self, bounds_check: bool = True, backend=None):
         self.bounds_check = bounds_check
-        self.asm = []
-        self.label_counter = 0
+        self.backend = backend if backend is not None else ParticleAsmBackend()
+        self.asm = self.backend.asm
+        self.affine_state = {}
         self.locals = {}
         self.globals = set()
         self.types = {}
@@ -997,30 +1177,16 @@ class CodeGen:
         self.open_arrays = set()
 
     def emit(self, line, comment=""):
-        if comment:
-            self.asm.append(f"    {line:<24} ; {comment}")
-        else:
-            self.asm.append(f"    {line}")
+        self.backend.emit(line, comment)
 
     def emit_label(self, label):
-        self.asm.append(f"{label}:")
+        self.backend.emit_label(label)
 
     def new_label(self, prefix="L"):
-        self.label_counter += 1
-        return f"._{prefix}_{self.label_counter}"
+        return self.backend.new_label(prefix)
 
     def emit_immediate(self, reg, val):
-        v = val & 0xFFFFFFFF
-        if 0 <= val <= 15:
-            self.emit(f"LD      R{reg}, {val}", f"Imm4 load ({val})")
-        elif -15 <= val < 0:
-            self.emit(f"LD      R{reg}, -{abs(val)}", f"-Imm4 load ({val})")
-        elif v <= 0xFFFF:
-            self.emit(f"LOAD16  R{reg}, 0x{v:04X}", f"LOAD16 tiered ({val})")
-        elif v <= 0xFFFFFF:
-            self.emit(f"LOAD24  R{reg}, 0x{v:06X}", f"LOAD24 tiered ({val})")
-        else:
-            self.emit(f"LOAD32  R{reg}, 0x{v:08X}", f"LOAD32 full word ({val})")
+        self.backend.emit_immediate(reg, val)
 
     def _resolve_method(self, struct_name, method_name):
         direct = f"{struct_name}_{method_name}"
@@ -1034,6 +1200,14 @@ class CodeGen:
         return None, 0
 
     def _get_expr_type(self, expr):
+        if isinstance(expr, ExistsNode):
+            return ('u32', False)
+        elif isinstance(expr, HeapAllocNode):
+            return (expr.type_name, True)
+        elif isinstance(expr, HeapArrayAllocNode):
+            return (expr.type_name, True)
+        elif isinstance(expr, HeapStringAllocNode):
+            return ('string', True)
         if isinstance(expr, UnaryOpNode) and expr.op == '&':
             return self._get_expr_type(expr.operand)
         while hasattr(expr, 'expr') and not isinstance(expr, (MemberAccessNode, UnaryOpNode)):
@@ -1346,6 +1520,7 @@ class CodeGen:
             self.stack_offset = 4
 
         self.open_arrays.clear()
+        self.affine_state = {}
         r_idx = 1
         for p in func.params:
             p_type, p_ptr, p_name = p[0], p[1], p[2]
@@ -1980,13 +2155,72 @@ class CodeGen:
         return base_type, leaf_elem_sz
 
     def gen_expr(self, expr, target_reg=1):
-        if isinstance(expr, IntLitNode):
+        if isinstance(expr, HeapAllocNode):
+            clean_type = self._clean_type(expr.type_name)
+            sz = self.structs.get(clean_type, {}).get('__size__', 4)
+            self.backend.gen_heap_alloc(target_reg, sz)
+            return
+
+        elif isinstance(expr, HeapArrayAllocNode):
+            clean_type = self._clean_type(expr.type_name)
+            elem_sz = self._get_elem_size(clean_type, False)
+            self.gen_expr(expr.count_expr, target_reg=2)
+            self.backend.gen_array_alloc(target_reg, elem_sz, count_reg=2)
+            return
+
+        elif isinstance(expr, HeapStringAllocNode):
+            self.gen_expr(expr.cap_expr, target_reg=2)
+            self.backend.gen_string_alloc(target_reg, cap_reg=2)
+            return
+
+        elif isinstance(expr, HeapFreeNode):
+            target_var = expr.expr.name if isinstance(expr.expr, VarAccessNode) else None
+            if target_var and target_var in self.affine_state:
+                if self.affine_state[target_var] == 'MOVED':
+                    raise SyntaxError(f"act16c: cannot destroy already moved/destroyed reference '{target_var}'")
+                self.affine_state[target_var] = 'MOVED'
+            self.gen_expr(expr.expr, target_reg=1)
+            self.backend.gen_heap_free(1)
+            if target_var and target_var in self.locals:
+                off = self.stack_offset - self.locals[target_var]
+                self.emit_immediate(14, off)
+                self.emit("ADD     R14, R15")
+                self.emit("ST32    (R14), R0", f"Zero out destroyed affine reference '{target_var}'")
+            return
+
+        elif isinstance(expr, HeapArrayFreeNode):
+            target_var = expr.expr.name if isinstance(expr.expr, VarAccessNode) else None
+            if target_var and target_var in self.affine_state:
+                if self.affine_state[target_var] == 'MOVED':
+                    raise SyntaxError(f"act16c: cannot destroy already moved/destroyed reference '{target_var}'")
+                self.affine_state[target_var] = 'MOVED'
+            self.gen_expr(expr.expr, target_reg=1)
+            self.backend.gen_array_free(1)
+            if target_var and target_var in self.locals:
+                off = self.stack_offset - self.locals[target_var]
+                self.emit_immediate(14, off)
+                self.emit("ADD     R14, R15")
+                self.emit("ST32    (R14), R0", f"Zero out destroyed affine array reference '{target_var}'")
+            return
+
+        elif isinstance(expr, ExistsNode):
+            self.gen_expr(expr.expr, target_reg=target_reg)
+            self.emit(f"NEZ     R{target_reg}, R{target_reg}", "Check reference != 0 (.exists())")
+            return
+
+        elif isinstance(expr, IntLitNode):
             self.emit_immediate(target_reg, expr.val)
 
         elif isinstance(expr, MemberAccessNode):
             base_expr = expr.expr
             member = expr.member
             if member == "capacity":
+                if isinstance(base_expr, VarAccessNode) and (base_expr.name in self.affine_state or self.types.get(base_expr.name, ('', False))[1]):
+                    # Dynamic heap capacity header at base[-4]
+                    self.gen_expr(base_expr, target_reg=14)
+                    self.emit("SUB     R14, 4", "Point to prefix header")
+                    self.emit(f"LD32    R{target_reg}, (R14)", "Read dynamic capacity header")
+                    return
                 if isinstance(base_expr, MemberAccessNode):
                     p_t, _ = self._get_expr_type(base_expr.expr)
                     s_name = self._clean_type(p_t)
@@ -2008,6 +2242,15 @@ class CodeGen:
                 self.emit_immediate(target_reg, arr_cap)
                 return
             elif member == "len":
+                arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
+                t_name = self.types.get(arr_name, ('', False, False))[0]
+                is_p = self.types.get(arr_name, ('', False, False))[1]
+                if is_p and t_name != 'string':
+                    # Dynamic heap array length header at base[-4]
+                    self.gen_expr(base_expr, target_reg=14)
+                    self.emit("SUB     R14, 4", "Point to prefix header")
+                    self.emit(f"LD32    R{target_reg}, (R14)", "Read dynamic array length header")
+                    return
                 arr_name = base_expr.name if hasattr(base_expr, 'name') else ""
                 t_name = self.types.get(arr_name, ('', False, False))[0]
                 if t_name == 'string':
@@ -2065,6 +2308,7 @@ class CodeGen:
 
         elif isinstance(expr, VarAccessNode):
             name = expr.name
+            self._check_affine_access(name)
             if name in self.constants:
                 self.emit_immediate(target_reg, self.constants[name])
                 return
@@ -2201,6 +2445,15 @@ class CodeGen:
                     return
                 elif isinstance(expr.left, VarAccessNode):
                     name = expr.left.name
+                    # Affine move semantics
+                    if isinstance(expr.right, VarAccessNode):
+                        rhs_name = expr.right.name
+                        if rhs_name in self.affine_state:
+                            self._check_affine_access(rhs_name)
+                            self.affine_state[rhs_name] = 'MOVED'
+                            self.affine_state[name] = 'VALID'
+                    elif isinstance(expr.right, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
+                        self.affine_state[name] = 'VALID'
                     t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                     self._validate_fn_type_assignment(t_name, expr.right)
                     if name in self.bound_addrs:
