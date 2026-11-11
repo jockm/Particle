@@ -358,8 +358,9 @@ class IfNode(ASTNode):
         self.else_body = else_body
 
 class CaseLabelNode(ASTNode):
-    def __init__(self, val, label=None):
-        self.val = val
+    def __init__(self, expr, label=None):
+        self.expr = expr
+        self.val = None
         self.label = label
 
 class DefaultLabelNode(ASTNode):
@@ -551,13 +552,9 @@ class Parser:
             if self.peek().val == '=':
                 self.consume('OP', '=')
                 expr = self.parse_expr()
-                if isinstance(expr, IntLitNode):
-                    cur_val = expr.val
                 members.append((m_name, expr))
-                cur_val += 1
             else:
-                members.append((m_name, IntLitNode(cur_val)))
-                cur_val += 1
+                members.append((m_name, None))
             if self.peek().val == ',':
                 self.consume('PUNCT', ',')
         self.consume('PUNCT', '}')
@@ -783,13 +780,9 @@ class Parser:
             return IfNode(cond, then_body, else_body)
         if tok.val == 'case':
             self.consume('KEYWORD', 'case')
-            val_tok = self.peek()
-            if val_tok.type not in ('INT', 'HEX'):
-                raise SyntaxError(f"{val_tok.fname}:{val_tok.lineno}:{val_tok.col}: Expected integer constant after 'case', got '{val_tok.val}'")
-            self.consume()
-            case_val = int(val_tok.val, 0)
+            case_expr = self.parse_expr()
             self.consume('PUNCT', ':')
-            return CaseLabelNode(case_val)
+            return CaseLabelNode(case_expr)
 
         if tok.val == 'default':
             self.consume('KEYWORD', 'default')
@@ -1770,9 +1763,7 @@ class CodeGen:
             if isinstance(d, EnumDeclNode):
                 cur_val = 0
                 for m_name, m_expr in d.members:
-                    if isinstance(m_expr, IntLitNode):
-                        cur_val = m_expr.val
-                    elif m_expr is not None:
+                    if m_expr is not None:
                         cur_val = self._eval_const_expr(m_expr)
                     self.constants[m_name] = cur_val
                     cur_val += 1
@@ -2064,6 +2055,12 @@ class CodeGen:
 
     def _collect_switch_labels(self, node, cases, default_holder):
         if isinstance(node, CaseLabelNode):
+            if isinstance(node.expr, int):
+                node.val = node.expr
+            elif isinstance(node.expr, IntLitNode):
+                node.val = node.expr.val
+            else:
+                node.val = self._eval_const_expr(node.expr)
             node.label = self.new_label(f"case_{node.val}")
             cases.append((node.val, node.label))
         elif isinstance(node, DefaultLabelNode):
@@ -2307,9 +2304,8 @@ class CodeGen:
             self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
 
         elif isinstance(stmt, TupleAssignNode):
-            # Evaluate RHS call or expression (results placed in R1..R4)
+            # Save return registers if RHS is evaluated
             self.gen_expr(stmt.expr, target_reg=1)
-            # Store results into corresponding targets
             for i, target in enumerate(stmt.targets):
                 if target.is_wildcard:
                     continue
@@ -2320,8 +2316,11 @@ class CodeGen:
                 t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                 if name in self.locals:
                     offset = self.stack_offset - self.locals[name]
-                    self.emit_immediate(14, offset)
-                    self.emit("ADD     R14, R15")
+                    if offset > 0:
+                        self.emit_immediate(14, offset)
+                        self.emit("ADD     R14, R15")
+                    else:
+                        self.emit("LD      R14, R15")
                     self._emit_store_typed(14, reg_src, t_name, is_ptr)
                 elif name in self.globals:
                     self.emit(f"LOAD32  R14, _{name}")

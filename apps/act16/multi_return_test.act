@@ -1,0 +1,35 @@
+// Callee returning 2 values (R1, R2)
+(u32, u16) read_packet(u16 port) {
+    if (port == 0) {
+        return (0xAA55, 0);
+    }
+    return (0xBEEF, 1);
+}
+
+// Callee returning 3 values (R1, R2, R3)
+(u32, u32, u32) compute_triplet(u32 base) {
+    return (base + 1, base + 2, base + 3);
+}
+
+void main() {
+    // 1. Unpack all elements
+    (u32 data0, u16 err0) = read_packet(0);
+    if (data0 != 0xAA55) trap(15);
+    if (err0 != 0) trap(15);
+
+    // 2. Discard second element with wildcard _
+    (u32 data1, _) = read_packet(1);
+    if (data1 != 0xBEEF) trap(15);
+
+    // 3. Discard first element, retain second
+    (_, u16 err1) = read_packet(1);
+    if (err1 != 1) trap(15);
+
+    // 4. Triplet unpack with middle wildcard discard
+    (u32 a, _, u32 c) = compute_triplet(10);
+    if (a != 11) trap(15);
+    if (c != 13) trap(15);
+
+    // Success
+    trap(14);
+}
