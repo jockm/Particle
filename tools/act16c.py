@@ -331,12 +331,13 @@ class TypeDefNode(ASTNode):
 StructDefNode = TypeDefNode
 
 class VarDeclNode(ASTNode):
-    def __init__(self, type_name, is_ptr, name, init_expr=None, is_const=False):
+    def __init__(self, type_name, is_ptr, name, init_expr=None, is_const=False, is_volatile=False):
         self.type_name = type_name
         self.is_ptr = is_ptr
         self.name = name
         self.init_expr = init_expr
         self.is_const = is_const
+        self.is_volatile = is_volatile
 
 class FuncDeclNode(ASTNode):
     def __init__(self, ret_type, ret_ptr, name, params, body, is_inline=False):
@@ -580,8 +581,10 @@ class Parser:
             return self.parse_enum()
         if self.peek().val == 'verify':
             return self.parse_verify()
+        is_volatile = False
         if self.peek().val == 'volatile':
-            self.consume()
+            self.consume('KEYWORD', 'volatile')
+            is_volatile = True
         is_inline = False
         if self.peek().val == 'inline':
             self.consume()
@@ -744,7 +747,9 @@ class Parser:
             if self.match('='):
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
-            node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const)
+            if bound_addr is not None:
+                is_volatile = True
+            node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const, is_volatile=is_volatile)
             node.array_dims = array_dims if array_dims else None
             node.array_dim = array_dims[0] if array_dims else None
             node.bound_addr = bound_addr
@@ -959,6 +964,12 @@ class Parser:
                 return TupleAssignNode(targets, rhs_expr)
 
         # Local Variable / Array Declaration
+        is_volatile = False
+        if tok.val == 'volatile':
+            self.consume('KEYWORD', 'volatile')
+            is_volatile = True
+            tok = self.peek()
+
         is_const = False
         if tok.val == 'const':
             self.consume()
@@ -986,7 +997,9 @@ class Parser:
             if self.match('='):
                 init_expr = self.parse_expr()
             self.consume('PUNCT', ';')
-            node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const)
+            if bound_addr is not None:
+                is_volatile = True
+            node = VarDeclNode(t_name, is_ptr, name, init_expr, is_const=is_const, is_volatile=is_volatile)
             node.array_dims = array_dims if array_dims else None
             node.array_dim = array_dims[0] if array_dims else None
             node.bound_addr = bound_addr
@@ -1462,6 +1475,7 @@ class CodeGen:
         self.string_lens = {}
         self.array_dims = {}
         self.bound_addrs = {}
+        self.volatiles = set()
         self.func_signatures = {}
         self.fn_types = {}
         self.stack_offset = 0
@@ -1786,6 +1800,8 @@ class CodeGen:
         for d in data_decls:
             if getattr(d, 'is_const', False):
                 continue
+            if getattr(d, 'is_volatile', False) or getattr(d, 'bound_addr', None) is not None:
+                self.volatiles.add(d.name)
             self.types[d.name] = (d.type_name, d.is_ptr, False)
             dims = getattr(d, 'array_dims', None)
             if not dims and getattr(d, 'array_dim', None):

@@ -1,0 +1,35 @@
+// Global volatile variable
+volatile u32 g_status;
+
+// Hardware memory-mapped volatile variable
+volatile u32 mmio_ctrl @ 0x00008000;
+
+void test_volatile_writes() {
+    volatile u32 local_flag = 10;
+    local_flag = 20;
+    local_flag = local_flag + 5;
+
+    if (local_flag != 25) {
+        trap(15);
+    }
+}
+
+void main() {
+    g_status = 1;
+    g_status = 2;
+    g_status = g_status + 10;
+    if (g_status != 12) {
+        trap(15);
+    }
+
+    mmio_ctrl = 0xA0;
+    mmio_ctrl = mmio_ctrl | 0x0B;
+    if (mmio_ctrl != 0xAB) {
+        trap(15);
+    }
+
+    test_volatile_writes();
+
+    // Success
+    trap(14);
+}
