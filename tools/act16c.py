@@ -1579,7 +1579,9 @@ class CodeGen:
                 curr = curr.base
             if isinstance(curr, VarAccessNode):
                 t_name, is_ptr, *rest = self.types.get(curr.name, ("u32", False, False))
-                return (t_name, False)
+                clean_t = self._clean_type(t_name)
+                elem_t = "u8" if clean_t == "string" else t_name
+                return (elem_t, False)
             elif isinstance(curr, MemberAccessNode):
                 base_t, _ = self._get_expr_type(curr.expr)
                 s_name = self._clean_type(base_t)
@@ -2163,9 +2165,13 @@ class CodeGen:
             self._collect_switch_labels(node.body, cases, default_holder)
 
     def _validate_fn_type_assignment(self, target_type, rhs_expr):
+        clean_tgt = self._clean_type(target_type)
+        rhs_t, _ = self._get_expr_type(rhs_expr)
+        clean_rhs = self._clean_type(rhs_t)
+
+        # 1. Function pointer targets
         if target_type in self.fn_types:
             exp_params, exp_ret = self.fn_types[target_type]
-            rhs_t, _ = self._get_expr_type(rhs_expr)
             if rhs_t.startswith("fn_"):
                 fn_name = rhs_t[3:]
                 sig = self.func_signatures.get(fn_name)
@@ -2183,10 +2189,41 @@ class CodeGen:
                     raise TypeError(f"Function type mismatch: cannot assign '{rhs_t}' to '{target_type}'")
             else:
                 raise TypeError(f"Cannot assign non-function value of type '{rhs_t}' to function pointer '{target_type}'")
-        else:
-            rhs_t, _ = self._get_expr_type(rhs_expr)
-            if rhs_t.startswith("fn_") or rhs_t in self.fn_types:
-                raise TypeError(f"Cannot implicitly convert function reference to non-function type '{target_type}'")
+            return
+
+        # 2. Reject function references assigned to non-function types
+        if rhs_t.startswith("fn_") or rhs_t in self.fn_types:
+            raise TypeError(f"Cannot implicitly convert function reference to non-function type '{target_type}'")
+
+        # 3. HeapAllocNode (Type.create())
+        if isinstance(rhs_expr, HeapAllocNode):
+            alloc_t = self._clean_type(rhs_expr.type_name)
+            if clean_tgt != alloc_t:
+                raise SyntaxError(f"Cannot assign instance of type '{alloc_t}' to variable of type '{target_type}'")
+            return
+
+        # 4. HeapStringAllocNode (string.create())
+        if isinstance(rhs_expr, HeapStringAllocNode):
+            if clean_tgt != "string":
+                raise SyntaxError(f"Cannot assign string allocation to non-string variable of type '{target_type}'")
+            return
+
+        # 5. User struct reference targets
+        if clean_tgt in self.structs:
+            # Allow assigning 0 (null reference)
+            if isinstance(rhs_expr, IntLitNode) and rhs_expr.val == 0:
+                return
+            if clean_rhs != clean_tgt:
+                raise SyntaxError(f"Cannot assign type '{clean_rhs}' to reference variable of type '{target_type}'")
+            return
+
+        # 6. Primitive scalar target with struct/reference RHS
+        primitives = ('u8', 's8', 'u16', 's16', 'u32', 's32')
+        if clean_tgt in primitives:
+            if clean_rhs in self.structs:
+                raise SyntaxError(f"Cannot assign record reference of type '{clean_rhs}' to scalar variable of type '{target_type}'")
+            if clean_rhs == "string" and not isinstance(rhs_expr, (IntLitNode, HexLitNode if "HexLitNode" in globals() else IntLitNode)):
+                raise SyntaxError(f"Cannot assign string to scalar variable of type '{target_type}'")
 
     def gen_stmt(self, stmt):
         if isinstance(stmt, BlockNode):
