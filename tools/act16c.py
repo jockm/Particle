@@ -22,7 +22,7 @@ TOKEN_TYPES = [
     ('INT',       r'\d+'),
     ('STRING',    r'"(?:\\.|[^"\\])*"'),
     ('CHAR',      r"'(?:\\.|[^'\\])'"),
-    ('KEYWORD',   r'\b(?:string|u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until|import|enum|verify|volatile|sizeof)\b'),
+    ('KEYWORD',   r'\b(?:string|u8|s8|u16|s16|u32|s32|u64|s64|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until|import|enum|verify|volatile|sizeof)\b'),
     ('IDENT',     r'[a-zA-Z_]\w*'),
     ('OP_ARROW',  r'->'),
     ('OP_EQ',     r'=='),
@@ -528,7 +528,7 @@ class Parser:
             self.consume()
             s_name = self.consume('IDENT').val
             return s_name
-        elif t.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void'):
+        elif t.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'string', 'void'):
             return self.consume().val
         elif t.type == 'IDENT':
             return self.consume().val
@@ -937,7 +937,7 @@ class Parser:
                         # Could be: 'type name', 'type* name', or simply existing variable 'name'
                         p_tok = self.peek()
                         is_decl = False
-                        if p_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string') or p_tok.val in self.known_types:
+                        if p_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'string') or p_tok.val in self.known_types:
                             is_decl = True
                         elif p_tok.type == 'IDENT' and self.tokens[self.pos+1].type == 'IDENT':
                             is_decl = True
@@ -982,7 +982,7 @@ class Parser:
             is_const = True
             tok = self.peek()
 
-        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string') or tok.val == 'type' or (tok.type == 'IDENT' and (self.tokens[self.pos+1].type == 'IDENT' or self.tokens[self.pos+1].val == '*')):
+        if tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'string') or tok.val == 'type' or (tok.type == 'IDENT' and (self.tokens[self.pos+1].type == 'IDENT' or self.tokens[self.pos+1].val == '*')):
             t_name = self.parse_type()
             is_ptr = False
             if self.peek().val == '*':
@@ -1183,14 +1183,14 @@ class Parser:
             self.consume('KEYWORD', 'sizeof')
             self.consume('PUNCT', '(')
             arg_tok = self.peek()
-            if arg_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void', 'string'):
+            if arg_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'void', 'string'):
                 t_arg = self.consume().val
                 if self.peek().val == '*':
                     self.consume('OP', '*')
                     self.consume('PUNCT', ')')
                     return IntLitNode(4)
                 self.consume('PUNCT', ')')
-                sz = 1 if t_arg in ('u8', 's8', 'string') else (2 if t_arg in ('u16', 's16') else 4)
+                sz = 1 if t_arg in ('u8', 's8', 'string') else (2 if t_arg in ('u16', 's16') else (8 if t_arg in ('u64', 's64') else 4))
                 return IntLitNode(sz)
             elif arg_tok.type == 'IDENT' and self.tokens[self.pos+1].val == '*' and self.tokens[self.pos+2].val == ')':
                 self.consume('IDENT')
@@ -1249,9 +1249,15 @@ class Parser:
 
 class BackendBase:
     """Abstract code generation backend interface."""
+    name = "base"
+
     def __init__(self):
         self.asm = []
         self.label_counter = 0
+
+    def supports_type(self, t_name: str) -> bool:
+        """Return True if backend natively supports integer/scalar type t_name."""
+        return False
 
     def emit(self, line: str, comment: str = ""):
         if comment:
@@ -1296,6 +1302,12 @@ class BackendBase:
 
 class ParticleAsmBackend(BackendBase):
     """Particle 32-bit RISC Bare-Metal Assembly Backend."""
+    name = "particle"
+
+    def supports_type(self, t_name: str) -> bool:
+        clean = t_name.strip()
+        # Particle RISC is currently a 32-bit architecture; u64/s64 are not natively supported
+        return clean in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void')
 
     def emit_immediate(self, reg: int, val: int):
         v = val & 0xFFFFFFFF
@@ -1480,6 +1492,18 @@ class CodeGen:
                     cleaned.append(self._clean_type(item))
             return cleaned
         return t.replace("struct ", "").replace("type ", "").strip()
+    def _validate_backend_type(self, t_name, context=""):
+        if isinstance(t_name, list):
+            for sub_t, _ in t_name:
+                self._validate_backend_type(sub_t, context)
+            return
+        clean = self._clean_type(t_name)
+        if clean in ('u64', 's64'):
+            if not self.backend.supports_type(clean):
+                target_name = getattr(self.backend, "name", "particle")
+                ctx_str = f" in {context}" if context else ""
+                raise SyntaxError(f"64-bit integer type '{clean}' is not supported by target backend '{target_name}'{ctx_str}")
+
     def __init__(self, bounds_check: bool = True, backend=None):
         self.bounds_check = bounds_check
         self.backend = backend if backend is not None else ParticleAsmBackend()
@@ -1645,6 +1669,7 @@ class CodeGen:
                 if t_clean in ('u8', 's8', 'string'): return 1
                 elif t_clean in ('u16', 's16'): return 2
                 elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
+                elif t_clean in ('u64', 's64'): return 8
                 elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
                 return 4
             elif isinstance(target, VarAccessNode):
@@ -1663,6 +1688,7 @@ class CodeGen:
                 if t_clean in ('u8', 's8', 'string'): return 1
                 elif t_clean in ('u16', 's16'): return 2
                 elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
+                elif t_clean in ('u64', 's64'): return 8
                 elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
                 return 4
             else:
@@ -1672,6 +1698,7 @@ class CodeGen:
                 if t_clean in ('u8', 's8', 'string'): return 1
                 elif t_clean in ('u16', 's16'): return 2
                 elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
+                elif t_clean in ('u64', 's64'): return 8
                 elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
                 return 4
         elif isinstance(expr, UnaryOpNode):
@@ -1744,6 +1771,7 @@ class CodeGen:
                 can_resolve = True
                 for field_tuple in d.fields:
                     f_type = field_tuple[0].replace("struct ", "").replace("type ", "").strip()
+                    self._validate_backend_type(f_type, f"field '{field_tuple[2]}' of type '{d.name}'")
                     f_ptr = field_tuple[1]
                     if not f_ptr and f_type not in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void'):
                         if f_type not in self.structs:
@@ -1815,6 +1843,9 @@ class CodeGen:
         data_decls = [d for d in root.decls if isinstance(d, VarDeclNode)]
         raw_func_decls = [d for d in root.decls if isinstance(d, FuncDeclNode)]
         for f in raw_func_decls:
+            self._validate_backend_type(f.ret_type, f"return type of function '{f.name}'")
+            for p in f.params:
+                self._validate_backend_type(p[0], f"parameter '{p[2]}' of function '{f.name}'")
             self.func_signatures[f.name] = (
                 self._clean_type(f.ret_type),
                 f.ret_ptr,
@@ -1868,6 +1899,7 @@ class CodeGen:
         for d in data_decls:
             if getattr(d, 'is_const', False):
                 continue
+            self._validate_backend_type(d.type_name, f"global variable '{d.name}'")
             if getattr(d, 'is_volatile', False) or getattr(d, 'bound_addr', None) is not None:
                 self.volatiles.add(d.name)
             self.types[d.name] = (d.type_name, d.is_ptr, False)
@@ -2288,6 +2320,7 @@ class CodeGen:
             return
 
         elif isinstance(stmt, VarDeclNode):
+            self._validate_backend_type(stmt.type_name, f"local variable '{stmt.name}'")
             if getattr(stmt, 'is_const', False):
                 self.constants[stmt.name] = self._eval_const_expr(stmt.init_expr)
                 return
