@@ -195,22 +195,24 @@ _check_hazard:
 ._check_rs2:
     ; --- Test Rs2 dependency ---
     LD      R5, 0
-    FBRA.Z  R7, _evaluate_stall
+    FBRA.Z  R7, ._skip_rs2_test
 
     ; Only OP (0x33), STORE (0x23), BRANCH (0x63) use Rs2 (bit 5 must be 1, bit 2 must be 0)
     LD      R4, R12
     LOAD16  R14, 0x20
     AND     R4, R14
-    FBRA.Z  R4, _evaluate_stall     ; If bit 5 == 0 (OP-IMM 0x13, LOAD 0x03), skip Rs2
+    FBRA.Z  R4, ._skip_rs2_test
+
     LD      R4, R12
     AND     R4, 4
-    FBRA.NZ R4, _evaluate_stall     ; If bit 2 == 1 (JALR 0x67), skip Rs2
+    FBRA.NZ R4, ._skip_rs2_test
 
     ; Rs2 valid: test (scoreboard & (1 << Rs2))
     LD      R5, 1
     SHIFTL  R5, R7
     AND     R5, R9
 
+._skip_rs2_test:
 _evaluate_stall:
     OR      R6, R5
     FBRA.NZ R6, ._stall_jump

@@ -338,6 +338,7 @@ _rt_free:
 ; _unlink_free_chunk: Remove chunk in R10 from singly linked free list
 ; ------------------------------------------------------------------------------
 _unlink_free_chunk:
+    PUSH32  R14
     PUSH32  R1
     PUSH32  R2
     PUSH32  R3
@@ -377,6 +378,7 @@ _unlink_free_chunk:
     POP32   R3
     POP32   R2
     POP32   R1
+    POP32   R14
     RRET
 
 ; ------------------------------------------------------------------------------
@@ -478,19 +480,15 @@ __rt_realloc:
     ADD     R13, R8             ; R13 = neighbor after rem
     LOAD32  R14, _heap_ptr
     LD32    R14, (R14)
-    LD      R8, R13
-    SLT     R8, R14
-    FBRA.NZ R8, ._realloc_shrink_upd_neighbor
+    LD      R3, R13
+    SLT     R3, R14             ; R3 = (neighbor < heap_ptr)
+    FBRA.NZ R3, ._realloc_shrink_upd_neighbor
     ; Rem reached break: update _last_phys_size
-    LD      R8, R7
-    SUB     R8, R6              ; recalculate rem size
     LOAD32  R13, _last_phys_size
     LD32    (R13), R8
     FBRA    ._realloc_shrink_free_rem
 
 ._realloc_shrink_upd_neighbor:
-    LD      R8, R7
-    SUB     R8, R6              ; rem_size
     ADD     R13, 4
     LD32    (R13), R8
 
@@ -598,18 +596,14 @@ __rt_realloc:
     ADD     R13, R8
     LOAD32  R14, _heap_ptr
     LD32    R14, (R14)
-    LD      R8, R13
-    SLT     R8, R14
-    FBRA.NZ R8, ._realloc_split_upd_neighbor
-    LD      R8, R7
-    SUB     R8, R6
+    LD      R3, R13
+    SLT     R3, R14             ; R3 = (neighbor < heap_ptr)
+    FBRA.NZ R3, ._realloc_split_upd_neighbor
     LOAD32  R13, _last_phys_size
     LD32    (R13), R8
     FBRA    ._realloc_split_free
 
 ._realloc_split_upd_neighbor:
-    LD      R8, R7
-    SUB     R8, R6
     ADD     R13, 4
     LD32    (R13), R8
 
