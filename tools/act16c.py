@@ -734,8 +734,14 @@ class Parser:
         else:
             array_dims = []
             bound_addr = None
+            is_open_arr = False
             while self.peek().val == '[':
                 self.consume("PUNCT", "[")
+                if self.peek().val == ']':
+                    self.consume("PUNCT", "]")
+                    is_open_arr = True
+                    is_ptr = True
+                    break
                 dim_tok = self.consume()
                 array_dims.append(int(dim_tok.val, 0))
                 self.consume("PUNCT", "]")
@@ -986,8 +992,14 @@ class Parser:
             name = self.consume('IDENT').val
             array_dims = []
             bound_addr = None
+            is_open_arr = False
             while self.peek().val == '[':
                 self.consume("PUNCT", "[")
+                if self.peek().val == ']':
+                    self.consume("PUNCT", "]")
+                    is_open_arr = True
+                    is_ptr = True
+                    break
                 array_dims.append(int(self.consume().val, 0))
                 self.consume("PUNCT", "]")
             if self.peek().val == '@':
@@ -2260,6 +2272,14 @@ class CodeGen:
                 if isinstance(stmt.init_expr, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
                     self.affine_state[name] = 'VALID'
                 if isinstance(stmt.init_expr, HeapArrayAllocNode):
+                    alloc_elem_t = self._clean_type(stmt.init_expr.type_name)
+                    var_elem_t = self._clean_type(stmt.type_name)
+                    # Enforce array target: must have array_dims, array_dim, or is_ptr/open-arr
+                    is_arr_target = bool(getattr(stmt, "array_dims", None) or getattr(stmt, "array_dim", None) is not None or stmt.is_ptr)
+                    if not is_arr_target:
+                        raise SyntaxError(f"Cannot assign array allocation to non-array variable '{name}'")
+                    if alloc_elem_t != var_elem_t:
+                        raise SyntaxError(f"Array type mismatch: cannot assign '{alloc_elem_t}[]' to '{var_elem_t}[]'")
                     self.dynamic_arrays.add(name)
                 t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                 offset = self.stack_offset - self.locals[name]
@@ -3159,6 +3179,14 @@ class CodeGen:
                     if isinstance(expr.right, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
                         self.affine_state[name] = "VALID"
                         if isinstance(expr.right, HeapArrayAllocNode):
+                            alloc_elem_t = self._clean_type(expr.right.type_name)
+                            var_info = self.types.get(name, ("u32", False, False))
+                            var_elem_t = self._clean_type(var_info[0])
+                            is_arr_target = (name in self.dynamic_arrays or name in self.array_dims or name in self.array_lens or var_info[1])
+                            if not is_arr_target:
+                                raise SyntaxError(f"Cannot assign array allocation to non-array variable '{name}'")
+                            if alloc_elem_t != var_elem_t:
+                                raise SyntaxError(f"Array type mismatch: cannot assign '{alloc_elem_t}[]' to '{var_elem_t}[]'")
                             self.dynamic_arrays.add(name)
                     # Affine move semantics
                     if isinstance(expr.right, VarAccessNode):
