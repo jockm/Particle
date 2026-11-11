@@ -669,7 +669,8 @@ __rt_realloc:
     LD32    (R13), R7           ; new_ptr[i] = R7
     ADD     R6, 4
     SUB     R2, 1
-    BBRA    ._realloc_copy_loop
+    LOAD32  R13, ._realloc_copy_loop
+    JMP     R13, R0
 
 ._realloc_copy_finished:
     ; Free old payload in R4

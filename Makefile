@@ -234,3 +234,14 @@ $(BUILD_DIR)/tools/psim: apps/tools/psim/bin/main.dart apps/tools/psim/lib/core.
 	@echo "==> Compiling psim..."
 	dart compile exe apps/tools/psim/bin/main.dart -o $(BUILD_DIR)/tools/psim
 
+# --- Guest RV32 Test Program Targets ---
+GUEST_GEN_DIR := apps/asm/gen
+GUEST_TEST_BIN := build/guest_rv32_test.bin
+
+$(GUEST_TEST_BIN): $(GUEST_GEN_DIR)/gen_guest_rv32.py
+	mkdir -p build
+	python3 $(GUEST_GEN_DIR)/gen_guest_rv32.py
+
+guest-tests: $(GUEST_TEST_BIN)
+
+.PHONY: guest-tests

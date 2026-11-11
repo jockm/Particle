@@ -79,7 +79,7 @@ _clear_wb_scoreboard:
     ; Clear bit in scoreboard: mask &= ~(1 << Rd)
     LD      R7, 1
     SHIFTL  R7, R4              ; R7 = 1 << Rd
-    NOT     R7, R7              ; R7 = ~(1 << Rd)
+    NOT     R7              ; R7 = ~(1 << Rd)
     LOAD16  R6, SCOREBOARD_MASK
     LD32    R8, (R6)
     AND     R8, R7
@@ -197,10 +197,14 @@ _check_hazard:
     LD      R5, 0
     FBRA.Z  R7, _evaluate_stall
 
-    ; Only OP (0x33), STORE (0x23), BRANCH (0x63) use Rs2 (bit 2 is 0)
+    ; Only OP (0x33), STORE (0x23), BRANCH (0x63) use Rs2 (bit 5 must be 1, bit 2 must be 0)
+    LD      R4, R12
+    LOAD16  R14, 0x20
+    AND     R4, R14
+    FBRA.Z  R4, _evaluate_stall     ; If bit 5 == 0 (OP-IMM 0x13, LOAD 0x03), skip Rs2
     LD      R4, R12
     AND     R4, 4
-    FBRA.NZ R4, _evaluate_stall
+    FBRA.NZ R4, _evaluate_stall     ; If bit 2 == 1 (JALR 0x67), skip Rs2
 
     ; Rs2 valid: test (scoreboard & (1 << Rs2))
     LD      R5, 1
@@ -231,7 +235,7 @@ _do_stall_wait:
 _clear_stalled_bit:
     LD      R8, 1
     SHIFTL  R8, R4
-    NOT     R8, R8
+    NOT     R8
     LOAD16  R6, SCOREBOARD_MASK
     LD32    R9, (R6)
     AND     R9, R8

@@ -30,7 +30,9 @@ class Debugger {
   void dumpRegisters() {
     final pcHex = core.pc.toRadixString(16).toUpperCase().padLeft(8, "0");
     stdout.writeln("  PC: 0x$pcHex  Cycles: ${core.cycleCount}  RBASE: ${core.rbase} (Window maps R1..R15 -> phys ${(1 + core.rbase) & 0x1F}..${(15 + core.rbase) & 0x1F})");
-    stdout.writeln("\n  [Physical Register File (0..31)]");
+
+    stdout.writeln();
+    stdout.writeln("  [Physical Register File (0..31)]");
     for (var row = 0; row < 8; row++) {
       final line = StringBuffer("  ");
       for (var col = 0; col < 4; col++) {
@@ -42,7 +44,21 @@ class Debugger {
       stdout.writeln(line.toString());
     }
 
-    stdout.writeln("\n  [Active Virtual Registers (vR0..vR15)]");
+    stdout.writeln();
+    stdout.writeln("  [Shadow Register File (0..31)]");
+    for (var row = 0; row < 8; row++) {
+      final line = StringBuffer("  ");
+      for (var col = 0; col < 4; col++) {
+        final sIdx = (row * 4) + col;
+        final hex = core.shadowR[sIdx].toRadixString(16).toUpperCase().padLeft(8, "0");
+        final sStr = "S${sIdx.toString().padLeft(2, '0')}";
+        line.write("$sStr: 0x$hex  ");
+      }
+      stdout.writeln(line.toString());
+    }
+
+    stdout.writeln();
+    stdout.writeln("  [Active Virtual Registers (vR0..vR15)]");
     for (var row = 0; row < 4; row++) {
       final line = StringBuffer("  ");
       for (var col = 0; col < 4; col++) {

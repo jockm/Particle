@@ -30,21 +30,27 @@ _dispatch_loop:
     FIFO.R  R2, 0               ; R2 = [Opcode:31..24, Rd:23..16, Rs1:15..8, Rs2:7..0]
 
     ; Unpack Opcode (Bits 31..24)
-    SHIFTR  R3, R2, 24          ; R3 = Branch Opcode
+    LD      R3, R2
+    SHIFTR  R3, 12
+    SHIFTR  R3, 12          ; R3 = Branch Opcode
 
     ; Unpack Rd (Bits 23..16)
-    SHIFTR  R4, R2, 16
-    SHIFTL  R4, 24
-    SHIFTR  R4, 24              ; R4 = Rd index
+    LD      R4, R2
+    SHIFTR  R4, 8
+    SHIFTR  R4, 8
+    LOAD16  R14, 0xFF
+    AND     R4, R14              ; R4 = Rd index
 
     ; Unpack Rs1 (Bits 15..8)
-    SHIFTR  R5, R2, 8
-    SHIFTL  R5, 24
-    SHIFTR  R5, 24              ; R5 = Rs1 index / value
+    LD      R5, R2
+    SHIFTR  R5, 8
+    LOAD16  R14, 0xFF
+    AND     R5, R14              ; R5 = Rs1 index / value
 
     ; Unpack Rs2 (Bits 7..0)
-    SHIFTL  R6, R2, 24
-    SHIFTR  R6, 24              ; R6 = Rs2 index / value
+    LD      R6, R2
+    LOAD16  R14, 0xFF
+    AND     R6, R14              ; R6 = Rs2 index / value
 
     ; Pop Payload 1 (Immediate / Offset)
     FIFO.R  R7, 0               ; R7 = Imm32 / Offset
@@ -54,7 +60,8 @@ _dispatch_loop:
 
     ; Route via Opcode Table Jump
     ; Opcode 1..8 mapped to dispatch table
-    SUB     R9, R3, 1
+    LD      R9, R3
+    SUB     R9, 1
     LOAD16  R14, _op_table
     JTBL    R9
 
@@ -72,32 +79,38 @@ _op_table:
 ; Branch Condition Handlers
 ; ------------------------------------------------------------------------------
 _exec_beq:
-    SUB     R14, R5, R6
+    LD      R14, R5
+    SUB     R14, R6
     FBRA.Z  R14, _branch_taken
     BBRA    _dispatch_loop
 
 _exec_bne:
-    SUB     R14, R5, R6
+    LD      R14, R5
+    SUB     R14, R6
     FBRA.NZ R14, _branch_taken
     BBRA    _dispatch_loop
 
 _exec_blt:
-    SSLT    R14, R5, R6         ; R14 = (Rs1 < Rs2) signed
+    LD      R14, R5
+    SSLT    R14, R6         ; R14 = (Rs1 < Rs2) signed
     FBRA.NZ R14, _branch_taken
     BBRA    _dispatch_loop
 
 _exec_bge:
-    SSLT    R14, R5, R6
+    LD      R14, R5
+    SSLT    R14, R6
     FBRA.Z  R14, _branch_taken  ; Taken if !(Rs1 < Rs2)
     BBRA    _dispatch_loop
 
 _exec_bltu:
-    SLT     R14, R5, R6         ; R14 = (Rs1 < Rs2) unsigned
+    LD      R14, R5
+    SLT     R14, R6         ; R14 = (Rs1 < Rs2) unsigned
     FBRA.NZ R14, _branch_taken
     BBRA    _dispatch_loop
 
 _exec_bgeu:
-    SLT     R14, R5, R6
+    LD      R14, R5
+    SLT     R14, R6
     FBRA.Z  R14, _branch_taken  ; Taken if !(Rs1 < Rs2)
     BBRA    _dispatch_loop
 
@@ -105,7 +118,8 @@ _exec_bgeu:
 ; Branch Taken Handler: Compute Target & Notify Core 0 via MBOX
 ; ------------------------------------------------------------------------------
 _branch_taken:
-    ADD     R11, R8, R7         ; Target PC = Current PC + Imm Offset
+    LD      R11, R8
+    ADD     R11, R7         ; Target PC = Current PC + Imm Offset
     FIFO.W  R11, 1              ; Stream resolved PC back to Core 0
     MBOX    R11, 1              ; Strobe Core 0 with Trap Vector 1 (Branch Redirect)
     BBRA    _dispatch_loop
@@ -114,16 +128,21 @@ _branch_taken:
 ; Jump & Link Handlers
 ; ------------------------------------------------------------------------------
 _exec_jal:
-    ADD     R10, R8, 4          ; Link register Rd = PC + 4
+    LD      R10, R8
+    ADD     R10, 4          ; Link register Rd = PC + 4
     FIFO.W  R10, 1              ; Commit writeback
-    ADD     R11, R8, R7         ; Target PC = Current PC + Imm Offset
+    LD      R11, R8
+    ADD     R11, R7         ; Target PC = Current PC + Imm Offset
     MBOX    R11, 1              ; Redirect Core 0
     BBRA    _dispatch_loop
 
 _exec_jalr:
-    ADD     R10, R8, 4          ; Link register Rd = PC + 4
+    LD      R10, R8
+    ADD     R10, 4          ; Link register Rd = PC + 4
     FIFO.W  R10, 1
-    ADD     R11, R5, R7
-    AND     R11, 0xFFFFFFFE
+    LD      R11, R5
+    ADD     R11, R7
+    LOAD32  R14, 0xFFFFFFFE
+    AND     R11, R14
     MBOX    R11, 1              ; Redirect Core 0
     BBRA    _dispatch_loop

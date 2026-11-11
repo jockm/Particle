@@ -429,6 +429,11 @@ class HeapArrayFreeNode(ASTNode):
     def __init__(self, expr):
         self.expr = expr
 
+class HeapArrayResizeNode(ASTNode):
+    def __init__(self, expr, new_len_expr):
+        self.expr = expr
+        self.new_len_expr = new_len_expr
+
 class ExistsNode(ASTNode):
     def __init__(self, expr):
         self.expr = expr
@@ -884,6 +889,10 @@ class Parser:
                         if len(args) != 0:
                             raise SyntaxError("destroyArray() takes no arguments")
                         node = HeapArrayFreeNode(node)
+                    elif member == 'resize':
+                        if len(args) != 1:
+                            raise SyntaxError("resize(N) requires exactly 1 argument (new element count)")
+                        node = HeapArrayResizeNode(node, args[0])
                     elif member == 'exists':
                         if len(args) != 0:
                             raise SyntaxError("exists() takes no arguments")
@@ -997,6 +1006,10 @@ class BackendBase:
         """Free dynamic array given its payload pointer."""
         raise NotImplementedError
 
+    def gen_array_resize(self, dst_reg: int, addr_reg: int, elem_size: int, count_reg: int):
+        """Resize dynamic array with 4-byte count header; return updated payload pointer in dst_reg."""
+        raise NotImplementedError
+
     def gen_string_alloc(self, dst_reg: int, cap_reg: int):
         """Allocate dynamic string with 4-byte capacity header and null byte; return payload pointer."""
         raise NotImplementedError
@@ -1045,7 +1058,7 @@ class ParticleAsmBackend(BackendBase):
         self.emit("RCALL   _rt_alloc", "Allocate dynamic array")
         self.emit("POP32   R2", "Restore count for header")
         # Store count in prefix header [Offset 0: count]
-        self.emit("LD32    (R1), R2", "Store array length header")
+        self.emit("ST32    (R1), R2", "Store array length header")
         # Advance pointer to payload [Offset 4: elements]
         self.emit("ADD     R1, 4", "Point to array payload")
         if dst_reg != 1:
@@ -1057,6 +1070,33 @@ class ParticleAsmBackend(BackendBase):
         if addr_reg != 1:
             self.emit(f"LD      R1, R{addr_reg}")
         self.emit("RCALL   _rt_free", "Free dynamic array block")
+
+    def gen_array_resize(self, dst_reg: int, addr_reg: int, elem_size: int, count_reg: int):
+        # 1. Preserve new element count across _rt_realloc
+        self.emit(f"PUSH32  R{count_reg}", "Preserve new count for header")
+        # 2. Calculate new raw byte payload: 4 + (count * elem_size)
+        self.emit(f"LD      R2, R{count_reg}")
+        if elem_size == 2:
+            self.emit("SHIFTL  R2, 1")
+        elif elem_size == 4:
+            self.emit("SHIFTL  R2, 2")
+        elif elem_size != 1:
+            self.emit_immediate(13, elem_size)
+            self.emit("MUL     R2, R13")
+        self.emit("ADD     R2, 4", "Include 4-byte length prefix header")
+        # 3. Adjust existing payload pointer backwards by 4 to point to raw chunk header
+        if addr_reg != 1:
+            self.emit(f"LD      R1, R{addr_reg}")
+        self.emit("SUB     R1, 4", "Adjust pointer to raw chunk header")
+        # 4. Invoke runtime allocator realloc
+        self.emit("RCALL   _rt_realloc", "Resize dynamic memory chunk")
+        # 5. Restore new element count and update length header
+        self.emit("POP32   R2", "Restore new count for header")
+        self.emit("ST32    (R1), R2", "Update array length header")
+        # 6. Advance pointer back to user payload
+        self.emit("ADD     R1, 4", "Point to resized array payload")
+        if dst_reg != 1:
+            self.emit(f"LD      R{dst_reg}, R1")
 
     def gen_string_alloc(self, dst_reg: int, cap_reg: int):
         # Total size = 4 (capacity header) + capacity bytes
@@ -1657,9 +1697,8 @@ class CodeGen:
                 self.emit_immediate(14, self.stack_offset)
                 self.emit("ADD     R15, R14", "Deallocate stack frame")
             spin_lbl = f"._halt_{func.name}"
-            self.emit(f"LOAD32  R14, {spin_lbl}")
             self.emit_label(spin_lbl)
-            self.emit("JMP     R14, R0", "Halt loop upon main completion")
+            self.emit(f"BBRA    {spin_lbl}", "Halt loop upon main completion")
         else:
             frame_locals = self.stack_offset - 4
             if frame_locals > 0:
@@ -2217,6 +2256,38 @@ class CodeGen:
                 self.emit_immediate(14, off)
                 self.emit("ADD     R14, R15")
                 self.emit("ST32    (R14), R0", f"Zero out destroyed affine reference '{target_var}'")
+            return
+
+        elif isinstance(expr, HeapArrayResizeNode):
+            target_var = expr.expr.name if isinstance(expr.expr, VarAccessNode) else None
+            if target_var and target_var in self.affine_state:
+                if self.affine_state[target_var] == 'MOVED':
+                    raise SyntaxError(f"act16c: cannot resize moved/destroyed reference '{target_var}'")
+            # 1. Determine element size
+            elem_t = 'u32'
+            if target_var:
+                t_info = self.types.get(target_var, ('u32', False, False))
+                elem_t = t_info[0]
+            elem_size = self._get_elem_size(elem_t, False)
+
+            # 2. Evaluate new count into R2
+            self.gen_expr(expr.new_len_expr, target_reg=2)
+
+            # 3. Load current array pointer into R1
+            self.gen_expr(expr.expr, target_reg=1)
+
+            # 4. Invoke backend resize (returns updated payload in R1)
+            self.backend.gen_array_resize(dst_reg=1, addr_reg=1, elem_size=elem_size, count_reg=2)
+
+            # 5. Rebind local variable stack slot to new pointer
+            if target_var and target_var in self.locals:
+                off = self.stack_offset - self.locals[target_var]
+                self.emit_immediate(14, off)
+                self.emit("ADD     R14, R15")
+                self.emit(f"ST32    (R14), R1", f"Update local reference '{target_var}' after resize")
+
+            if target_reg != 1:
+                self.emit(f"LD      R{target_reg}, R1")
             return
 
         elif isinstance(expr, HeapArrayFreeNode):
@@ -2861,13 +2932,13 @@ class CodeGen:
             self.emit(f"LD32     R{dst}, (R{addr_reg})")
     def _emit_store_typed(self, addr_reg, src, t_name, is_ptr):
         if is_ptr or t_name in ('u32', 's32', 'string') or t_name in self.fn_types or t_name in self.structs:
-            self.emit(f"LD32     (R{addr_reg}), R{src}")
+            self.emit(f"ST32     (R{addr_reg}), R{src}")
         elif t_name in ('u8', 's8'):
-            self.emit(f"LD8      (R{addr_reg}), R{src}")
+            self.emit(f"ST8      (R{addr_reg}), R{src}")
         elif t_name in ('u16', 's16'):
-            self.emit(f"LD16     (R{addr_reg}), R{src}")
+            self.emit(f"ST16     (R{addr_reg}), R{src}")
         else:
-            self.emit(f"LD32     (R{addr_reg}), R{src}")
+            self.emit(f"ST32     (R{addr_reg}), R{src}")
     def _gen_relational(self, op, target_reg, is_signed=False):
         # Native single-cycle Particle comparisons (SEQ, SNE, SLE, SSLE)
         # R1 is LHS, R2 is RHS
