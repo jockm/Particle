@@ -71,8 +71,23 @@ class ParticleAssembler {
   ///   - Sparse memory map of emitted byte addresses to byte values
   ///   - Maximum emitted byte address
   ///   - Formatted `.lst` listing lines
-  (Map<int, int>, int, List<String>) assemble(String srcFile) {
-    final processedLines = prep.process(srcFile);
+  /// Main two-pass assembly routine.
+  /// Accepts either a single file path (`String`) or multiple file paths (`List<String>`).
+  /// Returns a tuple containing:
+  ///   - Sparse memory map of emitted byte addresses to byte values
+  ///   - Maximum emitted byte address
+  ///   - Formatted `.lst` listing lines
+  (Map<int, int>, int, List<String>) assemble(dynamic srcFiles) {
+    final List<String> fileList = (srcFiles is List<String>)
+        ? srcFiles
+        : (srcFiles is List)
+            ? srcFiles.map((e) => e.toString()).toList()
+            : [srcFiles.toString()];
+
+    final processedLines = <(String, int, String)>[];
+    for (final f in fileList) {
+      processedLines.addAll(prep.process(f));
+    }
 
     // -------------------------------------------------------------------------
     // PASS 1: Symbol Calculation & Address Resolution

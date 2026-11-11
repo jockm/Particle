@@ -48,12 +48,12 @@ fi
 
 print_usage() {
     cat << "HELP_TEXT"
-Usage: pbuild [options] <source-file>
+Usage: pbuild [options] <source-file> [source-files...]
 
 A unified build driver for Particle RISC (.asm) and ACT16 (.act) programs.
 
 Positional Arguments:
-  source-file            Source file (.asm or .act)
+  source-file            One or more source files (.asm), or a single .act file
 
 Options:
   -o, --output <file>    Output binary path (default: build/<name>.<format>)
@@ -77,7 +77,7 @@ Workflow:
 HELP_TEXT
 }
 
-SOURCE=""
+SOURCES=()
 OUTPUT=""
 FORMAT="bin"
 VERBOSE=0
@@ -168,33 +168,39 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            if [ -n "$SOURCE" ]; then
-                echo "Error: Multiple input files specified ('$SOURCE' and '$1')." >&2
-                exit 1
-            fi
-            SOURCE="$1"
+            SOURCES+=("$1")
             shift
             ;;
     esac
 done
 
-if [ -z "$SOURCE" ]; then
+if [ "${#SOURCES[@]}" -eq 0 ]; then
     echo "Error: No source file specified." >&2
     print_usage >&2
     exit 1
 fi
 
-if [ ! -f "$SOURCE" ]; then
-    echo "Error: Source file not found: '$SOURCE'" >&2
-    exit 1
-fi
+for s in "${SOURCES[@]}"; do
+    if [ ! -f "$s" ]; then
+        echo "Error: Source file not found: '$s'" >&2
+        exit 1
+    fi
+done
 
-BASE_NAME="$(basename "$SOURCE")"
+PRIMARY_SOURCE="${SOURCES[0]}"
+BASE_NAME="$(basename "$PRIMARY_SOURCE")"
 STEM="${BASE_NAME%.*}"
-EXT="${SOURCE##*.}"
+PRIMARY_EXT="${PRIMARY_SOURCE##*.}"
 
-if [[ "$EXT" != "asm" && "$EXT" != "act" ]]; then
-    echo "Error: Unsupported file type '.$EXT'. pbuild expects .asm or .act files." >&2
+if [ "${#SOURCES[@]}" -gt 1 ]; then
+    for s in "${SOURCES[@]}"; do
+        if [[ "${s##*.}" != "asm" ]]; then
+            echo "Error: Multi-file builds currently only support .asm files ('$s' is not .asm)." >&2
+            exit 1
+        fi
+    done
+elif [[ "$PRIMARY_EXT" != "asm" && "$PRIMARY_EXT" != "act" ]]; then
+    echo "Error: Unsupported file type '.$PRIMARY_EXT'. pbuild expects .asm or .act files." >&2
     exit 1
 fi
 
@@ -232,19 +238,23 @@ run_step() {
 }
 
 # 1. ACT16 compilation step (if applicable)
-if [ "$EXT" = "act" ]; then
-    ASM_SOURCE="build/${STEM}.asm"
-    mkdir -p "$(dirname "$ASM_SOURCE")"
-    run_step "Compiling ACT16: $SOURCE -> $ASM_SOURCE" "$PYTHON" "$ACT16C" "$SOURCE" -o "$ASM_SOURCE" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+ASM_SOURCES=()
+if [ "$PRIMARY_EXT" = "act" ]; then
+    ACT_ASM="build/${STEM}.asm"
+    mkdir -p "$(dirname "$ACT_ASM")"
+    run_step "Compiling ACT16: $PRIMARY_SOURCE -> $ACT_ASM" "$PYTHON" "$ACT16C" "$PRIMARY_SOURCE" -o "$ACT_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+    ASM_SOURCES+=("$ACT_ASM")
 else
-    ASM_SOURCE="$SOURCE"
+    ASM_SOURCES=("${SOURCES[@]}")
 fi
 
-# 2. Lint step
-run_step "Linting: $ASM_SOURCE" "${CMD_PASM_LINT[@]}" "$ASM_SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"}
+# 2. Lint step (lint each ASM source file individually)
+for src in "${ASM_SOURCES[@]}"; do
+    run_step "Linting: $src" "${CMD_PASM_LINT[@]}" "$src" ${INCLUDES[@]+"${INCLUDES[@]}"}
+done
 
-# 3. Assemble step
-run_step "Assembling: $ASM_SOURCE -> $OUTPUT" "${CMD_PASM[@]}" "$ASM_SOURCE" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
+# 3. Assemble step (pass all ASM sources to pasm)
+run_step "Assembling: ${ASM_SOURCES[*]} -> $OUTPUT" "${CMD_PASM[@]}" "${ASM_SOURCES[@]}" ${INCLUDES[@]+"${INCLUDES[@]}"} -o "$OUTPUT" --format "$FORMAT" ${DEFINES[@]+"${DEFINES[@]}"}
 
 
 if [ "$VERBOSE" -eq 1 ]; then

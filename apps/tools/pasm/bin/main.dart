@@ -12,12 +12,12 @@ import "package:pasm/assembler.dart";
 
 /// Prints exact CLI usage matching tools/pasm.py
 void printUsage() {
-  stdout.writeln("usage: pasm [-h] [-I INCLUDE] [-o OUTPUT] [-D DEFINE] [--format {bin,hex}] source");
+  stdout.writeln("usage: pasm [-h] [-I INCLUDE] [-o OUTPUT] [-D DEFINE] [--format {bin,hex}] source [source ...]");
   stdout.writeln("");
   stdout.writeln("Particle Two-Pass Macro Assembler");
   stdout.writeln("");
   stdout.writeln("positional arguments:");
-  stdout.writeln("  source                Source assembly file (.asm)");
+  stdout.writeln("  source                One or more source assembly files (.asm)");
   stdout.writeln("");
   stdout.writeln("optional arguments:");
   stdout.writeln("  -h, --help            show this help message and exit");
@@ -31,7 +31,7 @@ void printUsage() {
 }
 
 void main(List<String> args) {
-  String? source;
+  final sources = <String>[];
   String output = "a.out";
   String format = "bin";
   final includes = <String>[];
@@ -70,11 +70,11 @@ void main(List<String> args) {
     } else if (arg == "--format") {
       if (i + 1 < args.length) format = args[++i];
     } else if (!arg.startsWith("-")) {
-      source = arg;
+      sources.add(arg);
     }
   }
 
-  if (source == null) {
+  if (sources.isEmpty) {
     printUsage();
     exit(1);
   }
@@ -88,7 +88,7 @@ void main(List<String> args) {
   List<String> listingLines;
 
   try {
-    final result = asm.assemble(source);
+    final result = asm.assemble(sources);
     binData = result.$1;
     maxAddr = result.$2;
     listingLines = result.$3;
@@ -140,7 +140,7 @@ void main(List<String> args) {
   final lstFile = File(lstPath);
   final lstBuf = StringBuffer();
 
-  lstBuf.writeln("; Listing for $source");
+  lstBuf.writeln("; Listing for: ${sources.join(", ")}");
   lstBuf.writeln("; Total Emitted: ${outBytes.length} bytes [${startAddr.toRadixString(16).padLeft(8, "0").toUpperCase()}..${maxAddr.toRadixString(16).padLeft(8, "0").toUpperCase()}]\n");
 
   for (final line in listingLines) {

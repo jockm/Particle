@@ -137,6 +137,8 @@ compiler-tests:
 		echo "==> [FAIL] ACT16 compiler tests failed."; \
 		exit 1; \
 	else \
+		echo "==> Running ACT16 negative & semantic diagnostic tests..."; \
+		$(PYTHON) tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
 		echo "==> [PASS] All ACT16 compiler tests passed successfully."; \
 	fi
 
