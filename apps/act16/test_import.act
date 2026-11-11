@@ -1,0 +1,11 @@
+import "math_mod.act";
+import "math_mod.act"; // Verify idempotency (duplicate import must not error)
+
+void main() {
+    u32 res = add_mod(15, 27);
+    if (res == 42) {
+        trap(14); // Success trap
+    } else {
+        trap(15); // Failure trap
+    }
+}

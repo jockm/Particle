@@ -257,6 +257,11 @@ def run_preprocessor(tokens, defines, current_file="<stdin>", func_macros=None):
 
 class ASTNode: pass
 
+
+class ImportNode(ASTNode):
+    def __init__(self, path):
+        self.path = path
+
 class ArrayDeclNode(ASTNode):
     def __init__(self, elem_type, name, dim, bound_addr=None):
         self.elem_type = elem_type
@@ -527,6 +532,14 @@ class Parser:
             return self.consume().val
         raise SyntaxError(f"{t.fname}:{t.lineno}:{t.col}: Expected type specifier, got '{t.val}'")
 
+    def parse_import(self):
+        self.consume('KEYWORD', 'import')
+        tok = self.consume('STRING')
+        raw_path = tok.val[1:-1]
+        if self.peek().val == ';':
+            self.consume('PUNCT', ';')
+        return ImportNode(raw_path)
+
     def parse_enum(self):
         tok = self.consume('KEYWORD', 'enum')
         name = self.consume('IDENT').val
@@ -564,6 +577,8 @@ class Parser:
         return VerifyNode(cond, msg, tok)
 
     def parse_top_level(self):
+        if self.peek().val == 'import':
+            return self.parse_import()
         if self.peek().val == 'enum':
             return self.parse_enum()
         if self.peek().val == 'verify':
@@ -3407,6 +3422,7 @@ def main():
     parser.add_argument("sources", nargs="+", help="Input ACT16 source file(s) (.act / .c)")
     parser.add_argument("-o", "--output", default=None, help="Output assembly file (.asm)")
     parser.add_argument("-D", "--define", action="append", default=[], help="Predefine symbol (KEY[=VALUE])")
+    parser.add_argument("-I", "--include-dir", action="append", default=[], help="Add include search directory")
     parser.add_argument("-fbounds-check", dest="bounds_check", action="store_true", default=True, help="Enable runtime array bounds checking (default)")
     parser.add_argument("-fno-bounds-check", dest="bounds_check", action="store_false", help="Disable runtime array bounds checking")
     args = parser.parse_args()
@@ -3432,17 +3448,62 @@ def main():
     seen_funcs = {}
     seen_types = {}
 
+    imported_files = set()
+    search_dirs = list(args.include_dir) if args.include_dir else []
+    if "lib" not in search_dirs:
+        search_dirs.append("lib")
+    if "." not in search_dirs:
+        search_dirs.append(".")
+
+    def resolve_path(target, current_file):
+        candidates = [
+            os.path.join(os.path.dirname(current_file), target),
+            target,
+            os.path.abspath(target)
+        ]
+        for sdir in search_dirs:
+            candidates.append(os.path.join(sdir, target))
+            candidates.append(os.path.join(os.getcwd(), sdir, target))
+        for cand in candidates:
+            if os.path.isfile(cand):
+                return os.path.realpath(cand)
+        return None
+
+    def ingest_file(file_path):
+        real_p = os.path.realpath(file_path)
+        if real_p in imported_files:
+            return
+        imported_files.add(real_p)
+
+        with open(real_p, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        file_tokens = tokenize(content, fname=real_p)
+        filtered = run_preprocessor(file_tokens, defs, current_file=real_p)
+        parser_inst = Parser(filtered)
+        parsed_ast = parser_inst.parse_program()
+
+        for decl in parsed_ast.decls:
+            if isinstance(decl, ImportNode):
+                res = resolve_path(decl.path, real_p)
+                if not res:
+                    raise FileNotFoundError(f"Imported file '{decl.path}' not found (referenced from {real_p})")
+                ingest_file(res)
+            else:
+                if isinstance(decl, FuncDeclNode):
+                    if decl.body is not None:
+                        if decl.name in seen_funcs:
+                            prev_f = seen_funcs[decl.name]
+                            raise SyntaxError(f"Redefinition of function '{decl.name}' in {real_p} (previously defined in {prev_f})")
+                        seen_funcs[decl.name] = real_p
+                elif isinstance(decl, TypeDefNode):
+                    seen_types[decl.name] = real_p
+                all_decls.append(decl)
+
     for src_path in args.sources:
-        with open(src_path, 'r', encoding='utf-8') as f:
-            src = f.read()
-
-        tokens = tokenize(src, fname=src_path)
-        filtered = run_preprocessor(tokens, defs, current_file=src_path)
-
-        p = Parser(filtered)
-        program_ast = p.parse_program()
-
-        for decl in program_ast.decls:
+        ingest_file(src_path)
+    if False:
+        for decl in []:
             if isinstance(decl, FuncDeclNode):
                 # Prototypes (decl.body is None) are permitted; only enforce single full definition
                 if decl.body is not None:

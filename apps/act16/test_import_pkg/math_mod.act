@@ -1,0 +1,4 @@
+// Test submodule
+u32 add_mod(u32 a, u32 b) {
+    return a + b;
+}

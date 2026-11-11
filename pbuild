@@ -241,7 +241,7 @@ ASM_SOURCES=()
 if [ "${#ACT_INPUTS[@]}" -gt 0 ]; then
     ACT_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$ACT_ASM")"
-    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$PYTHON" "$ACT16C" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$PYTHON" "$ACT16C" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
     ASM_SOURCES+=("$ACT_ASM")
 fi
 
