@@ -18,7 +18,7 @@ PBUILD       := ./pbuild
 PSIM         := build/tools/psim
 # PSIM         := build/tools/psim
 
-ROHD_DIR     := hdl/rohd
+ROHD_DIR     := hdl/particle
 PARCORE_DIR  := hdl/parcore
 BUILD_DIR    := build
 TOOL_DIR     := apps/tools
@@ -50,7 +50,7 @@ all: build test
 help:
 	@echo "Particle & Parcore Build Automation"
 	@echo "==================================="
-	@echo "  make setup            - Fetch Dart dependencies for rohd and parcore"
+	@echo "  make setup            - Fetch Dart dependencies for hdl/particle and parcore"
 	@echo "  make lint-asm         - Statically lint all assembly files"
 	@echo "  make build            - Build firmware, apps, and generate all HDL"
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"

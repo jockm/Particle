@@ -6,7 +6,7 @@
       "type": "dart",
       "request": "launch",
       "program": "bin/generate.dart",
-      "cwd": "${workspaceFolder}/hdl/rohd"
+      "cwd": "${workspaceFolder}/hdl/particle"
     }
   ]
 }

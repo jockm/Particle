@@ -204,7 +204,7 @@ packages:
   particle_rohd:
     dependency: "direct main"
     description:
-      path: "../rohd"
+      path: "../particle"
       relative: true
     source: path
     version: "0.1.0"

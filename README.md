@@ -76,7 +76,7 @@ python3 tools/psim.py build/test.bin -d
 
 ### 4. Run ROHD Hardware Tests & Generate SystemVerilog
 ```bash
-cd hdl/rohd
+cd hdl/particle
 dart pub get
 dart test
 dart run bin/generate.dart   # Emits synthesizable particle_top.sv

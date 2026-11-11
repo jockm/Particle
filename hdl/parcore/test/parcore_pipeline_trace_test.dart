@@ -2,7 +2,7 @@ import "dart:async";
 import "dart:io";
 import "package:rohd/rohd.dart";
 import "package:test/test.dart";
-import "../../rohd/test/test_helpers.dart";
+import "../../particle/test/test_helpers.dart";
 import "../lib/parcore_top.dart";
 
 List<int> loadFirmware(String relativePath) {

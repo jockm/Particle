@@ -234,14 +234,14 @@ Sequential(clk, reset: reset, resetValues: {
 ## 8. Implementation Roadmap
 
 1. **Phase 1: Toolchain & Instruction Definition**
-   * Assign `0xFF` as `XTRA` in `hdl/rohd/lib/constants.dart`.
+   * Assign `0xFF` as `XTRA` in `hdl/particle/lib/constants.dart`.
    * Update assembler (`tools/pasm.py`) to recognize 2-word syntax:
      ```assembly
      XTRA.F32  FADD, R4, R2, R1     ; Escaped float add: R4 = R2 + R1
      XTRA.F32  FMUL, R6, R4, R3     ; Escaped float mul: R6 = R4 * R3
      ```
 2. **Phase 2: SARF Scoreboard Extension**
-   * Add the 32-bit `busyMask` tracking register to `hdl/rohd/lib/shared_reg_fabric.dart`.
+   * Add the 32-bit `busyMask` tracking register to `hdl/particle/lib/shared_reg_fabric.dart`.
    * Route scoreboard status lines to Core 1 hazard detection logic.
 3. **Phase 3: Top-Level Integration (`ParcoreTop`)**
    * Instantiate Core 2B in `parcore_top.dart`.

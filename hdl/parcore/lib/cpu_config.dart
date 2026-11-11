@@ -1,5 +1,5 @@
 // =============================================================================
-// File: hdl/rohd/lib/cpu_config.dart
+// File: hdl/particle/lib/cpu_config.dart
 // Architecture: Particle 32-bit RISC
 // Description: Parameterized configuration for Particle processor cores.
 // =============================================================================

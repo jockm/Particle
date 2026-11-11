@@ -5,7 +5,7 @@ import "dart:io";
 import "dart:typed_data";
 import "package:rohd/rohd.dart";
 import "package:test/test.dart";
-import "../../rohd/test/test_helpers.dart";
+import "../../particle/test/test_helpers.dart";
 import "package:parcore_rohd/parcore_top.dart";
 
 List<int> loadBinary(String path) {

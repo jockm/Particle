@@ -1,6 +1,6 @@
 # TODO
 
-- Rename hdl/rohd to hdl/particle
+- Rename hdl/particle to hdl/particle
 - Rename Act16 to Enact
 - Make lint more quiet
 - Make pbuild more quiet

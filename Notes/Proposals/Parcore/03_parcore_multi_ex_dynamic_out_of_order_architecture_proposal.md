@@ -80,7 +80,7 @@ The enhanced cluster reorganizes the execution stage into specialized cores comm
 ## 4. Hardware Enhancements (ROHD HDL)
 
 ### 4.1. SARF Scoreboard & Busy Bit Hardware Extension
-The `SharedRegFabric` module (`hdl/rohd/lib/shared_reg_fabric.dart`) is augmented with a 32-bit hardware register reservation mask:
+The `SharedRegFabric` module (`hdl/particle/lib/shared_reg_fabric.dart`) is augmented with a 32-bit hardware register reservation mask:
 
 * **Busy Bit Register (`regBusy[31:0]`):**
   * Bit 0 is permanently tied to `0` ($x0$).
@@ -186,7 +186,7 @@ To maintain verification discipline and avoid breaking regression suites, implem
 ### Stage 1: Dual-EX Interconnect & Scoreboard Hardware Foundation
 * **Objective:** Prepare the hardware datapath without altering existing microkernel functionality.
 * **Deliverables:**
-  * Update `hdl/rohd/lib/shared_reg_fabric.dart`: Implement `regBusy[31:0]`, `reserveRd`, and auto-clear on writeback.
+  * Update `hdl/particle/lib/shared_reg_fabric.dart`: Implement `regBusy[31:0]`, `reserveRd`, and auto-clear on writeback.
   * Update `hdl/parcore/lib/parcore_interconnect.dart`: Add `idToExA` and `idToExB` FIFO channels.
   * Unit tests: `test/sarf_scoreboard_test.dart` validating multi-port collisions, reservations, and bypass paths.
 

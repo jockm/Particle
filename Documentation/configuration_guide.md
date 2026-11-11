@@ -6,7 +6,7 @@ This guide details how to parameterize the Particle core via `CpuConfig` and gen
 
 ## Parameterized Core Configuration (`CpuConfig`)
 
-The core execution configuration is declared in `hdl/rohd/lib/cpu_config.dart`:
+The core execution configuration is declared in `hdl/particle/lib/cpu_config.dart`:
 
 ```dart
 class CpuConfig {
@@ -33,7 +33,7 @@ class CpuConfig {
 Particle generates clean, single-file SystemVerilog via Intel ROHD's `generateSynth()` API.
 
 ### 1. Generating SystemVerilog
-From the `hdl/rohd/` directory:
+From the `hdl/particle/` directory:
 ```bash
 dart run bin/generate.dart
 ```
@@ -56,7 +56,7 @@ synth_ecp5 -top particle_cpu_core -json particle_synth.json
 
 ## VS Code Workflow
 The repository includes `.vscode/tasks.json` with ready-to-run automation:
-* `Particle: Run ROHD Tests`: Runs `dart test` inside `hdl/rohd`.
+* `Particle: Run ROHD Tests`: Runs `dart test` inside `hdl/particle`.
 * `Particle: Generate SystemVerilog`: Runs `bin/generate.dart`.
 * `Particle: Assemble Current File`: Invokes `pasm.py` on the active file.
 * `Particle: Compile ACT16 Current File`: Invokes `act16c.py` on the active file.

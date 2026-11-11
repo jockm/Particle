@@ -6,7 +6,7 @@
       "type": "shell",
       "command": "dart test",
       "options": {
-        "cwd": "${workspaceFolder}/hdl/rohd"
+        "cwd": "${workspaceFolder}/hdl/particle"
       },
       "group": {
         "kind": "test",
@@ -21,7 +21,7 @@
       "type": "shell",
       "command": "dart run bin/generate.dart",
       "options": {
-        "cwd": "${workspaceFolder}/hdl/rohd"
+        "cwd": "${workspaceFolder}/hdl/particle"
       },
       "group": "build",
       "problemMatcher": [

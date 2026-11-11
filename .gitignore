@@ -13,14 +13,14 @@
 **/*.lst
 
 # ROHD-generated SystemVerilog top-level outputs
-hdl/rohd/particle_top.sv
-hdl/rohd/*.sv
+hdl/particle/particle_top.sv
+hdl/particle/*.sv
 
 # Synthesis and PnR toolchain artifacts (Yosys / nextpnr)
-hdl/rohd/*.synth.json
-hdl/rohd/*.config
-hdl/rohd/*.bit
-hdl/rohd/*.bin
+hdl/particle/*.synth.json
+hdl/particle/*.config
+hdl/particle/*.bit
+hdl/particle/*.bin
 
 # Python Bytecode Cache
 __pycache__/
