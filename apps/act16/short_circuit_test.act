@@ -1,0 +1,73 @@
+u32 g_side_effect_count;
+
+u32 trigger_fail() {
+    // If short-circuiting fails and this runs, abort test
+    trap(15);
+    return 1;
+}
+
+u32 record_side_effect() {
+    g_side_effect_count = g_side_effect_count + 1;
+    return 1;
+}
+
+void main() {
+    g_side_effect_count = 0;
+
+    // 1. Short-circuit &&: Left is false, right (trigger_fail) MUST NOT execute
+    if (0 && trigger_fail()) {
+        trap(15);
+    }
+
+    // 2. Short-circuit ||: Left is true, right (trigger_fail) MUST NOT execute
+    if (1 || trigger_fail()) {
+        // Correct branch
+    } else {
+        trap(15);
+    }
+
+    // 3. Side-effect execution when left is true in &&
+    if (1 && record_side_effect()) {
+        // Correctly fell through and called record_side_effect()
+    } else {
+        trap(15);
+    }
+    if (g_side_effect_count != 1) {
+        trap(15);
+    }
+
+    // 4. Side-effect suppression when left is false in &&
+    if (0 && record_side_effect()) {
+        trap(15);
+    }
+    if (g_side_effect_count != 1) {
+        trap(15);
+    }
+
+    // 5. Array bounds safety guard
+    u32 arr[4];
+    arr[0] = 10;
+    arr[1] = 20;
+    arr[2] = 30;
+    arr[3] = 40;
+
+    u32 bad_idx = 10;
+    // Without short-circuiting, evaluating arr[bad_idx] would trigger bounds-check Trap 15!
+    if (bad_idx < arr.len && arr[bad_idx] == 99) {
+        trap(15);
+    }
+
+    // 6. Value-context expression short-circuiting
+    u32 res_and = (0 && trigger_fail());
+    if (res_and != 0) {
+        trap(15);
+    }
+
+    u32 res_or = (1 || trigger_fail());
+    if (res_or != 1) {
+        trap(15);
+    }
+
+    // All short-circuit tests passed
+    trap(14);
+}

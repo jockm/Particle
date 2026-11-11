@@ -2517,7 +2517,18 @@ class CodeGen:
             self.break_stack.pop()
 
     def _gen_cond_jump(self, cond_expr, false_target):
-        # Optimized control-flow branch fusion for relational comparisons
+        # Optimized control-flow branch fusion for relational comparisons and short-circuiting
+        if isinstance(cond_expr, BinaryOpNode) and cond_expr.op == '&&':
+            self._gen_cond_jump(cond_expr.left, false_target)
+            self._gen_cond_jump(cond_expr.right, false_target)
+            return
+        elif isinstance(cond_expr, BinaryOpNode) and cond_expr.op == '||':
+            lbl_body = self.new_label("or_body")
+            self._gen_cond_jump_true(cond_expr.left, lbl_body)
+            self._gen_cond_jump(cond_expr.right, false_target)
+            self.emit_label(lbl_body)
+            return
+
         lbl_hop = self.new_label("hop_false")
         lbl_cont = self.new_label("hop_cont")
 
@@ -2561,6 +2572,26 @@ class CodeGen:
         self.emit_label(lbl_hop)
         self.emit(f"FBRA     {false_target}", "Wide branch to target (8-bit)")
         self.emit_label(lbl_cont)
+
+    def _gen_cond_jump_true(self, cond_expr, true_target):
+        # Jump to true_target if cond_expr evaluates to TRUE (!= 0)
+        if isinstance(cond_expr, BinaryOpNode) and cond_expr.op == '||':
+            self._gen_cond_jump_true(cond_expr.left, true_target)
+            self._gen_cond_jump_true(cond_expr.right, true_target)
+        elif isinstance(cond_expr, BinaryOpNode) and cond_expr.op == '&&':
+            lbl_skip = self.new_label("and_skip")
+            self._gen_cond_jump(cond_expr.left, lbl_skip)
+            self._gen_cond_jump_true(cond_expr.right, true_target)
+            self.emit_label(lbl_skip)
+        else:
+            self.gen_expr(cond_expr, target_reg=1)
+            lbl_cont = self.new_label("hop_cont")
+            lbl_hop = self.new_label("hop_true")
+            self.emit(f"FBRA.NZ R1, {lbl_hop}", "Hop if condition true (!= 0)")
+            self.emit(f"FBRA    {lbl_cont}", "Fall through")
+            self.emit_label(lbl_hop)
+            self.emit(f"FBRA    {true_target}", "Wide branch to true target (8-bit)")
+            self.emit_label(lbl_cont)
 
     def _emit_lvalue_addr(self, node, target_reg=14):
         if isinstance(node, VarAccessNode):
@@ -3077,6 +3108,26 @@ class CodeGen:
                     self.emit(f"LD      R{target_reg}, R1")
 
         elif isinstance(expr, BinaryOpNode):
+            if expr.op == '&&':
+                self.gen_expr(expr.left, target_reg=target_reg)
+                lbl_end = self.new_label("sc_and_end")
+                self.emit(f"FBRA.Z  R{target_reg}, {lbl_end}", "Short-circuit AND: exit with 0")
+                self.gen_expr(expr.right, target_reg=target_reg)
+                self.emit(f"NEZ     R{target_reg}", "Normalize boolean result")
+                self.emit_label(lbl_end)
+                return
+            elif expr.op == '||':
+                self.gen_expr(expr.left, target_reg=target_reg)
+                lbl_true = self.new_label("sc_or_true")
+                lbl_end = self.new_label("sc_or_end")
+                self.emit(f"FBRA.NZ R{target_reg}, {lbl_true}", "Short-circuit OR: exit with 1")
+                self.gen_expr(expr.right, target_reg=target_reg)
+                self.emit(f"NEZ     R{target_reg}", "Normalize boolean result")
+                self.emit(f"FBRA    {lbl_end}")
+                self.emit_label(lbl_true)
+                self.emit_immediate(target_reg, 1)
+                self.emit_label(lbl_end)
+                return
             if expr.op == '=':
                 self.gen_expr(expr.right, target_reg=1)
                 if isinstance(expr.left, MemberAccessNode):
