@@ -1,0 +1,13 @@
+const u32 BUFFER_SIZE = 1024;
+const u32 MAX_CLIENTS = 8;
+
+verify(BUFFER_SIZE == 1024, "Buffer size mismatch");
+verify(BUFFER_SIZE * MAX_CLIENTS == 8192, "Total allocation mismatch");
+
+void main() {
+    verify(MAX_CLIENTS > 0, "Clients must be non-zero");
+    verify((1 << 4) == 16, "Bitshift calculation failed");
+
+    // Success trap
+    trap(14);
+}

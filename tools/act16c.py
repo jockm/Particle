@@ -1768,6 +1768,11 @@ class CodeGen:
                     self.constants[m_name] = cur_val
                     cur_val += 1
 
+        # Register global constants upfront (before verify evaluation)
+        for d in data_decls:
+            if getattr(d, 'is_const', False):
+                self.constants[d.name] = self._eval_const_expr(d.init_expr)
+
         # Evaluate top-level verify assertions
         for d in root.decls:
             if isinstance(d, VerifyNode):
@@ -1777,10 +1782,9 @@ class CodeGen:
                     loc = f"{tok.fname}:{tok.lineno}:{tok.col}" if tok else "verify"
                     raise SyntaxError(f"{loc}: Compile-time verification failed: '{d.msg}'")
 
-        # Register global types, dims, constants upfront
+        # Register global types and dims
         for d in data_decls:
             if getattr(d, 'is_const', False):
-                self.constants[d.name] = self._eval_const_expr(d.init_expr)
                 continue
             self.types[d.name] = (d.type_name, d.is_ptr, False)
             dims = getattr(d, 'array_dims', None)
