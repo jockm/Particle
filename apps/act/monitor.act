@@ -1,6 +1,6 @@
 // =============================================================================
-// File: apps/act16/monitor.act
-// Language: ACT16 Systems Programming Language
+// File: apps/act/monitor.act
+// Language: Action Systems Programming Language
 // Architecture: Particle 32-bit RISC
 // Description: Interactive Dual-UART Memory Monitor & Debugger.
 //              Provides memory inspection, modification, jump-to-address,
@@ -206,7 +206,7 @@ void main(void) {
     *baud_reg = DEFAULT_AUX_DIVISOR;
 
     // 2. Banner display
-    con_puts((u8*)"\r\n=== Particle ACT16 Dual-UART Monitor ===\r\n");
+    con_puts((u8*)"\r\n=== Particle Action Dual-UART Monitor ===\r\n");
     con_puts((u8*)"Commands:\r\n");
     con_puts((u8*)"  D <addr> <len>   : Dump memory words\r\n");
     con_puts((u8*)"  W <addr> <val>   : Write memory word\r\n");
@@ -216,7 +216,7 @@ void main(void) {
 
     // 3. Command interpreter loop
     while (1) {
-        con_puts((u8*)"ACT16-MON> ");
+        con_puts((u8*)"Action-MON> ");
         u8 cmd = con_read_token();
 
         if (cmd == 0x44 || cmd == 0x64) {          // 'D' / 'd'

@@ -1,6 +1,6 @@
-# ACT16 Systems Compiler (`act16c.py`)
+# Action Systems Compiler (`act16c.py`)
 
-`act16c.py` is the optimizing systems compiler for the ACT16 language, targeted directly at the Particle 32-bit architecture. ACT16 provides an Action!-inspired, systems-level syntax with low-level hardware control, explicit word/sub-word typing, pointer mechanics, and native streaming primitives.
+`act16c.py` is the optimizing systems compiler for the Action language, targeted directly at the Particle 32-bit architecture. Action provides an Action!-inspired, systems-level syntax with low-level hardware control, explicit word/sub-word typing, pointer mechanics, and native streaming primitives.
 
 ---
 
@@ -11,7 +11,7 @@ python3 tools/act16c.py <input.act> [options]
 ```
 
 ### Options
-* `<input.act>`: ACT16 source file.
+* `<input.act>`: Action source file.
 * `-o`, `--output <file.asm>`: Output Particle assembly source file (default: `out.asm`).
 * `-D`, `--define <SYM>`: Predefine preprocessor conditionals (e.g., `-DMULTICORE_ENABLE`).
 
@@ -49,7 +49,7 @@ The code generator optimizes literal constant generation based on magnitude:
 * $N > 	ext{0xFFFFFF}$: Emits 5-instruction sequence `LOAD32 Rr, value`.
 
 ### 4. Streaming Channel Primitives
-ACT16 exposes built-in language routines mapping to hardware streaming instructions:
+Action exposes built-in language routines mapping to hardware streaming instructions:
 ```c
 u32 data = readfifo(0);               // Compiles to: FIFO.R R1, 0
 writefifo(1, packet);                 // Compiles to: FIFO.W R1, 1

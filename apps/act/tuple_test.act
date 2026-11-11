@@ -1,4 +1,4 @@
-// apps/act16/tuple_test.act
+// apps/act/tuple_test.act
 // Stage 2 test: Multiple scalar returns, tuple destructuring, and wildcard discard
 
 (u32, u32) get_pair(u32 x, u32 y) {

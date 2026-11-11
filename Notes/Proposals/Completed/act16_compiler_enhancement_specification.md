@@ -1,7 +1,7 @@
-# Prompt & Engineering Specification: ACT16 Zero-Macro Systems Language Upgrades
+# Prompt & Engineering Specification: Action Zero-Macro Systems Language Upgrades
 
 ## Objective & Scope
-This specification provides complete engineering instructions to upgrade the **ACT16 compiler** (`tools/act16c.py`) targeting the Particle 32-bit RISC architecture. 
+This specification provides complete engineering instructions to upgrade the **Action compiler** (`tools/act16c.py`) targeting the Particle 32-bit RISC architecture. 
 
 The primary architectural goal is to **completely eliminate all C-style preprocessor directives and macros** (`#define`, `#include`, `#ifdef`, `#ifndef`, `#endif`) by replacing them with first-class, zero-overhead language constructs:
 1. **Module Import System (`import`)**: Canonical single-inclusion module semantics replacing textual `#include` and `#ifndef` include guards.
@@ -82,7 +82,7 @@ The primary architectural goal is to **completely eliminate all C-style preproce
   }
   ```
 * **Calling Convention & Register Mapping**:
-  * ACT16 preserves the strict invariant: **No aggregate copies on the stack/heap**. Return tuples are limited strictly to primitive scalars (`u8`, `s8`, `u16`, `s16`, `u32`, `s32`, pointers). Maximum return tuple size is 4 elements.
+  * Action preserves the strict invariant: **No aggregate copies on the stack/heap**. Return tuples are limited strictly to primitive scalars (`u8`, `s8`, `u16`, `s16`, `u32`, `s32`, pointers). Maximum return tuple size is 4 elements.
   * Tuple return values map directly to Particle calling convention return registers:
     * Element 0 $\rightarrow$ `R1`
     * Element 1 $\rightarrow$ `R2`
@@ -206,10 +206,10 @@ The primary architectural goal is to **completely eliminate all C-style preproce
 
 ## 3. Test & Verification Suites
 
-Create the following automated tests in `apps/act16/`:
+Create the following automated tests in `apps/act/`:
 
-1. `apps/act16/test_import.act`: Verify module inclusion and idempotent multiple imports.
-2. `apps/act16/test_enum_assert.act`: Verify enum auto-numbering and compile-time `static_assert(sizeof(...) == ...)`.
-3. `apps/act16/test_multi_return.act`: Verify `(u32, u16)` return passing via `R1`/`R2` with wildcard `_` ignoring values.
-4. `apps/act16/test_const_pruning.act`: Verify `if (false)` blocks generate zero instructions in the disassembly.
-5. `apps/act16/test_volatile.act`: Verify sequential writes to volatile memory addresses are never omitted.
+1. `apps/act/test_import.act`: Verify module inclusion and idempotent multiple imports.
+2. `apps/act/test_enum_assert.act`: Verify enum auto-numbering and compile-time `static_assert(sizeof(...) == ...)`.
+3. `apps/act/test_multi_return.act`: Verify `(u32, u16)` return passing via `R1`/`R2` with wildcard `_` ignoring values.
+4. `apps/act/test_const_pruning.act`: Verify `if (false)` blocks generate zero instructions in the disassembly.
+5. `apps/act/test_volatile.act`: Verify sequential writes to volatile memory addresses are never omitted.

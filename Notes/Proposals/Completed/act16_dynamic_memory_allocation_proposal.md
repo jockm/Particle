@@ -1,4 +1,4 @@
-# ACT16 Compiler Architectural Proposal
+# Action Compiler Architectural Proposal
 ## Dynamic Memory Allocation, Pluggable Backends, and Static Null Safety
 
 **Document Version:** 1.0  
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-ACT16 was originally designed for bare-metal execution on the Particle 32-bit compact RISC architecture, where memory allocation is strictly static (`.data`, `.bss`, hardware stack, or absolute `@` address bindings).
+Action was originally designed for bare-metal execution on the Particle 32-bit compact RISC architecture, where memory allocation is strictly static (`.data`, `.bss`, hardware stack, or absolute `@` address bindings).
 
 This proposal establishes a technical roadmap for:
 1. **Dynamic Memory Allocation Semantics**: Uniform, object-oriented syntax via `Type.create()` and `Type.createArray(N)`.
@@ -52,7 +52,7 @@ pts.destroyArray();
 
 ### 3.1 Preservation of the "No Aggregate Return by Value" Invariant
 
-In ACT16, functions and expressions **never return aggregate records by value** to avoid hidden stack or frame-copying overhead on bare-metal RISC hardware.
+In Action, functions and expressions **never return aggregate records by value** to avoid hidden stack or frame-copying overhead on bare-metal RISC hardware.
 
 * `Point.create()` evaluates to an **implicit reference** (`is_reference: True`).
 * The variable `p` is allocated a 32-bit register or stack slot storing the allocated heap pointer.
@@ -60,7 +60,7 @@ In ACT16, functions and expressions **never return aggregate records by value** 
 
 ### 3.2 Dynamic Array Layout & Header Contract
 
-Static arrays in ACT16 evaluate `.len` at compile time and trap on out-of-bounds indexing. For dynamic arrays created via `Type.createArray(count)`, the length is dynamic.
+Static arrays in Action evaluate `.len` at compile time and trap on out-of-bounds indexing. For dynamic arrays created via `Type.createArray(count)`, the length is dynamic.
 
 #### Memory Layout
 Dynamic arrays use a single 4-byte prefix header containing the element count:
@@ -83,7 +83,7 @@ Dynamic arrays use a single 4-byte prefix header containing the element count:
 
 Traditional dynamic languages use heavy runtime tagging or per-object magic headers (`0xAA55AA55`) to verify allocation. In resource-constrained embedded systems, headers waste RAM and consume memory-read cycles.
 
-ACT16 avoids null pointers and dangling references through a **four-pillar compile-time and architectural design**:
+Action avoids null pointers and dangling references through a **four-pillar compile-time and architectural design**:
 
 ### 4.1 Unallocated Sentinel Representation (`0x00000000`)
 * Unallocated reference variables are initialized to `0` (`PUSH32 R0`).
@@ -108,7 +108,7 @@ b.destroy();  // Valid: 'b' owns the reference
 * After `.destroy()`, the variable is marked `MOVED_OR_DESTROYED` in the local symbol table, and the compiler emits instructions to zero out the variable's register/stack slot.
 
 ### 4.3 Borrowing for Function and Method Calls
-To allow functions and methods to inspect or mutate dynamic objects without transferring ownership, ACT16's existing pass-by-reference calling convention serves as **borrowing**:
+To allow functions and methods to inspect or mutate dynamic objects without transferring ownership, Action's existing pass-by-reference calling convention serves as **borrowing**:
 
 ```c
 void Point.translate(Point self, u16 dx, u16 dy) {
@@ -258,4 +258,4 @@ store i32 20, i32* %hdr
 | **3** | **Backend Refactoring** | Separate existing assembly emission in `tools/act16c.py` into `ParticleAsmBackend` under an abstract `BackendBase` interface. |
 | **4** | **Particle Runtime Allocator** | Implement `lib/alloc.asm` with bump/freelist routines; add out-of-memory trap handling. |
 | **5** | **LLVM IR Text Backend** | Add `-target=llvm` switch to emit LLVM assembly (`.ll`) targeting the standard C library runtime. |
-| **6** | **Verification Suite** | Add test applications (`apps/act16/dyn_alloc_test.act`, `dyn_array_test.act`) verifying lifecycle and bounds enforcement. |
+| **6** | **Verification Suite** | Add test applications (`apps/act/dyn_alloc_test.act`, `dyn_array_test.act`) verifying lifecycle and bounds enforcement. |

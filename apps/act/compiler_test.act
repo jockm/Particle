@@ -1,4 +1,4 @@
-// apps/act16/compiler_test.act
+// apps/act/compiler_test.act
 
 u32 g_counter = 0;
 u32 g_status = 0;

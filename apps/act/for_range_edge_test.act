@@ -1,5 +1,5 @@
-// apps/act16/for_range_edge_test.act
-// Verification suite for ACT16 numeric range edge-case boundaries
+// apps/act/for_range_edge_test.act
+// Verification suite for Action numeric range edge-case boundaries
 
 void test_empty_range() {
     u32 count = 0;

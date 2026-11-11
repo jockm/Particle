@@ -1,4 +1,4 @@
-// Test string literal escape sequences in ACT16
+// Test string literal escape sequences in Action
 
 u32 test_escapes(u8* s) {
     // Expected contents: "A\tB\nC\r\"\\\x41"

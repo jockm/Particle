@@ -1,4 +1,4 @@
-// apps/act16/native_ops_test.act
+// apps/act/native_ops_test.act
 
 void main() {
     u32 a = 100;

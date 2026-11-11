@@ -1,4 +1,4 @@
-// apps/act16/type_method_test.act
+// apps/act/type_method_test.act
 #include "lib/protokernel.h"
 
 type Point {

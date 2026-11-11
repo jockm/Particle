@@ -1,5 +1,5 @@
 // =============================================================================
-// ACT16 Standard String Library (lib/string.act)
+// Action Standard String Library (lib/string.act)
 // Target: Particle 32-bit RISC Core
 // Zero-heap, hardware-interoperable fixed-capacity null-terminated strings.
 // Supports both direct function calls (string_*) and method syntax (s.*).

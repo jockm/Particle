@@ -1,6 +1,6 @@
-# Prompt & Engineering Specification: ACT16 String Type & Null-Terminated Slice Support
+# Prompt & Engineering Specification: Action String Type & Null-Terminated Slice Support
 
-**Target:** `tools/act16c.py` (ACT16 Systems Programming Compiler)  
+**Target:** `tools/act16c.py` (Action Systems Programming Compiler)  
 **Architecture:** Particle 32-bit RISC ISA (16-bit instruction format)  
 **Usage Instructions:** Provide this document directly as a prompt to an AI agent or systems developer to implement fixed-capacity, null-terminated strings, string slices, and standard C-interoperability routines in `act16c.py`.
 
@@ -8,7 +8,7 @@
 
 ## 1. Context & Architectural Principles
 
-ACT16 is a bare-metal, statically-typed systems language targeting the Particle 32-bit RISC core. The language prohibits hidden heap allocations and guarantees deterministic stack and memory layout.
+Action is a bare-metal, statically-typed systems language targeting the Particle 32-bit RISC core. The language prohibits hidden heap allocations and guarantees deterministic stack and memory layout.
 
 The language currently supports:
 - Fixed-size primitive arrays (`u8 arr[32]`) with compile-time `.len` and runtime bounds checking (`TRAP 15`).
@@ -61,7 +61,7 @@ Strings allow element indexing (`s[i]`) and assignment (`s[i] = 'A'`):
 - **Null Safety:** User code cannot index or overwrite the terminal sentinel slot at $s[\text{capacity} - 1]$. Writing a `0x00` at $i < \text{capacity} - 1$ dynamically shrinks the logical `s.len`.
 
 ### 2.4 Slices & Open Array Compatibility
-Strings directly interface with ACT16's open array and slice architecture:
+Strings directly interface with Action's open array and slice architecture:
 
 ```c
 void uart_write(u8 buf[]) {
@@ -180,7 +180,7 @@ In `_get_expr_type()`:
 ## 5. Verification & Acceptance Criteria
 
 ### Test 1: Stack Allocation & Null Termination
-Create `apps/act16/string_basic_test.act`:
+Create `apps/act/string_basic_test.act`:
 - Declare `string[16] greeting = "Particle";`.
 - Assert `greeting.capacity == 16`.
 - Assert `greeting.len == 8`.
@@ -188,13 +188,13 @@ Create `apps/act16/string_basic_test.act`:
 - Verify writing `greeting[0] = 'p'` updates the string without clobbering the terminator.
 
 ### Test 2: C-ABI Interoperability
-Create `apps/act16/string_c_abi_test.act`:
+Create `apps/act/string_c_abi_test.act`:
 - Declare a driver routine `void uart_puts(u8* s)` that iterates until `*s == 0`.
 - Pass a `string[32]` to `uart_puts`.
 - Verify simulation halts cleanly at `TRAP 14` (`0xCAFE`) without buffer overruns.
 
 ### Test 3: String Slicing into Open Arrays
-Create `apps/act16/string_slice_test.act`:
+Create `apps/act/string_slice_test.act`:
 - Define `u32 sum_bytes(u8 buf[])`.
 - Pass `greeting[0..4]` into `sum_bytes`.
 - Verify primary register carries `&greeting[0]` and companion register carries `4`.

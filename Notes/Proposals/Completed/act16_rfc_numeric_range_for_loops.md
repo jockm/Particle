@@ -1,4 +1,4 @@
-# RFC: Numeric Range `for` Loops in ACT16
+# RFC: Numeric Range `for` Loops in Action
 
 - **Status:** Proposed
 - **Author:** Particle & Parcore
@@ -9,13 +9,13 @@
 
 ## 1. Summary
 
-This proposal specifies the syntax, semantics, and compiler lowering for unit-stride numeric range `for` loops in the ACT16 systems language. The construct provides a structured, idiomatic way to iterate over half-open integer intervals `[start, end)` without introducing new English keywords, custom step operators, or dynamic stack allocation during iteration.
+This proposal specifies the syntax, semantics, and compiler lowering for unit-stride numeric range `for` loops in the Action systems language. The construct provides a structured, idiomatic way to iterate over half-open integer intervals `[start, end)` without introducing new English keywords, custom step operators, or dynamic stack allocation during iteration.
 
 ---
 
 ## 2. Motivation
 
-Currently, ACT16 relies strictly on `while` loops for iteration:
+Currently, Action relies strictly on `while` loops for iteration:
 
 ```c
 u32 i = 0;
@@ -59,7 +59,7 @@ for (u16 n : 1..100) {
 ```
 
 ### 3.3 Deliberate Design Decisions
-- **No `in` or `step` Keywords:** To preserve ACT16's grammar minimalism, no ad-hoc English keywords are introduced.
+- **No `in` or `step` Keywords:** To preserve Action's grammar minimalism, no ad-hoc English keywords are introduced.
 - **No Non-Unit Stride Modifiers:** Iteration is strictly single-step (`+1`). Arbitrary step sizes, negative strides, and complex sequences remain the domain of explicit `while` loops.
 - **Half-Open Intervals `[start, end)`:** Directly consistent with array slicing syntax `arr[start..end]`. A loop `0..N` executes exactly $N$ iterations ($0 \le i < N$).
 
@@ -162,7 +162,7 @@ Handle `ForRangeNode` by emitting the bounds evaluation, trampoline loop conditi
 
 ## 7. Verification & Test Plan
 
-Create `apps/act16/for_range_test.act` covering:
+Create `apps/act/for_range_test.act` covering:
 1. **Basic Numeric Accumulation:** Iterating `0..10` and summing values.
 2. **Fixed Array Indexing:** Iterating `0..arr.len` to initialize and transform elements.
 3. **Nested Loops:** Independent outer and inner `for` ranges validating stack slot isolation.

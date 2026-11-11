@@ -1,4 +1,4 @@
-# Prompt & Engineering Specification: ACT16 Systems Compiler Overhaul
+# Prompt & Engineering Specification: Action Systems Compiler Overhaul
 
 ## Unified Types, Bound Procedures, Memory-Mapped Arrays, and Particle Native Codegen
 
@@ -6,7 +6,7 @@
 
 ## 1. Context & Objectives
 
-The Particle ACT16 toolchain (`tools/act16c.py`) compiles a typed systems language targeting Particle's compact 16-bit RISC ISA over a 32-bit datapath. Previous milestones established:
+The Particle Action toolchain (`tools/act16c.py`) compiles a typed systems language targeting Particle's compact 16-bit RISC ISA over a 32-bit datapath. Previous milestones established:
 
 1. Scalar primitive types (`u8`, `s8`, `u16`, `s16`, `u32`, `s32`, pointers).
 2. Top-level struct declarations with member offset tracking.
@@ -14,7 +14,7 @@ The Particle ACT16 toolchain (`tools/act16c.py`) compiles a typed systems langua
 4. Duff's Device arbitrary continuation points (`case` labels nested in arbitrary control blocks and loops).
 5. Non-destructive switch branch ladders with short-hop skips over 8-bit `FBRA` displacements.
 
-This specification unifies the next evolution of ACT16, addressing language syntax, memory semantics, and machine code efficiency:
+This specification unifies the next evolution of Action, addressing language syntax, memory semantics, and machine code efficiency:
 
 1. **The Unified `type` System:** Replace `struct` with `type`, supporting recursive nesting, arrays as fields, implicit pass-by-reference semantics, and auto-dereferenced member access (`.`).
 2. **Fixed-Size Arrays, Bounds Checking, and `.len` Introspection:** Introduce fixed arrays with compile-time bounds checking, direct address binding via `@` (`u8 vram[64] @ 0x8000;`), and zero-overhead length introspection via `arr.len`.
@@ -282,11 +282,11 @@ inline u16 pk_schedule(u16 status) {
 
 ### Step 4: Verification Suite
 
-1. **Language Ergonomics & Array Test (`apps/act16/type_method_test.act`):**
+1. **Language Ergonomics & Array Test (`apps/act/type_method_test.act`):**
    * Tests nested types, `Type.method()` invocation, `arr.len` loop evaluation, and array bounds checking.
-2. **Native Comparisons & Compound Ops (`apps/act16/native_ops_test.act`):**
+2. **Native Comparisons & Compound Ops (`apps/act/native_ops_test.act`):**
    * Tests single-cycle comparisons (`SEQ`, `SNE`, `SLE`) and operators (`+=`, `<<=`).
-3. **ProtoKernel Concurrency Test (`apps/act16/pk_concurrency_test.act`):**
+3. **ProtoKernel Concurrency Test (`apps/act/pk_concurrency_test.act`):**
    * Multi-task cooperative scheduling using `TaskFn tasks[4];`, `yield`, and `wait_until`.
 4. **Assembler & Simulator Pass:**
    * Binaries must compile cleanly via `tools/pasm.py` and pass execution in `tools/psim.py` to `trap(14)` with register verification (`R1 == 0xCAFE`).

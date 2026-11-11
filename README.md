@@ -24,7 +24,7 @@ particle/
 │   ├── particle_spec.md               # Master architectural specification
 │   ├── pasm_assembler.md              # Macro assembler documentation
 │   ├── psim_simulator.md              # Simulator & p4db debugger reference
-│   ├── act16_compiler.md              # ACT16 systems language specification
+│   ├── act16_compiler.md              # Action systems language specification
 │   ├── hdl_architecture.md            # Pure ROHD datapath, memory & execution model
 │   ├── configuration_guide.md         # CpuConfig parameters and synthesis flow
 │   └── memory_map_and_conventions.md  # Vector layout, ABI, and calling conventions
@@ -41,10 +41,10 @@ particle/
 ├── tools/
 │   ├── pasm.py                        # Two-pass macro assembler
 │   ├── psim.py                        # Instruction-accurate simulator & p4db
-│   └── act16c.py                      # ACT16 systems compiler
+│   └── act16c.py                      # Action systems compiler
 └── apps/
     ├── asm/                           # Assembly validation suites
-    └── act16/                         # ACT16 application sources
+    └── Action/                         # Action application sources
 ```
 
 ---
@@ -55,9 +55,9 @@ particle/
 * **Dart SDK** `>= 3.0.0 < 4.0.0` with `rohd: ^0.5.0`
 * **Python** `>= 3.8`
 
-### 1. Compile ACT16 Programs
+### 1. Compile Action Programs
 ```bash
-python3 tools/act16c.py apps/act16/streaming_demo.act -o apps/asm/streaming_demo.asm
+python3 tools/act16c.py apps/act/streaming_demo.act -o apps/asm/streaming_demo.asm
 ```
 
 ### 2. Assemble to Binary or Hex

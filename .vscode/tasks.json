@@ -39,7 +39,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Particle: Compile ACT16 Current File (act16c)",
+      "label": "Particle: Compile Action Current File (act16c)",
       "type": "shell",
       "command": "python3 tools/act16c.py \"${file}\" -o \"${workspaceFolder}/apps/asm/${fileBasenameNoExtension}.asm\"",
       "options": {

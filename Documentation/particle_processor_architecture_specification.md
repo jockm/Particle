@@ -248,7 +248,7 @@ particle/
 ├── Documentation/
 │   ├── particle_spec.md                   # This master specification
 │   ├── memory_map_and_conventions.md      # Memory map & calling conventions
-│   └── act16_compiler_reference.md        # ACT16 language & compiler guide
+│   └── act16_compiler_reference.md        # Action language & compiler guide
 │
 ├── hdl/
 │   └── rohd/                              # Exclusive Hardware Implementation
@@ -282,11 +282,11 @@ particle/
 ├── tools/
 │   ├── pasm.py                            # Two-pass Particle macro assembler
 │   ├── psim.py                            # Instruction-level simulator with p4db debugger
-│   └── act16c.py                          # ACT16 systems compiler
+│   └── act16c.py                          # Action systems compiler
 │
 └── apps/
     ├── asm/                               # Assembly programs & boot monitors
-    └── act16/                             # ACT16 application sources
+    └── Action/                             # Action application sources
 ```
 
 ## 7. Software Toolchain Requirements
@@ -403,13 +403,13 @@ particle/
 .endmacro
 ```
 
-## 9. The ACT16 Systems Language & Compiler Specification
+## 9. The Action Systems Language & Compiler Specification
 
-The ACT16 language evolves the Action!-style systems programming model designed in ACT4 to support a full 32-bit datapath with rich sub-word integer types and conditional compilation.
+The Action language evolves the Action!-style systems programming model designed in ACT4 to support a full 32-bit datapath with rich sub-word integer types and conditional compilation.
 
 ### 9.1 Data Types
 
-ACT16 provides native signed and unsigned integer widths:
+Action provides native signed and unsigned integer widths:
 * `u8` / `s8`: 8-bit unsigned and two's-complement signed byte ($0..255$, $-128..127$).
 * `u16` / `s16`: 16-bit unsigned and two's-complement signed halfword ($0..65535$, $-32768..32767$).
 * `u32` / `s32`: 32-bit unsigned and two's-complement signed word ($0..4294967295$, $-2^{31}..2^{31}-1$).
@@ -418,7 +418,7 @@ ACT16 provides native signed and unsigned integer widths:
 
 ### 9.2 Conditional Compilation Directives
 
-ACT16 source files support preprocessor conditionals:
+Action source files support preprocessor conditionals:
 ```c
 #ifdef MULTICORE_ENABLE
     const u32 NODE_ID = 1;

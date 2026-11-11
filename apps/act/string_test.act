@@ -1,5 +1,5 @@
-// apps/act16/string_test.act
-// Hardware verification suite for ACT16 string types
+// apps/act/string_test.act
+// Hardware verification suite for Action string types
 
 string vram[8] @ 0x00008000;
 

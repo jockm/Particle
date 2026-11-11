@@ -1,9 +1,9 @@
 // =============================================================================
 // File: lib/protokernel.h
-// Description: Stackless Cooperative Protothreads for ACT16 / Particle
+// Description: Stackless Cooperative Protothreads for Action / Particle
 // Attribution & Lineage:
 // - Original Protothreads Architecture & Design: Adam Dunkels <adam@sics.se>
-// - ProtoKernel ACT16 / Particle Architecture: Jock Murphy
+// - ProtoKernel Action / Particle Architecture: Jock Murphy
 // =============================================================================
 
 #ifndef _PROTOKERNEL_H_

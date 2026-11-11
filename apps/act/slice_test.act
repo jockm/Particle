@@ -1,5 +1,5 @@
-// apps/act16/slice_test.act
-// Test suite for ACT16 open array slices (arr[start..end])
+// apps/act/slice_test.act
+// Test suite for Action open array slices (arr[start..end])
 
 u32 sum_slice(u32 buf[]) {
     u32 total = 0;

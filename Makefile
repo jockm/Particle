@@ -34,8 +34,8 @@ FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWA
 APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
 APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 
-APP_ACT_SRCS  := $(wildcard apps/act16/*.act)
-APP_ACT_BINS  := $(patsubst apps/act16/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
+APP_ACT_SRCS  := $(wildcard apps/act/*.act)
+APP_ACT_BINS  := $(patsubst apps/act/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
 .PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
@@ -57,10 +57,10 @@ help:
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
 	@echo "  make test-sim         - Run instruction simulator verification"
-	@echo "  make compiler-tests   - Run all ACT16 compiler test suites in psim"
+	@echo "  make compiler-tests   - Run all Action compiler test suites in psim"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
-	@echo "  make apps             - Build ACT16 and ASM application binaries"
+	@echo "  make apps             - Build Action and ASM application binaries"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
 
 setup:
@@ -119,11 +119,11 @@ test-sim: $(BUILD_DIR)/branch_suite.bin
 	@echo "==> Running instruction-level simulation tests (build/tools/psim)..."
 	build/tools/psim $(BUILD_DIR)/branch_suite.bin
 
-ACT_TEST_SRCS := $(wildcard apps/act16/*_test.act)
+ACT_TEST_SRCS := $(wildcard apps/act/*_test.act)
 
 compiler-tests:
 	@mkdir -p $(BUILD_DIR)
-	@echo "==> Building and running ACT16 compiler test suites..."
+	@echo "==> Building and running Action compiler test suites..."
 	@failed=0; \
 	for src in $(ACT_TEST_SRCS); do \
 		base=$$(basename "$$src" .act); \
@@ -135,17 +135,17 @@ compiler-tests:
 	done; \
 	if [ $$failed -eq 0 ]; then \
 		echo "----------------------------------------------------------------"; \
-		echo "Testing Multi-File ACT16: apps/act16/multi_file_main.act apps/act16/multi_file_math.act -> $(BUILD_DIR)/multi_file_test.bin"; \
-		$(PBUILD) apps/act16/multi_file_main.act apps/act16/multi_file_math.act -o "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] Build failed for multi-file ACT16 test"; failed=1; }; \
+		echo "Testing Multi-File Action: apps/act/multi_file_main.act apps/act/multi_file_math.act -> $(BUILD_DIR)/multi_file_test.bin"; \
+		$(PBUILD) apps/act/multi_file_main.act apps/act/multi_file_math.act -o "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] Build failed for multi-file Action test"; failed=1; }; \
 		$(PSIM) "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] multi_file_test.bin failed simulation"; failed=1; }; \
 	fi; \
 	if [ $$failed -ne 0 ]; then \
-		echo "==> [FAIL] ACT16 compiler tests failed."; \
+		echo "==> [FAIL] Action compiler tests failed."; \
 		exit 1; \
 	else \
-		echo "==> Running ACT16 negative & semantic diagnostic tests..."; \
+		echo "==> Running Action negative & semantic diagnostic tests..."; \
 		$(PYTHON) tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
-		echo "==> [PASS] All ACT16 compiler tests passed successfully."; \
+		echo "==> [PASS] All Action compiler tests passed successfully."; \
 	fi
 
 # ------------------------------------------------------------------------------
@@ -190,7 +190,7 @@ $(BUILD_DIR)/%.bin: apps/asm/%.asm
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@"
 
-$(BUILD_DIR)/%.bin: apps/act16/%.act
+$(BUILD_DIR)/%.bin: apps/act/%.act
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@" 
 $(BUILD_DIR):

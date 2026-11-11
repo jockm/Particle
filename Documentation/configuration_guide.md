@@ -59,4 +59,4 @@ The repository includes `.vscode/tasks.json` with ready-to-run automation:
 * `Particle: Run ROHD Tests`: Runs `dart test` inside `hdl/particle`.
 * `Particle: Generate SystemVerilog`: Runs `bin/generate.dart`.
 * `Particle: Assemble Current File`: Invokes `pasm.py` on the active file.
-* `Particle: Compile ACT16 Current File`: Invokes `act16c.py` on the active file.
+* `Particle: Compile Action Current File`: Invokes `act16c.py` on the active file.

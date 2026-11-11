@@ -50,7 +50,7 @@ print_usage() {
     cat << "HELP_TEXT"
 Usage: pbuild [options] <source-file> [source-files...]
 
-A unified build driver for Particle RISC (.asm) and ACT16 (.act) programs.
+A unified build driver for Particle RISC (.asm) and Action (.act) programs.
 
 Positional Arguments:
   source-file            One or more source files (.act and/or .asm)
@@ -236,12 +236,12 @@ run_step() {
     fi
 }
 
-# 1. ACT16 compilation step (if any .act files present)
+# 1. Action compilation step (if any .act files present)
 ASM_SOURCES=()
 if [ "${#ACT_INPUTS[@]}" -gt 0 ]; then
     ACT_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$ACT_ASM")"
-    run_step "Compiling ACT16: ${ACT_INPUTS[*]} -> $ACT_ASM" "$PYTHON" "$ACT16C" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$PYTHON" "$ACT16C" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
     ASM_SOURCES+=("$ACT_ASM")
 fi
 

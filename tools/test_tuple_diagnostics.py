@@ -80,7 +80,7 @@ def run_tests():
     passed = 0
     failed = 0
 
-    print("==> Running ACT16 Tuple Negative & Diagnostic Tests...")
+    print("==> Running Action Tuple Negative & Diagnostic Tests...")
     print("-" * 65)
 
     for tc in TEST_CASES:
