@@ -133,6 +133,12 @@ compiler-tests:
 		$(PBUILD) "$$src" -o "$$bin" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
 		$(PSIM) "$$bin" || { echo "[FAIL] $$bin failed simulation"; failed=1; break; }; \
 	done; \
+	if [ $$failed -eq 0 ]; then \
+		echo "----------------------------------------------------------------"; \
+		echo "Testing Multi-File ACT16: apps/act16/multi_file_main.act apps/act16/multi_file_math.act -> $(BUILD_DIR)/multi_file_test.bin"; \
+		$(PBUILD) apps/act16/multi_file_main.act apps/act16/multi_file_math.act -o "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] Build failed for multi-file ACT16 test"; failed=1; }; \
+		$(PSIM) "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] multi_file_test.bin failed simulation"; failed=1; }; \
+	fi; \
 	if [ $$failed -ne 0 ]; then \
 		echo "==> [FAIL] ACT16 compiler tests failed."; \
 		exit 1; \

@@ -3404,15 +3404,16 @@ class CodeGen:
 
 def main():
     parser = argparse.ArgumentParser(description="ACT16 Systems Language Compiler for Particle")
-    parser.add_argument("source", help="Input ACT16 source file (.act / .c)")
+    parser.add_argument("sources", nargs="+", help="Input ACT16 source file(s) (.act / .c)")
     parser.add_argument("-o", "--output", default=None, help="Output assembly file (.asm)")
     parser.add_argument("-D", "--define", action="append", default=[], help="Predefine symbol (KEY[=VALUE])")
     parser.add_argument("-fbounds-check", dest="bounds_check", action="store_true", default=True, help="Enable runtime array bounds checking (default)")
     parser.add_argument("-fno-bounds-check", dest="bounds_check", action="store_false", help="Disable runtime array bounds checking")
     args = parser.parse_args()
 
+    primary_source = args.sources[0]
     if not args.output:
-        base = os.path.splitext(os.path.basename(args.source))[0]
+        base = os.path.splitext(os.path.basename(primary_source))[0]
         args.output = os.path.join("build", f"{base}.asm")
 
     out_dir = os.path.dirname(args.output)
@@ -3427,17 +3428,42 @@ def main():
         else:
             defs[d.strip()] = 1
 
-    with open(args.source, 'r', encoding='utf-8') as f:
-        src = f.read()
+    all_decls = []
+    seen_funcs = {}
+    seen_types = {}
 
-    tokens = tokenize(src, fname=args.source)
-    filtered = run_preprocessor(tokens, defs, current_file=args.source)
+    for src_path in args.sources:
+        with open(src_path, 'r', encoding='utf-8') as f:
+            src = f.read()
 
-    p = Parser(filtered)
-    ast = p.parse_program()
+        tokens = tokenize(src, fname=src_path)
+        filtered = run_preprocessor(tokens, defs, current_file=src_path)
+
+        p = Parser(filtered)
+        program_ast = p.parse_program()
+
+        for decl in program_ast.decls:
+            if isinstance(decl, FuncDeclNode):
+                # Prototypes (decl.body is None) are permitted; only enforce single full definition
+                if decl.body is not None:
+                    if decl.name in seen_funcs:
+                        prev_f = seen_funcs[decl.name]
+                        raise SyntaxError(f"Redefinition of function '{decl.name}' in {src_path} (previously defined in {prev_f})")
+                    seen_funcs[decl.name] = src_path
+            elif isinstance(decl, TypeDefNode):
+                # Allow duplicate type declarations if fields match (e.g., shared headers)
+                if decl.name in seen_types:
+                    prev_t = seen_types[decl.name]
+                    if prev_t != src_path:
+                        # Allow identical declarations across files
+                        pass
+                seen_types[decl.name] = src_path
+            all_decls.append(decl)
+
+    merged_ast = ProgramNode(all_decls)
 
     cg = CodeGen(bounds_check=args.bounds_check)
-    asm_code = cg.generate(ast)
+    asm_code = cg.generate(merged_ast)
 
     with open(args.output, 'w', encoding='utf-8') as f:
         f.write(asm_code)

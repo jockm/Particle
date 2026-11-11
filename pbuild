@@ -53,7 +53,7 @@ Usage: pbuild [options] <source-file> [source-files...]
 A unified build driver for Particle RISC (.asm) and ACT16 (.act) programs.
 
 Positional Arguments:
-  source-file            One or more source files (.asm), or a single .act file
+  source-file            One or more source files (.act and/or .asm)
 
 Options:
   -o, --output <file>    Output binary path (default: build/<name>.<format>)
@@ -180,9 +180,21 @@ if [ "${#SOURCES[@]}" -eq 0 ]; then
     exit 1
 fi
 
+ACT_INPUTS=()
+ASM_INPUTS=()
+
 for s in "${SOURCES[@]}"; do
     if [ ! -f "$s" ]; then
         echo "Error: Source file not found: '$s'" >&2
+        exit 1
+    fi
+    ext="${s##*.}"
+    if [ "$ext" = "act" ]; then
+        ACT_INPUTS+=("$s")
+    elif [ "$ext" = "asm" ]; then
+        ASM_INPUTS+=("$s")
+    else
+        echo "Error: Unsupported file type '.$ext' for '$s'. pbuild expects .act or .asm files." >&2
         exit 1
     fi
 done
@@ -190,19 +202,6 @@ done
 PRIMARY_SOURCE="${SOURCES[0]}"
 BASE_NAME="$(basename "$PRIMARY_SOURCE")"
 STEM="${BASE_NAME%.*}"
-PRIMARY_EXT="${PRIMARY_SOURCE##*.}"
-
-if [ "${#SOURCES[@]}" -gt 1 ]; then
-    for s in "${SOURCES[@]}"; do
-        if [[ "${s##*.}" != "asm" ]]; then
-            echo "Error: Multi-file builds currently only support .asm files ('$s' is not .asm)." >&2
-            exit 1
-        fi
-    done
-elif [[ "$PRIMARY_EXT" != "asm" && "$PRIMARY_EXT" != "act" ]]; then
-    echo "Error: Unsupported file type '.$PRIMARY_EXT'. pbuild expects .asm or .act files." >&2
-    exit 1
-fi
 
 if [ -z "$OUTPUT" ]; then
     OUTPUT="build/${STEM}.${FORMAT}"
@@ -237,15 +236,18 @@ run_step() {
     fi
 }
 
-# 1. ACT16 compilation step (if applicable)
+# 1. ACT16 compilation step (if any .act files present)
 ASM_SOURCES=()
-if [ "$PRIMARY_EXT" = "act" ]; then
+if [ "${#ACT_INPUTS[@]}" -gt 0 ]; then
     ACT_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$ACT_ASM")"
-    run_step "Compiling ACT16: $PRIMARY_SOURCE -> $ACT_ASM" "$PYTHON" "$ACT16C" "$PRIMARY_SOURCE" -o "$ACT_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Compiling ACT16: ${ACT_INPUTS[*]} -> $ACT_ASM" "$PYTHON" "$ACT16C" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
     ASM_SOURCES+=("$ACT_ASM")
-else
-    ASM_SOURCES=("${SOURCES[@]}")
+fi
+
+# Append any standalone .asm inputs
+if [ "${#ASM_INPUTS[@]}" -gt 0 ]; then
+    ASM_SOURCES+=("${ASM_INPUTS[@]}")
 fi
 
 # 2. Lint step (lint each ASM source file individually)
@@ -273,8 +275,13 @@ if [ "$RUN_SIM" -eq 1 ]; then
         SIM_ARGS+=("--base" "$SIM_BASE")
     fi
 
+    sim_extra=""
+    if [ "${#SIM_ARGS[@]}" -gt 0 ]; then
+        sim_extra=" ${SIM_ARGS[*]}"
+    fi
+
     if [ "$VERBOSE" -eq 1 ]; then
-        echo "==> [pbuild] Running simulator: ${PSIM_CMD[*]} $OUTPUT ${SIM_ARGS[*]}"
+        echo "==> [pbuild] Running simulator: ${PSIM_CMD[*]} $OUTPUT$sim_extra"
     fi
 
     "${PSIM_CMD[@]}" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}

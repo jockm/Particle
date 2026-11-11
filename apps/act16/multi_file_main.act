@@ -1,0 +1,16 @@
+void main() {
+    // 1. Verify cross-file method call and type layout
+    type Vector2 vec;
+    vec.set(30, 70);
+    if (vec.sum() != 100) {
+        trap(15);
+    }
+
+    // 2. Verify cross-file function call with loop logic
+    u32 fact5 = compute_factorial(5);
+    if (fact5 != 120) {
+        trap(15);
+    }
+
+    trap(14);
+}

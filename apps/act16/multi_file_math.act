@@ -1,0 +1,21 @@
+type Vector2 {
+    u32 x;
+    u32 y;
+};
+
+void Vector2.set(u32 vx, u32 vy) {
+    this.x = vx;
+    this.y = vy;
+}
+
+u32 Vector2.sum() {
+    return this.x + this.y;
+}
+
+u32 compute_factorial(u32 n) {
+    u32 result = 1;
+    for (u32 i : 1..n + 1) {
+        result *= i;
+    }
+    return result;
+}
