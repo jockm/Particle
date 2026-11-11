@@ -2370,7 +2370,7 @@ class CodeGen:
             self.emit("ADD     R14, R15")
             self.emit("ST32    (R14), R1", f"Init for-loop var '{stmt.var_name}'")
 
-            # 2. Evaluate upper bound once and store into pre-allocated stack slot
+            # 2. Evaluate upper bound once and store into pre-allocated slot
             self.gen_expr(stmt.end_expr, target_reg=1)
             end_off = self.stack_offset - self.locals[end_var_name]
             self.emit_immediate(14, end_off)
@@ -2379,19 +2379,16 @@ class CodeGen:
 
             # 3. Trampoline condition check
             self.emit_label(lbl_loop)
-            # Load current induction variable
-            curr_var_off = self.stack_offset - self.locals[stmt.var_name]
-            self.emit_immediate(14, curr_var_off)
+            var_off = self.stack_offset - self.locals[stmt.var_name]
+            self.emit_immediate(14, var_off)
             self.emit("ADD     R14, R15")
             self.emit("LD32    R1, (R14)", f"Load induction var '{stmt.var_name}'")
 
-            # Load cached bound from pre-allocated stack slot
-            curr_end_off = self.stack_offset - self.locals[end_var_name]
-            self.emit_immediate(14, curr_end_off)
+            end_off = self.stack_offset - self.locals[end_var_name]
+            self.emit_immediate(14, end_off)
             self.emit("ADD     R14, R15")
             self.emit("LD32    R2, (R14)", f"Load cached upper bound for '{stmt.var_name}'")
 
-            # Test induction < cached_end
             self.emit("SLT     R1, R2", "Loop condition i < end")
             self.emit(f"FBRA.NZ R1, {lbl_body}", "Enter for body if true")
             self.emit(f"FBRA    {lbl_end}", "Exit for loop if false")
@@ -2401,8 +2398,8 @@ class CodeGen:
             self.gen_stmt(stmt.body)
 
             # 5. Unit stride step (+1)
-            curr_var_off = self.stack_offset - self.locals[stmt.var_name]
-            self.emit_immediate(14, curr_var_off)
+            var_off = self.stack_offset - self.locals[stmt.var_name]
+            self.emit_immediate(14, var_off)
             self.emit("ADD     R14, R15")
             self.emit("LD32    R1, (R14)")
             self.emit("ADD     R1, 1", f"Step '{stmt.var_name}' +1")
