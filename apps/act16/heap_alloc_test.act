@@ -60,7 +60,7 @@ void test_array_alloc() {
         trap(15);
     }
 
-    arr.destroyArray();
+    arr.destroy();
     if (arr.exists() != 0) {
         trap(15);
     }

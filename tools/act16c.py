@@ -881,14 +881,10 @@ class Parser:
                         if len(args) != 1:
                             raise SyntaxError("createArray(N) requires exactly 1 argument (element count)")
                         node = HeapArrayAllocNode(rcv_name, args[0])
-                    elif member == 'destroy':
+                    elif member in ('destroy', 'destroyArray'):
                         if len(args) != 0:
-                            raise SyntaxError("destroy() takes no arguments")
+                            raise SyntaxError(f"{member}() takes no arguments")
                         node = HeapFreeNode(node)
-                    elif member == 'destroyArray':
-                        if len(args) != 0:
-                            raise SyntaxError("destroyArray() takes no arguments")
-                        node = HeapArrayFreeNode(node)
                     elif member == 'resize':
                         if len(args) != 1:
                             raise SyntaxError("resize(N) requires exactly 1 argument (new element count)")
@@ -1198,6 +1194,7 @@ class CodeGen:
         self.backend = backend if backend is not None else ParticleAsmBackend()
         self.asm = self.backend.asm
         self.affine_state = {}
+        self.dynamic_arrays = set()
         self.locals = {}
         self.globals = set()
         self.types = {}
@@ -1567,6 +1564,7 @@ class CodeGen:
             self.stack_offset = 4
 
         self.open_arrays.clear()
+        self.dynamic_arrays.clear()
         self.affine_state = {}
         r_idx = 1
         for p in func.params:
@@ -1867,6 +1865,8 @@ class CodeGen:
                 name = stmt.name
                 if isinstance(stmt.init_expr, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
                     self.affine_state[name] = 'VALID'
+                if isinstance(stmt.init_expr, HeapArrayAllocNode):
+                    self.dynamic_arrays.add(name)
                 t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
                 offset = self.stack_offset - self.locals[name]
                 self.emit_immediate(14, offset)
@@ -2250,7 +2250,16 @@ class CodeGen:
             self.gen_expr(expr.expr, target_reg=1)
             if target_var and target_var in self.affine_state:
                 self.affine_state[target_var] = 'MOVED'
-            self.backend.gen_heap_free(1)
+            is_arr = target_var and (
+                target_var in self.dynamic_arrays or
+                target_var in self.array_dims or
+                target_var in self.array_lens or
+                target_var in self.open_arrays
+            )
+            if is_arr:
+                self.backend.gen_array_free(1)
+            else:
+                self.backend.gen_heap_free(1)
             if target_var and target_var in self.locals:
                 off = self.stack_offset - self.locals[target_var]
                 self.emit_immediate(14, off)
@@ -2563,7 +2572,9 @@ class CodeGen:
                 elif isinstance(expr.left, VarAccessNode):
                     name = expr.left.name
                     if isinstance(expr.right, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
-                        self.affine_state[name] = "VALID" 
+                        self.affine_state[name] = "VALID"
+                        if isinstance(expr.right, HeapArrayAllocNode):
+                            self.dynamic_arrays.add(name)
                     # Affine move semantics
                     if isinstance(expr.right, VarAccessNode):
                         rhs_name = expr.right.name
@@ -2571,6 +2582,8 @@ class CodeGen:
                             self._check_affine_access(rhs_name)
                             self.affine_state[rhs_name] = 'MOVED'
                             self.affine_state[name] = 'VALID'
+                            if rhs_name in self.dynamic_arrays:
+                                self.dynamic_arrays.add(name)
                     elif isinstance(expr.right, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
                         self.affine_state[name] = 'VALID'
                     t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))

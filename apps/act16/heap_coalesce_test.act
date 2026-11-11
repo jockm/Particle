@@ -30,7 +30,7 @@ void main() {
         trap(15);
     }
 
-    arr.destroyArray();
+    arr.destroy();
 
     trap(14);
 }
