@@ -1,0 +1,42 @@
+type Point {
+    u16 x;
+    u16 y;
+};
+
+type Window {
+    u32 id;
+    Point origin;
+    Point extent;
+    u32 flags;
+};
+
+// 1. Compile-time assertion using sizeof
+verify(sizeof(u8) == 1, "u8 size mismatch");
+verify(sizeof(u16) == 2, "u16 size mismatch");
+verify(sizeof(u32) == 4, "u32 size mismatch");
+verify(sizeof(u32*) == 4, "pointer size mismatch");
+verify(sizeof(Point) == 4, "Point size mismatch");
+verify(sizeof(Window) == 16, "Window size mismatch");
+
+u16 g_buf[32]; // 32 * 2 = 64 bytes
+
+void main() {
+    Point pt;
+    Window win;
+
+    // 2. Runtime expression and variable size evaluation
+    u32 sz_pt = sizeof(pt);
+    if (sz_pt != 4) trap(15);
+
+    u32 sz_x = sizeof(pt.x);
+    if (sz_x != 2) trap(15);
+
+    u32 sz_win = sizeof(win);
+    if (sz_win != 16) trap(15);
+
+    u32 sz_arr = sizeof(g_buf);
+    if (sz_arr != 64) trap(15);
+
+    // Success
+    trap(14);
+}

@@ -1173,9 +1173,18 @@ class Parser:
             arg_tok = self.peek()
             if arg_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void', 'string'):
                 t_arg = self.consume().val
+                if self.peek().val == '*':
+                    self.consume('OP', '*')
+                    self.consume('PUNCT', ')')
+                    return IntLitNode(4)
                 self.consume('PUNCT', ')')
                 sz = 1 if t_arg in ('u8', 's8', 'string') else (2 if t_arg in ('u16', 's16') else 4)
                 return IntLitNode(sz)
+            elif arg_tok.type == 'IDENT' and self.tokens[self.pos+1].val == '*' and self.tokens[self.pos+2].val == ')':
+                self.consume('IDENT')
+                self.consume('OP', '*')
+                self.consume('PUNCT', ')')
+                return IntLitNode(4)
             elif arg_tok.type == 'IDENT' and self.tokens[self.pos+1].val == ')':
                 t_arg = self.consume('IDENT').val
                 self.consume('PUNCT', ')')
@@ -1590,22 +1599,67 @@ class CodeGen:
         elif isinstance(expr, VarAccessNode):
             if expr.name in self.constants:
                 return self.constants[expr.name]
+            if expr.name in self.array_dims:
+                elem_sz = self._get_elem_size(self.types.get(expr.name, ("u32", False))[0], False)
+                tot = 1
+                for dm in self.array_dims[expr.name]: tot *= dm
+                return elem_sz * tot
+            elif expr.name in self.array_lens:
+                elem_sz = self._get_elem_size(self.types.get(expr.name, ("u32", False))[0], False)
+                return elem_sz * self.array_lens[expr.name]
             raise ValueError(f"Constant expression references non-constant symbol '{expr.name}'")
         elif isinstance(expr, SizeofNode):
-            if isinstance(expr.target, str):
-                t_clean = self._clean_type(expr.target)
+            target = expr.target
+            # If target is a variable name, resolve to its type
+            if isinstance(target, str):
+                v_name = target
+                if v_name in self.array_dims:
+                    elem_sz = self._get_elem_size(self.types.get(v_name, ("u32", False))[0], False)
+                    tot = 1
+                    for dm in self.array_dims[v_name]: tot *= dm
+                    return elem_sz * tot
+                elif v_name in self.array_lens:
+                    elem_sz = self._get_elem_size(self.types.get(v_name, ("u32", False))[0], False)
+                    return elem_sz * self.array_lens[v_name]
+                elif v_name in self.types:
+                    t_info = self.types[v_name]
+                    if t_info[1]:  # pointer
+                        return 4
+                    target = t_info[0]
+
+                t_clean = self._clean_type(target)
                 if t_clean in ('u8', 's8', 'string'): return 1
                 elif t_clean in ('u16', 's16'): return 2
                 elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
                 elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
-            else:
-                t_name, _ = self._get_expr_type(expr.target)
+                return 4
+            elif isinstance(target, VarAccessNode):
+                v_name = target.name
+                if v_name in self.array_dims:
+                    elem_sz = self._get_elem_size(self.types.get(v_name, ("u32", False))[0], False)
+                    tot = 1
+                    for dm in self.array_dims[v_name]: tot *= dm
+                    return elem_sz * tot
+                elif v_name in self.array_lens:
+                    elem_sz = self._get_elem_size(self.types.get(v_name, ("u32", False))[0], False)
+                    return elem_sz * self.array_lens[v_name]
+                t_name, is_p = self._get_expr_type(target)
+                if is_p: return 4
                 t_clean = self._clean_type(t_name)
                 if t_clean in ('u8', 's8', 'string'): return 1
                 elif t_clean in ('u16', 's16'): return 2
                 elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
                 elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
-            return 4
+                return 4
+            else:
+                t_name, is_p = self._get_expr_type(target)
+                if is_p: return 4
+                t_clean = self._clean_type(t_name)
+                if t_clean in ('u8', 's8', 'string'): return 1
+                elif t_clean in ('u16', 's16'): return 2
+                elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
+                elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
+                return 4
         elif isinstance(expr, UnaryOpNode):
             val = self._eval_const_expr(expr.operand)
             if expr.op == '-':
@@ -2808,6 +2862,11 @@ class CodeGen:
             else:
                 self.gen_expr(expr.expr, target_reg=target_reg)
             self.emit(f"NEZ     R{target_reg}", "Check reference != 0 (.exists())")
+            return
+
+        elif isinstance(expr, SizeofNode):
+            sz_val = self._eval_const_expr(expr)
+            self.emit_immediate(target_reg, sz_val)
             return
 
         elif isinstance(expr, IntLitNode):
