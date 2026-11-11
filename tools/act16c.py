@@ -2363,6 +2363,22 @@ class CodeGen:
                 self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
 
         elif isinstance(stmt, IfNode):
+            # Attempt compile-time constant branch pruning (replaces preprocessor #if/#ifdef)
+            is_const_cond = False
+            const_val = 0
+            try:
+                const_val = self._eval_const_expr(stmt.cond)
+                is_const_cond = True
+            except ValueError:
+                is_const_cond = False
+
+            if is_const_cond:
+                if const_val != 0:
+                    self.gen_stmt(stmt.then_body)
+                elif stmt.else_body:
+                    self.gen_stmt(stmt.else_body)
+                return
+
             lbl_else = self.new_label("else")
             lbl_end = self.new_label("endif")
             target = lbl_else if stmt.else_body else lbl_end
