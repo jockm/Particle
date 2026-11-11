@@ -1,6 +1,6 @@
 void main() {
     // 1. Allocate initial array of 4 u32s
-    u32 arr = u32.createArray(4);
+    u32 arr[] = u32.createArray(4);
     arr[0] = 11;
     arr[1] = 22;
     arr[2] = 33;

@@ -1,5 +1,5 @@
 void main() {
-    u32 arr = u32.createArray(5);
+    u32 arr[] = u32.createArray(5);
     
     // In-bounds writes: valid
     arr[0] = 1;

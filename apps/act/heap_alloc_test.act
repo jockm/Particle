@@ -39,7 +39,7 @@ void test_point_alloc() {
 }
 
 void test_array_alloc() {
-    u32 arr = u32.createArray(5);
+    u32 arr[] = u32.createArray(5);
     if (arr.exists() != 1) {
         trap(15);
     }

@@ -22,7 +22,7 @@ void main() {
 
     // 4. Allocate dynamic array requiring more space than a single chunk (16 bytes),
     // but fitting inside the coalesced span (48 bytes total)
-    u32 arr = u32.createArray(6);
+    u32 arr[] = u32.createArray(6);
     arr[0] = 111;
     arr[5] = 555;
 
