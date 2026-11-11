@@ -13,6 +13,15 @@
     return (a + 1, b + 2, c + 3, d + 4);
 }
 
+// Simple leaf returns (exercises optimized direct R1-R4 allocation path)
+(u32, u32) get_literals() {
+    return (42, 99);
+}
+
+(u32, u32, u32) get_simple_vars(u32 x, u32 y, u32 z) {
+    return (x, y, z);
+}
+
 void main() {
     // 1. Destructuring with variable declarations
     (u32 p1, u32 p2) = get_pair(5, 10);
@@ -61,6 +70,21 @@ void main() {
         trap(15);
     }
     if (q_d != 8) {
+        trap(15);
+    }
+
+    // 7. Optimized leaf return literals
+    (u32 l1, u32 l2) = get_literals();
+    if (l1 != 42) {
+        trap(15);
+    }
+    if (l2 != 99) {
+        trap(15);
+    }
+
+    // 8. Optimized leaf return variables
+    (u32 v1, u32 v2, u32 v3) = get_simple_vars(11, 22, 33);
+    if (v1 != 11 || v2 != 22 || v3 != 33) {
         trap(15);
     }
 

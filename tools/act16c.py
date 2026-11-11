@@ -1174,6 +1174,8 @@ class Parser:
         if tok.val == '(':
             self.consume('PUNCT', '(')
             node = self.parse_expr()
+            if self.peek().val == ',':
+                raise SyntaxError(f"{tok.fname}:{tok.lineno}:{tok.col}: Bare tuple expression not permitted in scalar expression context")
             self.consume('PUNCT', ')')
             return node
         raise SyntaxError(f"{tok.fname}:{tok.lineno}:{tok.col}: Unexpected token '{tok.val}'")
@@ -1817,6 +1819,7 @@ class CodeGen:
 
     def gen_func(self, func):
         self.current_func_name = func.name
+        self.current_func_ret = (self._clean_type(func.ret_type), func.ret_ptr)
         self.asm.append("; ------------------------------------------------------------------------------")
         self.asm.append(f"; Function: {func.name}")
         self.asm.append("; ------------------------------------------------------------------------------")
@@ -2237,18 +2240,30 @@ class CodeGen:
                 raise SyntaxError(f"{loc}: Compile-time verification failed: '{stmt.msg}'")
             return
         elif isinstance(stmt, TupleReturnNode):
+            # Strict callee return validation
+            ret_type_info = getattr(self, 'current_func_ret', (None, False))
+            if not isinstance(ret_type_info[0], list):
+                raise SyntaxError(f"Function '{self.current_func_name}' has scalar return type '{ret_type_info[0]}', cannot return tuple")
+            expected_arity = len(ret_type_info[0])
+            if len(stmt.exprs) != expected_arity:
+                raise SyntaxError(f"Tuple return arity mismatch in '{self.current_func_name}': expected {expected_arity}, got {len(stmt.exprs)}")
+
             num_returns = len(stmt.exprs)
-            # Evaluate expressions into R1..Rn.
-            # To prevent later expr evaluations from clobbering earlier registers,
-            # we evaluate into R1, push onto stack, then pop back into target registers.
-            for i, e in enumerate(stmt.exprs):
-                self.gen_expr(e, target_reg=1)
-                self.emit("PUSH32  R1", f"Save tuple return elem {i+1}")
-                self.stack_offset += 4
-            for i in reversed(range(num_returns)):
-                target_r = i + 1
-                self.emit(f"POP32   R{target_r}", f"Restore tuple return into R{target_r}")
-                self.stack_offset -= 4
+            # Check if all return expressions are simple leaves (IntLitNode or VarAccessNode)
+            # which can safely be placed directly into R1..Rn without evaluation clobbering
+            all_simple = all(isinstance(e, (IntLitNode, VarAccessNode)) for e in stmt.exprs)
+            if all_simple:
+                for i, e in enumerate(stmt.exprs):
+                    self.gen_expr(e, target_reg=i + 1)
+            else:
+                for i, e in enumerate(stmt.exprs):
+                    self.gen_expr(e, target_reg=1)
+                    self.emit("PUSH32  R1", f"Save tuple return elem {i+1}")
+                    self.stack_offset += 4
+                for i in reversed(range(num_returns)):
+                    target_r = i + 1
+                    self.emit(f"POP32   R{target_r}", f"Restore tuple return into R{target_r}")
+                    self.stack_offset -= 4
             self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
 
         elif isinstance(stmt, TupleAssignNode):
@@ -2273,6 +2288,9 @@ class CodeGen:
                     self._emit_store_typed(14, reg_src, t_name, is_ptr)
 
         elif isinstance(stmt, ReturnNode):
+            ret_type_info = getattr(self, 'current_func_ret', (None, False))
+            if isinstance(ret_type_info[0], list):
+                raise SyntaxError(f"Function '{self.current_func_name}' declared with tuple return of arity {len(ret_type_info[0])}, cannot return scalar or void")
             if stmt.expr:
                 self.gen_expr(stmt.expr, target_reg=1)
             if self.inline_return_stack:
