@@ -377,6 +377,22 @@ class AsmNode(ASTNode):
     def __init__(self, asm_text):
         self.asm_text = asm_text
 
+class TupleTarget:
+    def __init__(self, name=None, type_name=None, is_ptr=False, is_wildcard=False):
+        self.name = name
+        self.type_name = type_name
+        self.is_ptr = is_ptr
+        self.is_wildcard = is_wildcard
+
+class TupleReturnNode(ASTNode):
+    def __init__(self, exprs):
+        self.exprs = exprs
+
+class TupleAssignNode(ASTNode):
+    def __init__(self, targets, expr):
+        self.targets = targets
+        self.expr = expr
+
 class ReturnNode(ASTNode):
     def __init__(self, expr=None):
         self.expr = expr
@@ -615,12 +631,34 @@ class Parser:
             self.consume()
             is_const = True
 
-        t_name = self.parse_type()
-        is_ptr = False
-        if self.peek().val == '*':
-            self._forbid_aggregate_ptr(t_name)
-            self.consume()
-            is_ptr = True
+        tuple_ret_types = None
+        if self.peek().val == '(':
+            self.consume('PUNCT', '(')
+            tuple_ret_types = []
+            while True:
+                ret_elem_t = self.parse_type()
+                ret_elem_ptr = False
+                if self.peek().val == '*':
+                    self._forbid_aggregate_ptr(ret_elem_t)
+                    self.consume()
+                    ret_elem_ptr = True
+                tuple_ret_types.append((ret_elem_t, ret_elem_ptr))
+                if self.peek().val == ',':
+                    self.consume()
+                else:
+                    break
+            self.consume('PUNCT', ')')
+            if len(tuple_ret_types) > 4:
+                raise SyntaxError(f"Maximum 4 scalar return values supported in Particle ABI, got {len(tuple_ret_types)}")
+            t_name = tuple_ret_types
+            is_ptr = False
+        else:
+            t_name = self.parse_type()
+            is_ptr = False
+            if self.peek().val == '*':
+                self._forbid_aggregate_ptr(t_name)
+                self.consume()
+                is_ptr = True
 
         name = self.consume('IDENT').val
 
@@ -791,11 +829,105 @@ class Parser:
 
         if tok.val == 'return':
             self.consume()
+            if self.peek().val == '(':
+                # Check if this is a tuple return (e1, e2, ...) vs parenthesized single expression
+                saved_pos = self.pos
+                self.consume('PUNCT', '(')
+                paren_depth = 1
+                has_comma_at_depth1 = False
+                cur_pos = self.pos
+                while cur_pos < len(self.tokens) and paren_depth > 0:
+                    t_val = self.tokens[cur_pos].val
+                    if t_val == '(':
+                        paren_depth += 1
+                    elif t_val == ')':
+                        paren_depth -= 1
+                    elif t_val == ',' and paren_depth == 1:
+                        has_comma_at_depth1 = True
+                    cur_pos += 1
+                self.pos = saved_pos
+
+                if has_comma_at_depth1:
+                    self.consume('PUNCT', '(')
+                    ret_exprs = []
+                    while True:
+                        ret_exprs.append(self.parse_expr())
+                        if self.peek().val == ',':
+                            self.consume()
+                        else:
+                            break
+                    self.consume('PUNCT', ')')
+                    self.consume('PUNCT', ';')
+                    if len(ret_exprs) > 4:
+                        raise SyntaxError(f"Maximum 4 scalar return values supported in Particle ABI, got {len(ret_exprs)}")
+                    return TupleReturnNode(ret_exprs)
+
             expr = None
             if self.peek().val != ';':
                 expr = self.parse_expr()
             self.consume('PUNCT', ';')
             return ReturnNode(expr)
+
+        # Destructuring assignment / tuple declaration: (u32 a, _) = fn(); or (a, b) = fn();
+        if tok.val == '(':
+            saved_pos = self.pos
+            self.consume('PUNCT', '(')
+            paren_depth = 1
+            has_comma_or_wildcard = False
+            cur_pos = self.pos
+            while cur_pos < len(self.tokens) and paren_depth > 0:
+                t_val = self.tokens[cur_pos].val
+                if t_val == '(':
+                    paren_depth += 1
+                elif t_val == ')':
+                    paren_depth -= 1
+                elif (t_val == ',' or t_val == '_') and paren_depth == 1:
+                    has_comma_or_wildcard = True
+                cur_pos += 1
+            self.pos = saved_pos
+
+            if has_comma_or_wildcard:
+                self.consume('PUNCT', '(')
+                targets = []
+                while True:
+                    if self.peek().val == '_':
+                        self.consume()
+                        targets.append(TupleTarget(is_wildcard=True))
+                    else:
+                        # Could be: 'type name', 'type* name', or simply existing variable 'name'
+                        p_tok = self.peek()
+                        is_decl = False
+                        if p_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'string') or p_tok.val in self.known_types:
+                            is_decl = True
+                        elif p_tok.type == 'IDENT' and self.tokens[self.pos+1].type == 'IDENT':
+                            is_decl = True
+                        elif p_tok.type == 'IDENT' and self.tokens[self.pos+1].val == '*':
+                            is_decl = True
+
+                        if is_decl:
+                            t_n = self.parse_type()
+                            is_p = False
+                            if self.peek().val == '*':
+                                self._forbid_aggregate_ptr(t_n)
+                                self.consume()
+                                is_p = True
+                            v_n = self.consume('IDENT').val
+                            targets.append(TupleTarget(name=v_n, type_name=t_n, is_ptr=is_p, is_wildcard=False))
+                        else:
+                            v_n = self.consume('IDENT').val
+                            targets.append(TupleTarget(name=v_n, is_wildcard=False))
+
+                    if self.peek().val == ',':
+                        self.consume()
+                    else:
+                        break
+                self.consume('PUNCT', ')')
+                self.consume('OP', '=')
+                rhs_expr = self.parse_expr()
+                self.consume('PUNCT', ';')
+                if len(targets) > 4:
+                    raise SyntaxError(f"Maximum 4 scalar return values supported in Particle ABI, got {len(targets)}")
+                return TupleAssignNode(targets, rhs_expr)
 
         # Local Variable / Array Declaration
         is_const = False
@@ -1274,6 +1406,14 @@ class CodeGen:
     def _clean_type(self, t):
         if not t:
             return ""
+        if isinstance(t, (list, tuple)):
+            cleaned = []
+            for item in t:
+                if isinstance(item, tuple):
+                    cleaned.append((self._clean_type(item[0]), item[1]))
+                else:
+                    cleaned.append(self._clean_type(item))
+            return cleaned
         return t.replace("struct ", "").replace("type ", "").strip()
     def __init__(self, bounds_check: bool = True, backend=None):
         self.bounds_check = bounds_check
@@ -1861,6 +2001,10 @@ class CodeGen:
         elif isinstance(node, VarDeclNode):
             if not getattr(node, "is_const", False) and getattr(node, "bound_addr", None) is None:
                 decls.append(node)
+        elif isinstance(node, TupleAssignNode):
+            for t in node.targets:
+                if not t.is_wildcard and t.type_name is not None:
+                    decls.append(VarDeclNode(t.type_name, t.is_ptr, t.name))
 
     def _collect_coroutine_steps(self, node, steps):
         if isinstance(node, (YieldNode, WaitUntilNode)):
@@ -2092,6 +2236,42 @@ class CodeGen:
                 loc = f"{tok.fname}:{tok.lineno}:{tok.col}" if tok else "verify"
                 raise SyntaxError(f"{loc}: Compile-time verification failed: '{stmt.msg}'")
             return
+        elif isinstance(stmt, TupleReturnNode):
+            num_returns = len(stmt.exprs)
+            # Evaluate expressions into R1..Rn.
+            # To prevent later expr evaluations from clobbering earlier registers,
+            # we evaluate into R1, push onto stack, then pop back into target registers.
+            for i, e in enumerate(stmt.exprs):
+                self.gen_expr(e, target_reg=1)
+                self.emit("PUSH32  R1", f"Save tuple return elem {i+1}")
+                self.stack_offset += 4
+            for i in reversed(range(num_returns)):
+                target_r = i + 1
+                self.emit(f"POP32   R{target_r}", f"Restore tuple return into R{target_r}")
+                self.stack_offset -= 4
+            self.emit(f"FBRA    ._epilogue_{self.current_func_name}")
+
+        elif isinstance(stmt, TupleAssignNode):
+            # Evaluate RHS call or expression (results placed in R1..R4)
+            self.gen_expr(stmt.expr, target_reg=1)
+            # Store results into corresponding targets
+            for i, target in enumerate(stmt.targets):
+                if target.is_wildcard:
+                    continue
+                reg_src = i + 1
+                name = target.name
+                if target.type_name is not None:
+                    self.types[name] = (target.type_name, target.is_ptr, False)
+                t_name, is_ptr, *rest = self.types.get(name, ('u32', False, False))
+                if name in self.locals:
+                    offset = self.stack_offset - self.locals[name]
+                    self.emit_immediate(14, offset)
+                    self.emit("ADD     R14, R15")
+                    self._emit_store_typed(14, reg_src, t_name, is_ptr)
+                elif name in self.globals:
+                    self.emit(f"LOAD32  R14, _{name}")
+                    self._emit_store_typed(14, reg_src, t_name, is_ptr)
+
         elif isinstance(stmt, ReturnNode):
             if stmt.expr:
                 self.gen_expr(stmt.expr, target_reg=1)
