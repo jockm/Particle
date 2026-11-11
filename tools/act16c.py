@@ -22,7 +22,7 @@ TOKEN_TYPES = [
     ('INT',       r'\d+'),
     ('STRING',    r'"(?:\\.|[^"\\])*"'),
     ('CHAR',      r"'(?:\\.|[^'\\])'"),
-    ('KEYWORD',   r'\b(?:string|u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until)\b'),
+    ('KEYWORD',   r'\b(?:string|u8|s8|u16|s16|u32|s32|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|yield|wait_until|import|enum|verify|volatile|sizeof)\b'),
     ('IDENT',     r'[a-zA-Z_]\w*'),
     ('OP_ARROW',  r'->'),
     ('OP_EQ',     r'=='),
@@ -299,6 +299,21 @@ class FnTypeNode(ASTNode):
         self.ret_type = ret_type
 
 
+class EnumDeclNode(ASTNode):
+    def __init__(self, name, members):
+        self.name = name
+        self.members = members
+
+class VerifyNode(ASTNode):
+    def __init__(self, cond, msg, token=None):
+        self.cond = cond
+        self.msg = msg
+        self.token = token
+
+class SizeofNode(ASTNode):
+    def __init__(self, target):
+        self.target = target
+
 class ProgramNode(ASTNode):
     def __init__(self, decls):
         self.decls = decls
@@ -488,7 +503,49 @@ class Parser:
             return self.consume().val
         raise SyntaxError(f"{t.fname}:{t.lineno}:{t.col}: Expected type specifier, got '{t.val}'")
 
+    def parse_enum(self):
+        tok = self.consume('KEYWORD', 'enum')
+        name = self.consume('IDENT').val
+        self.consume('PUNCT', '{')
+        members = []
+        cur_val = 0
+        while self.peek().val != '}' and self.peek().type != 'EOF':
+            m_name = self.consume('IDENT').val
+            if self.peek().val == '=':
+                self.consume('OP', '=')
+                expr = self.parse_expr()
+                if isinstance(expr, IntLitNode):
+                    cur_val = expr.val
+                members.append((m_name, expr))
+                cur_val += 1
+            else:
+                members.append((m_name, IntLitNode(cur_val)))
+                cur_val += 1
+            if self.peek().val == ',':
+                self.consume('PUNCT', ',')
+        self.consume('PUNCT', '}')
+        if self.peek().val == ';':
+            self.consume('PUNCT', ';')
+        return EnumDeclNode(name, members)
+
+    def parse_verify(self):
+        tok = self.consume('KEYWORD', 'verify')
+        self.consume('PUNCT', '(')
+        cond = self.parse_expr()
+        self.consume('PUNCT', ',')
+        msg_tok = self.consume('STRING')
+        msg = msg_tok.val.strip('"\'')
+        self.consume('PUNCT', ')')
+        self.consume('PUNCT', ';')
+        return VerifyNode(cond, msg, tok)
+
     def parse_top_level(self):
+        if self.peek().val == 'enum':
+            return self.parse_enum()
+        if self.peek().val == 'verify':
+            return self.parse_verify()
+        if self.peek().val == 'volatile':
+            self.consume()
         is_inline = False
         if self.peek().val == 'inline':
             self.consume()
@@ -645,6 +702,8 @@ class Parser:
 
     def parse_statement(self):
         tok = self.peek()
+        if tok.val == 'verify':
+            return self.parse_verify()
         if tok.val == ';':
             self.consume('PUNCT', ';')
             return BlockNode([])
@@ -934,6 +993,23 @@ class Parser:
 
     def parse_primary(self):
         tok = self.peek()
+        if tok.val == 'sizeof':
+            self.consume('KEYWORD', 'sizeof')
+            self.consume('PUNCT', '(')
+            arg_tok = self.peek()
+            if arg_tok.val in ('u8', 's8', 'u16', 's16', 'u32', 's32', 'void', 'string'):
+                t_arg = self.consume().val
+                self.consume('PUNCT', ')')
+                sz = 1 if t_arg in ('u8', 's8', 'string') else (2 if t_arg in ('u16', 's16') else 4)
+                return IntLitNode(sz)
+            elif arg_tok.type == 'IDENT' and self.tokens[self.pos+1].val == ')':
+                t_arg = self.consume('IDENT').val
+                self.consume('PUNCT', ')')
+                return SizeofNode(t_arg)
+            else:
+                expr = self.parse_expr()
+                self.consume('PUNCT', ')')
+                return SizeofNode(expr)
         if tok.type in ('INT', 'HEX'):
             self.consume()
             return IntLitNode(int(tok.val, 0))
@@ -1330,6 +1406,21 @@ class CodeGen:
             if expr.name in self.constants:
                 return self.constants[expr.name]
             raise ValueError(f"Constant expression references non-constant symbol '{expr.name}'")
+        elif isinstance(expr, SizeofNode):
+            if isinstance(expr.target, str):
+                t_clean = self._clean_type(expr.target)
+                if t_clean in ('u8', 's8', 'string'): return 1
+                elif t_clean in ('u16', 's16'): return 2
+                elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
+                elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
+            else:
+                t_name, _ = self._get_expr_type(expr.target)
+                t_clean = self._clean_type(t_name)
+                if t_clean in ('u8', 's8', 'string'): return 1
+                elif t_clean in ('u16', 's16'): return 2
+                elif t_clean in ('u32', 's32', 'void') or t_clean in self.fn_types: return 4
+                elif t_clean in self.structs: return self.structs[t_clean].get('__size__', 4)
+            return 4
         elif isinstance(expr, UnaryOpNode):
             val = self._eval_const_expr(expr.operand)
             if expr.op == '-':
@@ -1351,6 +1442,14 @@ class CodeGen:
             elif expr.op == '^': return (left ^ right) & 0xFFFFFFFF
             elif expr.op == '<<': return (left << (right & 31)) & 0xFFFFFFFF
             elif expr.op == '>>': return (left >> (right & 31)) & 0xFFFFFFFF
+            elif expr.op == '==': return 1 if left == right else 0
+            elif expr.op == '!=': return 1 if left != right else 0
+            elif expr.op == '<': return 1 if left < right else 0
+            elif expr.op == '<=': return 1 if left <= right else 0
+            elif expr.op == '>': return 1 if left > right else 0
+            elif expr.op == '>=': return 1 if left >= right else 0
+            elif expr.op == '&&': return 1 if (left != 0 and right != 0) else 0
+            elif expr.op == '||': return 1 if (left != 0 or right != 0) else 0
         raise ValueError(f"Expression cannot be evaluated as constant: {type(expr).__name__}")
 
     def _escape_asm_string(self, s):
@@ -1487,6 +1586,27 @@ class CodeGen:
             self.emit("FAST_EXIT_TRAP")
             self.emit(".align  64")
             self.asm.append("")
+
+                # Process Enum declarations into compile-time constants (zero memory allocated)
+        for d in root.decls:
+            if isinstance(d, EnumDeclNode):
+                cur_val = 0
+                for m_name, m_expr in d.members:
+                    if isinstance(m_expr, IntLitNode):
+                        cur_val = m_expr.val
+                    elif m_expr is not None:
+                        cur_val = self._eval_const_expr(m_expr)
+                    self.constants[m_name] = cur_val
+                    cur_val += 1
+
+        # Evaluate top-level verify assertions
+        for d in root.decls:
+            if isinstance(d, VerifyNode):
+                res = self._eval_const_expr(d.cond)
+                if not res:
+                    tok = d.token
+                    loc = f"{tok.fname}:{tok.lineno}:{tok.col}" if tok else "verify"
+                    raise SyntaxError(f"{loc}: Compile-time verification failed: '{d.msg}'")
 
         # Register global types, dims, constants upfront
         for d in data_decls:
@@ -1965,6 +2085,13 @@ class CodeGen:
             self.emit_label(lbl_continue)
             return
 
+        elif isinstance(stmt, VerifyNode):
+            res = self._eval_const_expr(stmt.cond)
+            if not res:
+                tok = stmt.token
+                loc = f"{tok.fname}:{tok.lineno}:{tok.col}" if tok else "verify"
+                raise SyntaxError(f"{loc}: Compile-time verification failed: '{stmt.msg}'")
+            return
         elif isinstance(stmt, ReturnNode):
             if stmt.expr:
                 self.gen_expr(stmt.expr, target_reg=1)
