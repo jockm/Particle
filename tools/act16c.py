@@ -446,6 +446,12 @@ class Parser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
+        self.known_types = set()
+
+    def _forbid_aggregate_ptr(self, t_name):
+        clean_t = t_name.strip()
+        if clean_t in self.known_types:
+            raise SyntaxError(f"act16c: aggregate types are implicit references; pointer syntax '*' is invalid for type '{clean_t}'")
 
     def peek(self):
         return self.tokens[self.pos]
@@ -544,6 +550,7 @@ class Parser:
                 self.consume('PUNCT', '}')
                 if self.peek().val == ';':
                     self.consume('PUNCT', ';')
+                self.known_types.add(t_name)
                 return TypeDefNode(t_name, fields)
 
         is_const = False
@@ -554,6 +561,7 @@ class Parser:
         t_name = self.parse_type()
         is_ptr = False
         if self.peek().val == '*':
+            self._forbid_aggregate_ptr(t_name)
             self.consume()
             is_ptr = True
 
@@ -584,6 +592,7 @@ class Parser:
                     p_type = self.parse_type()
                     p_ptr = False
                     if self.peek().val == '*':
+                        self._forbid_aggregate_ptr(p_type)
                         self.consume()
                         p_ptr = True
                     p_name = self.consume('IDENT').val
@@ -740,6 +749,7 @@ class Parser:
             t_name = self.parse_type()
             is_ptr = False
             if self.peek().val == '*':
+                self._forbid_aggregate_ptr(t_name)
                 self.consume()
                 is_ptr = True
             name = self.consume('IDENT').val
@@ -1195,6 +1205,7 @@ class CodeGen:
         self.asm = self.backend.asm
         self.affine_state = {}
         self.dynamic_arrays = set()
+        self.borrowed_params = set()
         self.locals = {}
         self.globals = set()
         self.types = {}
@@ -1565,6 +1576,7 @@ class CodeGen:
 
         self.open_arrays.clear()
         self.dynamic_arrays.clear()
+        self.borrowed_params.clear()
         self.affine_state = {}
         r_idx = 1
         for p in func.params:
@@ -1573,6 +1585,7 @@ class CodeGen:
             clean_pt = self._clean_type(p_type)
             is_ref = (clean_pt in self.structs and not p_ptr) or is_open_arr
             self.types[p_name] = (p_type, p_ptr, is_ref)
+            self.borrowed_params.add(p_name)
             if is_open_arr:
                 self.open_arrays.add(p_name)
                 self.emit(f"PUSH32  R{r_idx}", f"Spill open array ptr '{p_name}'")
@@ -1863,6 +1876,9 @@ class CodeGen:
                 self._validate_fn_type_assignment(stmt.type_name, stmt.init_expr)
                 self.gen_expr(stmt.init_expr, target_reg=1)
                 name = stmt.name
+                if isinstance(stmt.init_expr, VarAccessNode) and stmt.init_expr.name in self.borrowed_params:
+                    # Borrowed reference cannot be moved into an owning handle
+                    pass
                 if isinstance(stmt.init_expr, (HeapAllocNode, HeapArrayAllocNode, HeapStringAllocNode)):
                     self.affine_state[name] = 'VALID'
                 if isinstance(stmt.init_expr, HeapArrayAllocNode):
@@ -2244,6 +2260,8 @@ class CodeGen:
 
         elif isinstance(expr, HeapFreeNode):
             target_var = expr.expr.name if isinstance(expr.expr, VarAccessNode) else None
+            if target_var and target_var in self.borrowed_params:
+                raise SyntaxError(f"act16c: cannot destroy borrowed reference parameter '{target_var}'")
             if target_var and target_var in self.affine_state:
                 if self.affine_state[target_var] == 'MOVED':
                     raise SyntaxError(f"act16c: cannot destroy already moved/destroyed reference '{target_var}'")
@@ -2578,6 +2596,8 @@ class CodeGen:
                     # Affine move semantics
                     if isinstance(expr.right, VarAccessNode):
                         rhs_name = expr.right.name
+                        if rhs_name in self.borrowed_params and name in self.affine_state:
+                            raise SyntaxError(f"act16c: cannot take ownership of borrowed parameter '{rhs_name}'")
                         if rhs_name in self.affine_state:
                             self._check_affine_access(rhs_name)
                             self.affine_state[rhs_name] = 'MOVED'

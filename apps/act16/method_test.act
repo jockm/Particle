@@ -3,10 +3,10 @@ type Point {
     u32 y;
 };
 
-Point* Point.move(u32 dx, u32 dy) {
+Point Point.move(u32 dx, u32 dy) {
     this.x = this.x + dx;
     this.y = this.y + dy;
-    return &this;
+    return this;
 }
 
 u32 Point.get_sum() {
@@ -18,7 +18,7 @@ void main() {
     pt.x = 10;
     pt.y = 20;
 
-    // Test method chaining: move() returns Point*, chaining another move()
+    // Test method chaining: move() returns Point, chaining another move()
     pt.move(5, 5).move(10, 15);
 
     // pt.x should now be 10 + 5 + 10 = 25
