@@ -1,6 +1,9 @@
 ; ==============================================================================
 ; Particle Runtime & Vector Table
 ; ==============================================================================
+.ifndef _PARTICLE_RUNTIME_ASM_
+.define _PARTICLE_RUNTIME_ASM_ 1
+
 .include "lib/common.inc"
 
 .org 0x00000100
@@ -28,3 +31,5 @@ _panic_align_loop:
 _on_illegal_instruction:
 _panic_illegal_loop:
     FBRA    _panic_illegal_loop
+
+.endif

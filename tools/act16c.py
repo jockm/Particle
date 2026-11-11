@@ -371,6 +371,14 @@ class WhileNode(ASTNode):
         self.cond = cond
         self.body = body
 
+class ForRangeNode(ASTNode):
+    def __init__(self, var_type, var_name, start_expr, end_expr, body):
+        self.var_type = var_type
+        self.var_name = var_name
+        self.start_expr = start_expr
+        self.end_expr = end_expr
+        self.body = body
+
 class BreakNode(ASTNode): pass
 
 class AsmNode(ASTNode):
@@ -780,6 +788,19 @@ class Parser:
             self.consume('PUNCT', ')')
             body = self.parse_statement()
             return SwitchNode(expr, body)
+
+        if tok.val == 'for':
+            self.consume('KEYWORD', 'for')
+            self.consume('PUNCT', '(')
+            var_type = self.parse_type()
+            var_name = self.consume('IDENT').val
+            self.consume('PUNCT', ':')
+            start_expr = self.parse_expr()
+            self.consume('OP_RANGE', '..')
+            end_expr = self.parse_expr()
+            self.consume('PUNCT', ')')
+            body = self.parse_statement()
+            return ForRangeNode(var_type, var_name, start_expr, end_expr, body)
 
         if tok.val == 'while':
             self.consume()
@@ -1999,6 +2020,10 @@ class CodeGen:
                 self._collect_local_decls(node.else_body, decls)
         elif isinstance(node, WhileNode):
             self._collect_local_decls(node.body, decls)
+        elif isinstance(node, ForRangeNode):
+            decls.append(VarDeclNode(node.var_type, False, node.var_name, None))
+            decls.append(VarDeclNode("u32", False, f"{node.var_name}__end", None))
+            self._collect_local_decls(node.body, decls)
         elif isinstance(node, SwitchNode):
             self._collect_local_decls(node.body, decls)
         elif isinstance(node, VarDeclNode):
@@ -2327,6 +2352,66 @@ class CodeGen:
 
             self.gen_stmt(stmt.body)
             self.emit(f"BBRA     {lbl_loop}", "Loop back")
+            self.emit_label(lbl_end)
+            self.break_stack.pop()
+
+        elif isinstance(stmt, ForRangeNode):
+            lbl_loop = self.new_label("for_start")
+            lbl_body = self.new_label("for_body")
+            lbl_end = self.new_label("for_end")
+            self.break_stack.append(lbl_end)
+
+            end_var_name = f"{stmt.var_name}__end"
+
+            # 1. Initialize induction variable
+            self.gen_expr(stmt.start_expr, target_reg=1)
+            var_off = self.stack_offset - self.locals[stmt.var_name]
+            self.emit_immediate(14, var_off)
+            self.emit("ADD     R14, R15")
+            self.emit("ST32    (R14), R1", f"Init for-loop var '{stmt.var_name}'")
+
+            # 2. Evaluate upper bound once and store into pre-allocated stack slot
+            self.gen_expr(stmt.end_expr, target_reg=1)
+            end_off = self.stack_offset - self.locals[end_var_name]
+            self.emit_immediate(14, end_off)
+            self.emit("ADD     R14, R15")
+            self.emit("ST32    (R14), R1", f"Cache upper bound for loop '{stmt.var_name}'")
+
+            # 3. Trampoline condition check
+            self.emit_label(lbl_loop)
+            # Load current induction variable
+            curr_var_off = self.stack_offset - self.locals[stmt.var_name]
+            self.emit_immediate(14, curr_var_off)
+            self.emit("ADD     R14, R15")
+            self.emit("LD32    R1, (R14)", f"Load induction var '{stmt.var_name}'")
+
+            # Load cached bound from pre-allocated stack slot
+            curr_end_off = self.stack_offset - self.locals[end_var_name]
+            self.emit_immediate(14, curr_end_off)
+            self.emit("ADD     R14, R15")
+            self.emit("LD32    R2, (R14)", f"Load cached upper bound for '{stmt.var_name}'")
+
+            # Test induction < cached_end
+            self.emit("SLT     R1, R2", "Loop condition i < end")
+            self.emit(f"FBRA.NZ R1, {lbl_body}", "Enter for body if true")
+            self.emit(f"FBRA    {lbl_end}", "Exit for loop if false")
+
+            # 4. Body
+            self.emit_label(lbl_body)
+            self.gen_stmt(stmt.body)
+
+            # 5. Unit stride step (+1)
+            curr_var_off = self.stack_offset - self.locals[stmt.var_name]
+            self.emit_immediate(14, curr_var_off)
+            self.emit("ADD     R14, R15")
+            self.emit("LD32    R1, (R14)")
+            self.emit("ADD     R1, 1", f"Step '{stmt.var_name}' +1")
+            self.emit("ST32    (R14), R1")
+
+            # 6. Branch back
+            self.emit(f"BBRA    {lbl_loop}", "Loop back")
+
+            # 7. Epilogue
             self.emit_label(lbl_end)
             self.break_stack.pop()
 

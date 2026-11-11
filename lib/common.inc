@@ -1,6 +1,8 @@
 ; ==============================================================================
 ; Particle Common Architectural Include File
 ; ==============================================================================
+.ifndef _PARTICLE_COMMON_INC_
+.define _PARTICLE_COMMON_INC_ 1
 
 .define R0          0
 .define R1          1
@@ -85,3 +87,5 @@
 ; ------------------------------------------------------------------------------
 ; Note: NEG is now a native 1-cycle instruction (0x48).
 ; Legacy macro wrapper removed to ensure native instruction execution.
+
+.endif

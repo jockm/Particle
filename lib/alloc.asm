@@ -1,6 +1,9 @@
 ; ==============================================================================
 ; Particle Bare-Metal Boundary-Tag Memory Allocator
 ; ==============================================================================
+.ifndef _PARTICLE_ALLOC_ASM_
+.define _PARTICLE_ALLOC_ASM_ 1
+
 ; Chunks are aligned to 4 bytes and have an 8-byte prefix header:
 ;   offset -8: [block_size | in_use (bit 0)] (32-bit)
 ;   offset -4: [prev_phys_size]              (32-bit)
@@ -696,3 +699,5 @@ _last_phys_size:
     .word 0
 _heap_start:
     .word 0x00010000
+
+.endif
