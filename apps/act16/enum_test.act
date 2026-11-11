@@ -1,0 +1,49 @@
+enum Status {
+    STATUS_OK = 0,
+    STATUS_BUSY,
+    STATUS_TIMEOUT = 10,
+    STATUS_ERROR
+};
+
+enum Priority {
+    LOW,
+    MED,
+    HIGH
+};
+
+u32 test_switch(u32 s) {
+    switch (s) {
+        case STATUS_OK:
+            return 100;
+        case STATUS_BUSY:
+            return 200;
+        case STATUS_TIMEOUT:
+            return 300;
+        case STATUS_ERROR:
+            return 400;
+        default:
+            return 0;
+    }
+}
+
+void main() {
+    // 1. Verify auto-numbering
+    if (STATUS_OK != 0) trap(15);
+    if (STATUS_BUSY != 1) trap(15);
+    if (STATUS_TIMEOUT != 10) trap(15);
+    if (STATUS_ERROR != 11) trap(15);
+
+    if (LOW != 0) trap(15);
+    if (MED != 1) trap(15);
+    if (HIGH != 2) trap(15);
+
+    // 2. Verify usage in functions and switch expressions
+    u32 res1 = test_switch(STATUS_TIMEOUT);
+    if (res1 != 300) trap(15);
+
+    u32 res2 = test_switch(STATUS_ERROR);
+    if (res2 != 400) trap(15);
+
+    // Success
+    trap(14);
+}
