@@ -237,31 +237,52 @@ class Debugger {
   }
 }
 
+/// Exit codes. A run that ends on a TRAP instruction exits with the trap
+/// number (0 or 15; 1-14 are reserved for traps that may end a run later).
+const int exitPsimError = 16; // file not found, bad arguments
+const int exitCycleLimit = 17; // cycle limit reached
+// 18: PC ran past the end of memory (ParticleCore.exitPcOutOfMemory)
+
+const int maxCycles = 10000000;
+
 void main(List<String> args) {
   String? binary;
   var debug = false;
   var baseAddr = 0x00000100;
+  var exitOnReset = true;
 
   for (var i = 0; i < args.length; i++) {
     final arg = args[i];
     if (arg == "-d" || arg == "--debug") {
       debug = true;
     } else if (arg == "-b" || arg == "--base") {
-      if (i + 1 < args.length) {
-        baseAddr = parseNum(args[++i]) ?? baseAddr;
+      final value = (i + 1 < args.length) ? parseNum(args[++i]) : null;
+      if (value == null) {
+        stderr.writeln("[ERROR] $arg needs an address");
+        exitCode = exitPsimError;
+        return;
       }
-    } else if (!arg.startsWith("-")) {
+      baseAddr = value;
+    } else if (arg == "--no-exit-on-reset") {
+      exitOnReset = false;
+    } else if (arg.startsWith("-")) {
+      stderr.writeln("[ERROR] Unknown option: $arg");
+      exitCode = exitPsimError;
+      return;
+    } else {
       binary = arg;
     }
   }
 
   final core = ParticleCore();
+  core.exitOnReset = exitOnReset;
 
   if (binary != null) {
     final file = File(binary);
     if (!file.existsSync()) {
       stderr.writeln("[ERROR] Binary file not found: $binary");
-      exit(1);
+      exitCode = exitPsimError;
+      return;
     }
     final bytes = file.readAsBytesSync();
     for (var i = 0; i < bytes.length; i++) {
@@ -273,9 +294,18 @@ void main(List<String> args) {
   if (debug || binary == null) {
     Debugger(core).cmdloop();
   } else {
-    while (!core.halted && core.cycleCount < 10000000) {
+    while (!core.halted && core.cycleCount < maxCycles) {
       core.step();
     }
     stdout.writeln("Simulation completed in ${core.cycleCount} cycles. PC = 0x${core.pc.toRadixString(16).toUpperCase().padLeft(8, '0')}");
+    if (core.halted) {
+      if (core.haltCode == ParticleCore.exitPcOutOfMemory) {
+        stdout.writeln("[SIM] PC ran past the end of memory without a trap");
+      }
+      exitCode = core.haltCode ?? 0;
+    } else {
+      stdout.writeln("[SIM] Cycle limit ($maxCycles) reached");
+      exitCode = exitCycleLimit;
+    }
   }
 }

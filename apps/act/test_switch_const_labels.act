@@ -1,0 +1,51 @@
+// test_switch_const_labels: case labels may be const, enum, char, hex and constant expressions
+// Passes with trap(0); fails with trap(15).
+
+const u32 MAGIC = 0x40;
+enum Op { OP_NONE, OP_ADD = 5, OP_SUB };
+const u32 SPECIAL = 12;
+
+u32 pick(u32 v) {
+    u32 r = 0;
+    switch (v) {
+        case OP_ADD:
+            r = 1;
+            break;
+        case OP_SUB:
+            r = 2;
+            break;
+        case SPECIAL:
+            r = 3;
+            break;
+        case SPECIAL + 1:
+            r = 4;
+            break;
+        case MAGIC:
+            r = 5;
+            break;
+        case 'z':
+            r = 6;
+            break;
+        case 0x100:
+            r = 7;
+            break;
+    }
+    return r;
+}
+
+void main() {
+    u32 ok = 1;
+    if (pick(5) != 1) ok = 0;
+    if (pick(6) != 2) ok = 0;
+    if (pick(12) != 3) ok = 0;
+    if (pick(13) != 4) ok = 0;
+    if (pick(64) != 5) ok = 0;
+    if (pick(122) != 6) ok = 0;
+    if (pick(256) != 7) ok = 0;
+    if (pick(0) != 0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

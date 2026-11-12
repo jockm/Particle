@@ -1,0 +1,34 @@
+// test_struct_nested: a record containing other records by value
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+type Rect {
+    Point a;
+    Point b;
+    u32 tag;
+};
+
+void main() {
+    u32 ok = 1;
+    Rect r;
+    r.a.x = 1;
+    r.a.y = 2;
+    r.b.x = 3;
+    r.b.y = 4;
+    r.tag = 5;
+    if (r.a.x != 1) ok = 0;
+    if (r.a.y != 2) ok = 0;
+    if (r.b.x != 3) ok = 0;
+    if (r.b.y != 4) ok = 0;
+    if (r.tag != 5) ok = 0;
+    if (sizeof(Rect) != 20) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

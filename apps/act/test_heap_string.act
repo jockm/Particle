@@ -1,0 +1,21 @@
+// test_heap_string: heap strings: string.create, capacity, writing characters and .len
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    string s[] = string.create(16);
+    if (s.capacity != 16) ok = 0;
+    if (s.len != 0) ok = 0;
+    s[0] = 'h';
+    s[1] = 'i';
+    s[2] = 0;
+    if (s.len != 2) ok = 0;
+    if (s[1] != 'i') ok = 0;
+    s.destroy();
+    if (s.exists() != 0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

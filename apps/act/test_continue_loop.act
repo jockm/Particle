@@ -1,0 +1,66 @@
+// test_continue_loop: `continue` starts the next iteration of while and
+// for loops; inside a switch inside a loop it falls through instead.
+// Passes with trap(0); fails with trap(15).
+
+u32 sum_odd_while(u32 n) {
+    u32 i = 0;
+    u32 s = 0;
+    while (i < n) {
+        i += 1;
+        if ((i & 1) == 0) continue;
+        s += i;
+    }
+    return s;
+}
+
+u32 sum_odd_for(u32 n) {
+    u32 s = 0;
+    for (u32 i : 0..n) {
+        if ((i & 1) == 0) continue;
+        s += i;
+    }
+    return s;
+}
+
+u32 switch_in_loop() {
+    u32 s = 0;
+    for (u32 i : 0..3) {
+        switch (i) {
+            case 0:
+                s += 1;
+                continue;
+            case 1:
+                s += 10;
+            default:
+                s += 100;
+        }
+    }
+    return s;
+}
+
+u32 continue_last_case(u32 v) {
+    u32 x = 0;
+    switch (v) {
+        case 1:
+            x = 5;
+        case 2:
+            x = 7;
+            continue;
+    }
+    return x;
+}
+
+void main() {
+    u32 ok = 1;
+    if (sum_odd_while(6) != 9) ok = 0;
+    if (sum_odd_for(6) != 9) ok = 0;
+    // i=0: 1, falls into case 1: +10; i=1: 10; i=2: 100  => 121
+    if (switch_in_loop() != 121) ok = 0;
+    if (continue_last_case(2) != 7) ok = 0;
+    if (continue_last_case(1) != 5) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,49 @@
+// test_embedding: embedded types promote fields and methods, at zero and non-zero offsets
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+void Point.shift(u32 d) {
+    this.x += d;
+    this.y += d;
+}
+
+type Sprite {
+    Point;
+    u8 frame;
+};
+
+type Tagged {
+    u32 tag;
+    Point;
+};
+
+void main() {
+    u32 ok = 1;
+    Sprite s;
+    s.x = 1;
+    s.y = 2;
+    s.frame = 3;
+    s.shift(10);
+    if (s.x != 11) ok = 0;
+    if (s.y != 12) ok = 0;
+    if (s.frame != 3) ok = 0;
+    Tagged t;
+    t.tag = 0xAA;
+    t.x = 5;
+    t.y = 6;
+    t.shift(1);
+    if (t.x != 6) ok = 0;
+    if (t.y != 7) ok = 0;
+    if (t.tag != 0xAA) ok = 0;
+    if (sizeof(Tagged) != 12) ok = 0;
+    if (sizeof(Sprite) != 12) ok = 0;   // 9 bytes of fields, padded to 4-byte alignment
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

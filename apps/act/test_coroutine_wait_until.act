@@ -1,0 +1,35 @@
+// test_coroutine_wait_until: wait_until returns status 0 until its condition becomes true
+// Passes with trap(0); fails with trap(15).
+
+import "lib/protokernel.act";
+
+type Waiter {
+    u16 lc;
+    u32 done;
+};
+
+u32 ready = 0;
+
+u32 waiter(Waiter w) {
+    wait_until(w, 1, ready == 1);
+    w.done = 1;
+}
+
+void main() {
+    u32 ok = 1;
+    Waiter w;
+    u32 st = waiter(w);
+    if (st != 0) ok = 0;
+    st = waiter(w);
+    if (st != 0) ok = 0;
+    if (w.done != 0) ok = 0;
+    ready = 1;
+    st = waiter(w);
+    if (st != 3) ok = 0;
+    if (w.done != 1) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

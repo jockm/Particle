@@ -25,8 +25,8 @@ verify(ERROR == 11, "Enum ERROR mismatch");
 void main() {
     u32 cur_status = TIMEOUT;
     if (cur_status == 10) {
-        // Success quit trap 14
-        asm("TRAP 14");
+        // Success quit trap 0
+        asm("TRAP 0");
     }
     // Failure quit trap 15
     asm("TRAP 15");

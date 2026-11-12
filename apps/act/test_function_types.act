@@ -1,0 +1,35 @@
+// test_function_types: function-typed locals, globals and parameters
+// Passes with trap(0); fails with trap(15).
+
+type BinOp = fn(u32, u32) -> u32;
+
+u32 add(u32 a, u32 b) {
+    return a + b;
+}
+
+u32 mul(u32 a, u32 b) {
+    return a * b;
+}
+
+u32 apply(BinOp op, u32 x, u32 y) {
+    return op(x, y);
+}
+
+BinOp g_op;
+
+void main() {
+    u32 ok = 1;
+    BinOp f = add;
+    if (f(6, 7) != 13) ok = 0;
+    f = mul;
+    if (f(6, 7) != 42) ok = 0;
+    if (apply(add, 2, 3) != 5) ok = 0;
+    if (apply(mul, 2, 3) != 6) ok = 0;
+    g_op = add;
+    if (g_op(10, 20) != 30) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

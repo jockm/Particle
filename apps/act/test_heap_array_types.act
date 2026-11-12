@@ -1,0 +1,37 @@
+// test_heap_array_types: heap arrays of u8, u16 and records use the right element size
+// Passes with trap(0); fails with trap(15).
+
+type Pair {
+    u32 a;
+    u32 b;
+};
+
+void main() {
+    u32 ok = 1;
+    u8 bytes[] = u8.createArray(6);
+    for (u32 i : 0..6) {
+        bytes[i] = i + 250;
+    }
+    if (bytes[5] != 255) ok = 0;
+    if (bytes[0] != 250) ok = 0;
+    if (bytes.len != 6) ok = 0;
+    u16 halves[] = u16.createArray(4);
+    halves[3] = 0xBEEF;
+    halves[2] = 0x1234;
+    if (halves[3] != 0xBEEF) ok = 0;
+    if (halves[2] != 0x1234) ok = 0;
+    Pair pairs[] = Pair.createArray(3);
+    pairs[2].b = 7;
+    pairs[1].a = 5;
+    if (pairs[2].b != 7) ok = 0;
+    if (pairs[1].a != 5) ok = 0;
+    if (pairs.len != 3) ok = 0;
+    bytes.destroyArray();
+    halves.destroyArray();
+    pairs.destroyArray();
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

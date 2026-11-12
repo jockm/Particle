@@ -1,0 +1,34 @@
+// test_early_return: return from inside loops and from void functions
+// Passes with trap(0); fails with trap(15).
+
+u32 find(u32 target) {
+    for (u32 i : 0..20) {
+        if (i == target) {
+            return i;
+        }
+    }
+    return 999;
+}
+
+u32 hits = 0;
+
+void maybe(u32 v) {
+    if (v == 0) {
+        return;
+    }
+    hits += 1;
+}
+
+void main() {
+    u32 ok = 1;
+    if (find(7) != 7) ok = 0;
+    if (find(50) != 999) ok = 0;
+    maybe(0);
+    maybe(1);
+    if (hits != 1) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

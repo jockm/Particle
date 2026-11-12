@@ -1,0 +1,28 @@
+// test_method_chaining: methods that return this can be chained
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+Point Point.move(u32 dx, u32 dy) {
+    this.x += dx;
+    this.y += dy;
+    return this;
+}
+
+void main() {
+    u32 ok = 1;
+    Point pt;
+    pt.x = 1;
+    pt.y = 2;
+    pt.move(1, 1).move(2, 2).move(3, 3);
+    if (pt.x != 7) ok = 0;
+    if (pt.y != 8) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

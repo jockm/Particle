@@ -1,0 +1,27 @@
+// test_heap_array: heap arrays: createArray, indexing, .len, resize keeps contents, destroyArray, exists
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 buf[] = u32.createArray(5);
+    if (buf.exists() != 1) ok = 0;
+    if (buf.len != 5) ok = 0;
+    for (u32 i : 0..5) {
+        buf[i] = i * 11;
+    }
+    if (buf[0] != 0) ok = 0;
+    if (buf[4] != 44) ok = 0;
+    buf.resize(10);
+    if (buf.len != 10) ok = 0;
+    if (buf[3] != 33) ok = 0;
+    if (buf[4] != 44) ok = 0;
+    buf[9] = 99;
+    if (buf[9] != 99) ok = 0;
+    buf.destroyArray();
+    if (buf.exists() != 0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

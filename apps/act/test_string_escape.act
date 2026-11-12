@@ -1,0 +1,39 @@
+// Test string literal escape sequences in Action
+
+u32 test_escapes(string s) {
+    // Expected contents: "A\tB\nC\r\"\\\x41"
+    // Index 0: 'A'  (65)
+    // Index 1: '\t' (9)
+    // Index 2: 'B'  (66)
+    // Index 3: '\n' (10)
+    // Index 4: 'C'  (67)
+    // Index 5: '\r' (13)
+    // Index 6: '\"' (34)
+    // Index 7: '\\' (92)
+    // Index 8: 'A'  (65 from \x41)
+    if (s[0] != 65)  { trap(15); }
+    if (s[1] != 9)   { trap(15); }
+    if (s[2] != 66)  { trap(15); }
+    if (s[3] != 10)  { trap(15); }
+    if (s[4] != 67)  { trap(15); }
+    if (s[5] != 13)  { trap(15); }
+    if (s[6] != 34)  { trap(15); }
+    if (s[7] != 92)  { trap(15); }
+    if (s[8] != 65)  { trap(15); }
+    if (s[9] != 0)   { trap(15); } // Null-terminator
+    return 1;
+}
+
+u32 main() {
+    string escaped[16] = "A\tB\nC\r\"\\\x41";
+
+    // Verify dynamic length scanner: 9 characters
+    if (escaped.len != 9) {
+        trap(15);
+    }
+
+    test_escapes(escaped);
+
+    trap(0); // Success quit
+    return 0;
+}

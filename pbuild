@@ -12,39 +12,22 @@ while [ -h "$SELF_SOURCE" ]; do
 done
 PROJECT_ROOT="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
 
-# Toolchain paths
-PYTHON="${PYTHON:-python3}"
-ACT16C="${PROJECT_ROOT}/tools/act16c.py"
-# ------------------------------------------------------------------------------
-# Simulator Selection
-# ------------------------------------------------------------------------------
-# Default: Python reference simulator (${PROJECT_ROOT}/tools/psim.py)
-# To use the native compiled Dart simulator, comment out the line below and
-# uncomment the Dart binary definition.
-# PSIM_CMD=("$PYTHON" "${PROJECT_ROOT}/tools/psim.py")
-PSIM_CMD=("${PROJECT_ROOT}/build/tools/psim")
+# Toolchain paths: the compiled Dart tools in build/tools
+TOOL_DIR="${PROJECT_ROOT}/build/tools"
+ACTION="${TOOL_DIR}/action"
+CMD_PASM=("${TOOL_DIR}/pasm")
+CMD_PASM_LINT=("${TOOL_DIR}/pasm_lint")
+PSIM_CMD=("${TOOL_DIR}/psim")
 LIB_DIR="${PROJECT_ROOT}/lib"
 
-# Resolve assembler command (compiled Dart binary preferred)
-if [ -x "${PROJECT_ROOT}/build/tools/pasm" ]; then
-    CMD_PASM=("${PROJECT_ROOT}/build/tools/pasm")
-else
-    CMD_PASM=("$PYTHON" "${PROJECT_ROOT}/tools/pasm.py")
-fi
-
-# Resolve simulator command (compiled Dart binary preferred)
-if [ -x "${PROJECT_ROOT}/build/tools/psim" ]; then
-    CMD_PSIM=("${PROJECT_ROOT}/build/tools/psim")
-else
-    CMD_PSIM=("$PYTHON" "${PROJECT_ROOT}/tools/psim.py")
-fi
-
-# Resolve linter command (compiled Dart binary preferred)
-if [ -x "${PROJECT_ROOT}/build/tools/pasm_lint" ]; then
-    CMD_PASM_LINT=("${PROJECT_ROOT}/build/tools/pasm_lint")
-else
-    CMD_PASM_LINT=("$PYTHON" "${PROJECT_ROOT}/tools/pasm_lint.py")
-fi
+# Exits with a message if a required tool has not been built.
+# Usage: require_tool <path> <make target>
+require_tool() {
+    if [ ! -x "$1" ]; then
+        echo "Error: $(basename "$1") not found at '$1'. Build it with 'make $2'." >&2
+        exit 1
+    fi
+}
 
 print_usage() {
     cat << "HELP_TEXT"
@@ -58,7 +41,8 @@ Positional Arguments:
 Options:
   -o, --output <file>    Output binary path (default: build/<name>.<format>)
   -I, --include <dir>    Additional include search directory (repeatable)
-  -D, --define <sym>     Predefine preprocessor symbol (repeatable)
+  -D, --define <sym>     Predefine symbol: an Action const and a pasm define
+                         (NAME or NAME=VALUE; repeatable)
       --format <fmt>     Output format: bin or hex (default: bin)
       --bounds-check, -fbounds-check
                          Enable array bounds checking (default)
@@ -67,13 +51,16 @@ Options:
       --sim              Run psim simulator after successful build
       --debug            Pass --debug to psim when running with --sim
       --base <addr>      Pass --base <addr> to psim when running with --sim
+      --no-exit-on-reset Pass --no-exit-on-reset to psim when running with --sim
   -v, --verbose          Verbose output
   -h, --help             Show this help message and exit
 
 Workflow:
   - If input is .act: Compiles to .asm, runs pasm_lint, then assembles to binary.
   - If input is .asm: Runs pasm_lint, then assembles to binary.
-  - If --sim is specified: Executes tools/psim.py on the built binary.
+  - If --sim is specified: Runs build/tools/psim on the built binary.
+
+Tools: build/tools/action, pasm, pasm_lint and psim (build with 'make tools').
 HELP_TEXT
 }
 
@@ -83,6 +70,7 @@ FORMAT="bin"
 VERBOSE=0
 RUN_SIM=0
 SIM_DEBUG=0
+SIM_NO_EXIT_ON_RESET=0
 SIM_BASE=""
 INCLUDES=()
 DEFINES=()
@@ -154,6 +142,10 @@ while [[ $# -gt 0 ]]; do
             SIM_DEBUG=1
             shift
             ;;
+        --no-exit-on-reset)
+            SIM_NO_EXIT_ON_RESET=1
+            shift
+            ;;
         --base)
             if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo "Error: Option --base requires an argument." >&2
@@ -199,6 +191,16 @@ for s in "${SOURCES[@]}"; do
     fi
 done
 
+# Every tool this build needs must be present before anything runs
+if [ "${#ACT_INPUTS[@]}" -gt 0 ]; then
+    require_tool "$ACTION" action
+fi
+require_tool "${CMD_PASM_LINT[0]}" pasm-lint
+require_tool "${CMD_PASM[0]}" pasm
+if [ "$RUN_SIM" -eq 1 ]; then
+    require_tool "${PSIM_CMD[0]}" psim
+fi
+
 PRIMARY_SOURCE="${SOURCES[0]}"
 BASE_NAME="$(basename "$PRIMARY_SOURCE")"
 STEM="${BASE_NAME%.*}"
@@ -221,12 +223,15 @@ run_step() {
         "$@"
     else
         local tmp
+        local status=0
         tmp=$(mktemp)
-        if ! "$@" > "$tmp" 2>&1; then
+        "$@" > "$tmp" 2>&1 || status=$?
+        if [ "$status" -ne 0 ]; then
             echo "==> [pbuild] FAILED: $label" >&2
             cat "$tmp" >&2
             rm -f "$tmp"
-            exit 1
+            # Pass the tool's exit code along
+            exit "$status"
         fi
         # If output contains warnings, show them
         if grep -qi "warning" "$tmp"; then
@@ -241,7 +246,7 @@ ASM_SOURCES=()
 if [ "${#ACT_INPUTS[@]}" -gt 0 ]; then
     ACT_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$ACT_ASM")"
-    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$PYTHON" "$ACT16C" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$ACTION" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
     ASM_SOURCES+=("$ACT_ASM")
 fi
 
@@ -274,6 +279,9 @@ if [ "$RUN_SIM" -eq 1 ]; then
     if [ -n "$SIM_BASE" ]; then
         SIM_ARGS+=("--base" "$SIM_BASE")
     fi
+    if [ "$SIM_NO_EXIT_ON_RESET" -eq 1 ]; then
+        SIM_ARGS+=("--no-exit-on-reset")
+    fi
 
     sim_extra=""
     if [ "${#SIM_ARGS[@]}" -gt 0 ]; then
@@ -284,5 +292,9 @@ if [ "$RUN_SIM" -eq 1 ]; then
         echo "==> [pbuild] Running simulator: ${PSIM_CMD[*]} $OUTPUT$sim_extra"
     fi
 
-    "${PSIM_CMD[@]}" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"}
+    # psim's exit code says how the run ended (0: trap 0, 15: trap 15,
+    # 16: psim error, 17: cycle limit, 18: PC ran past memory); pass it on
+    sim_status=0
+    "${PSIM_CMD[@]}" "$OUTPUT" ${SIM_ARGS[@]+"${SIM_ARGS[@]}"} || sim_status=$?
+    exit "$sim_status"
 fi

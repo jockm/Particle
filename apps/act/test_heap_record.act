@@ -1,0 +1,28 @@
+// test_heap_record: a record from Type.create() is a reference to the heap object
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+void bump(Point p) {
+    p.y += 1;
+}
+
+void main() {
+    u32 ok = 1;
+    Point p = Point.create();
+    p.x = 5;
+    p.y = 7;
+    bump(p);
+    Point q = p;
+    if (q.x != 5) ok = 0;
+    if (q.y != 8) ok = 0;
+    q.destroy();
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

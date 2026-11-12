@@ -1,0 +1,71 @@
+import "lib/string.act";
+
+void main() {
+    string a[16] = "hello";
+    string b[16] = "world";
+    string buf[16];
+
+    // 1. Test string_copy via method syntax
+    buf.copy(a);
+    if (!buf.equals("hello")) {
+        trap(15);
+    }
+    if (buf.len != 5) {
+        trap(15);
+    }
+
+    // 2. Test string_concat via method syntax
+    buf.concat(" ");
+    buf.concat(b);
+    if (!buf.equals("hello world")) {
+        trap(15);
+    }
+    if (buf.len != 11) {
+        trap(15);
+    }
+
+    // 3. Test string_compare
+    string s1[8] = "abc";
+    string s2[8] = "abc";
+    string s3[8] = "abd";
+    string s4[8] = "abb";
+
+    if (s1.compare(s2) != 0) {
+        trap(15);
+    }
+    if (s1.compare(s3) >= 0) {
+        trap(15);
+    }
+    if (s1.compare(s4) <= 0) {
+        trap(15);
+    }
+
+    // 4. Test string_find
+    string text[16] = "particle-risc";
+    if (text.find('p') != 0) {
+        trap(15);
+    }
+    if (text.find('-') != 8) {
+        trap(15);
+    }
+    if (text.find('c') != 5) {
+        trap(15);
+    }
+    if (text.find('z') != -1) {
+        trap(15);
+    }
+
+    // 5. Test capacity truncation safety on copy
+    string small[6];
+    small.copy("123456789");
+    // small.capacity is 6, max copy payload is 5 ('1','2','3','4','5'), sentinel at 5 is 0
+    if (small.len != 5) {
+        trap(15);
+    }
+    if (!small.equals("12345")) {
+        trap(15);
+    }
+
+    // All string library tests passed cleanly
+    trap(0);
+}

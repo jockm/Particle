@@ -254,11 +254,13 @@ FIFO channels are 256 entries deep. A channel number is taken modulo the number 
 
 ---
 
-## 5. Reference Simulator Conventions (`psim.py`)
+## 5. Reference Simulator Conventions (`psim`)
 These behaviours are specific to the simulator and are not architectural:
 - Channel 0 is the console: `FIFO.W` to channel 0 prints `Rr[7:0]` to stdout, and `FIFO.R` on an empty channel 0 polls stdin.
-- `TRAP 14` halts the simulation (debug quit, reporting `R1`), and `TRAP 15` halts as an out-of-bounds / sentinel trap. Misaligned accesses therefore also halt.
-- Execution stops if the PC leaves simulated memory (default 128 KiB, address-wrapped for data accesses).
+- A `TRAP 0` instruction ends the run (reporting `R1`), unless psim is given `--no-exit-on-reset`, in which case it jumps to the reset vector. A `TRAP 15` instruction ends the run as an out-of-bounds / sentinel trap. In the debugger (`--debug`) both stop at the debugger prompt instead.
+- Every other trap, including a misaligned access (Vector 14), goes to its vector as on hardware.
+- Execution stops if the PC leaves simulated memory (default 128 KiB, address-wrapped for data accesses), or after 10,000,000 cycles.
+- Exit code: 0 after `TRAP 0`, 15 after `TRAP 15` (1–14 are reserved for traps that may end a run in future), 16 for a simulator error (file not found, bad arguments), 17 when the cycle limit is reached, 18 when the PC runs past the end of memory.
 - Opcodes not listed in this document execute as no-ops in the simulator; on hardware they raise Vector 15.
 
 ---

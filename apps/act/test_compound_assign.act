@@ -1,0 +1,38 @@
+// test_compound_assign: compound assignment operators on locals and fields
+// Passes with trap(0); fails with trap(15).
+
+type Box {
+    u32 v;
+};
+
+void main() {
+    u32 ok = 1;
+    u32 x = 10;
+    x += 5;
+    if (x != 15) ok = 0;
+    x -= 3;
+    if (x != 12) ok = 0;
+    x *= 2;
+    if (x != 24) ok = 0;
+    x /= 4;
+    if (x != 6) ok = 0;
+    x &= 3;
+    if (x != 2) ok = 0;
+    x |= 8;
+    if (x != 10) ok = 0;
+    x ^= 15;
+    if (x != 5) ok = 0;
+    x <<= 2;
+    if (x != 20) ok = 0;
+    x >>= 1;
+    if (x != 10) ok = 0;
+    Box b;
+    b.v = 1;
+    b.v += 7;
+    if (b.v != 8) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

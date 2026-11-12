@@ -1,0 +1,26 @@
+// Test array bounds check emission and normal indexed execution
+
+u32 read_idx(u32 idx) {
+    u32 data[4];
+    data[0] = 10;
+    data[1] = 20;
+    data[2] = 30;
+    data[3] = 40;
+    return data[idx];
+}
+
+void main() {
+    u32 sum = 0;
+    u32 i = 0;
+    while (i < 4) {
+        sum = sum + read_idx(i);
+        i = i + 1;
+    }
+
+    if (sum != 100) {
+        trap(15);
+    }
+
+    // Clean exit
+    trap(0);
+}

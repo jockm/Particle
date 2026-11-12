@@ -1,0 +1,29 @@
+// test_arith_mul_div_mod: multiplication, unsigned division and modulo
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 a = 7;
+    u32 b = 6;
+    u32 p = a * b;
+    if (p != 42) ok = 0;
+    u32 n = 100;
+    u32 q = n / a;
+    if (q != 14) ok = 0;
+    u32 r = n % a;
+    if (r != 2) ok = 0;
+    u32 m = 1000000;
+    u32 k = 1000;
+    u32 big = m * k;
+    if (big != 1000000000) ok = 0;
+    u32 zero = 0;
+    u32 zq = zero / b;
+    if (zq != 0) ok = 0;
+    u32 one = n / n;
+    if (one != 1) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

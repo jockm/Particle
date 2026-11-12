@@ -1,0 +1,93 @@
+// apps/act/test_for_range_edge.act
+// Verification suite for Action numeric range edge-case boundaries
+
+void test_empty_range() {
+    u32 count = 0;
+    // 0..0 must execute 0 iterations
+    for (u32 i : 0..0) {
+        count += 1;
+    }
+    if (count != 0) {
+        trap(15);
+    }
+
+    // N..N must execute 0 iterations
+    for (u32 j : 42..42) {
+        count += 1;
+    }
+    if (count != 0) {
+        trap(15);
+    }
+}
+
+void test_inverted_range() {
+    u32 executed = 0;
+    // start > end: SLT unsigned comparison fails immediately on entry
+    for (u32 i : 10..5) {
+        executed += 1;
+    }
+    if (executed != 0) {
+        trap(15);
+    }
+}
+
+void test_dynamic_bounds() {
+    u32 base = 3;
+    u32 span = 4;
+    u32 sum = 0;
+
+    // Evaluates 3 .. (3 + 4) => [3, 7) -> 3 + 4 + 5 + 6 = 18
+    for (u32 k : base..(base + span)) {
+        sum += k;
+    }
+    if (sum != 18) {
+        trap(15);
+    }
+}
+
+void test_consecutive_scopes() {
+    u32 total = 0;
+
+    // First loop using induction variable 'n'
+    for (u32 n : 0..4) {
+        total += n; // 0 + 1 + 2 + 3 = 6
+    }
+
+    // Second consecutive loop reusing same name 'n'
+    for (u32 n : 10..13) {
+        total += n; // 10 + 11 + 12 = 33 -> total 39
+    }
+
+    if (total != 39) {
+        trap(15);
+    }
+}
+
+void test_nested_break_stability() {
+    u32 outer_count = 0;
+    u32 inner_accum = 0;
+
+    for (u32 out : 0..3) {
+        outer_count += 1;
+        for (u32 inn : 0..10) {
+            if (inn == 2) {
+                break; // Break inner loop after 0, 1
+            }
+            inner_accum += 1;
+        }
+    }
+
+    // outer executes 3 times; inner executes 2 times per outer loop -> 6
+    if (outer_count != 3 || inner_accum != 6) {
+        trap(15);
+    }
+}
+
+void main() {
+    test_empty_range();
+    test_inverted_range();
+    test_dynamic_bounds();
+    test_consecutive_scopes();
+    test_nested_break_stability();
+    trap(0); // Clean pass
+}

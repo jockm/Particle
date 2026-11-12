@@ -1,0 +1,32 @@
+// test_struct_by_reference: records are passed by reference, so callee changes are visible
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+void bump(Point p) {
+    p.x += 1;
+    p.y = 99;
+}
+
+u32 total(Point p) {
+    return p.x + p.y;
+}
+
+void main() {
+    u32 ok = 1;
+    Point pt;
+    pt.x = 10;
+    pt.y = 20;
+    bump(pt);
+    if (pt.x != 11) ok = 0;
+    if (pt.y != 99) ok = 0;
+    if (total(pt) != 110) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

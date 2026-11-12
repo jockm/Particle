@@ -1,0 +1,27 @@
+// test_array_of_structs: arrays whose elements are records
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+    u32 y;
+};
+
+void main() {
+    u32 ok = 1;
+    Point pts[3];
+    pts[0].x = 1;
+    pts[1].x = 5;
+    pts[2].y = 8;
+    u32 k = 1;
+    pts[k].y = 6;
+    if (pts[0].x != 1) ok = 0;
+    if (pts[1].x != 5) ok = 0;
+    if (pts[1].y != 6) ok = 0;
+    if (pts[2].y != 8) ok = 0;
+    if (pts[2].x != 0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

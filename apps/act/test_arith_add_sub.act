@@ -1,0 +1,22 @@
+// test_arith_add_sub: addition and subtraction of u32 values
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 a = 100;
+    u32 b = 58;
+    u32 s = a + b;
+    if (s != 158) ok = 0;
+    u32 d = a - b;
+    if (d != 42) ok = 0;
+    u32 z = b - b;
+    if (z != 0) ok = 0;
+    u32 big = 4000000000;
+    u32 c = big + a;
+    if (c != 4000000100) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

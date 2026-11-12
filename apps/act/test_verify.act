@@ -1,0 +1,27 @@
+// test_verify: verify passes at the top level and inside functions (the test is that it compiles)
+// Passes with trap(0); fails with trap(15).
+
+const u32 LIMIT = 1024;
+enum Mode { M_IDLE, M_RUN, M_STOP = 8 };
+
+type Header {
+    u16 id;
+    u16 flags;
+    u32 length;
+};
+
+verify(LIMIT <= 4096, "limit too large");
+verify(M_STOP == 8, "enum numbering changed");
+verify(sizeof(Header) == 8, "Header must be 8 bytes");
+verify(LIMIT / 2 == 512 && M_RUN == 1, "combined check");
+
+void main() {
+    u32 ok = 1;
+    verify(sizeof(u16) == 2, "u16 is two bytes");
+    verify(LIMIT > M_STOP, "ordering");
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

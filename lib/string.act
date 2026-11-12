@@ -7,6 +7,10 @@
 
 // Copy null-terminated payload from src into dst, respecting dst.capacity.
 void string_copy(string dst[], string src) {
+    // No room even for the terminator (capacity - 1 would wrap around)
+    if (dst.capacity == 0) {
+        return;
+    }
     u32 max_chars = dst.capacity - 1;
     u32 i = 0;
     while (i < max_chars) {
@@ -22,6 +26,10 @@ void string_copy(string dst[], string src) {
 
 // Append null-terminated payload from src to dst, respecting dst.capacity.
 void string_concat(string dst[], string src) {
+    // No room even for the terminator (capacity - 1 would wrap around)
+    if (dst.capacity == 0) {
+        return;
+    }
     u32 max_chars = dst.capacity - 1;
     u32 dst_idx = dst.len;
     u32 src_idx = 0;

@@ -1,0 +1,40 @@
+type BaseDevice {
+    u32 id;
+    u32 val;
+};
+
+u32 BaseDevice.get_val() {
+    return this.val;
+}
+
+type Controller {
+    BaseDevice;
+    u32 val; // Shadows BaseDevice.val
+};
+
+// Overrides BaseDevice.get_val()
+u32 Controller.get_val() {
+    return this.val * 2;
+}
+
+void main() {
+    Controller c;
+    c.id = 42;
+
+    // Direct access to outer field:
+    c.val = 100;
+
+    // Explicit access to shadowed embedded field:
+    c.BaseDevice.val = 5;
+
+    // Calls Controller.get_val() override (returns 100 * 2 = 200):
+    u32 v_outer = c.get_val();
+
+    // Calls BaseDevice.get_val() directly (returns 5):
+    u32 v_base = c.BaseDevice.get_val();
+
+    // Verify both: 200 + 5 + 42 = 247 (0x00F7)
+    u32 total = v_outer + v_base + c.id;
+
+    trap(0);
+}

@@ -22,6 +22,12 @@ class ParticleAssembler {
   /// Current Program Counter tracking byte address (defaults to 0x00000100).
   int pc = 0;
 
+  /// Symbol defined by the assembler after laying out all source files: the
+  /// first free byte past everything assembled, aligned to 4. The Action
+  /// runtime allocator (lib/alloc.asm) starts the heap there, so no code or
+  /// data from any input file lies inside the heap.
+  static const String imageEndSymbol = '__image_end';
+
   ParticleAssembler(this.prep);
 
   /// Resolves a register token (e.g. "R0", "r14", "sp") to its 4-bit index.
@@ -93,6 +99,7 @@ class ParticleAssembler {
     // PASS 1: Symbol Calculation & Address Resolution
     // -------------------------------------------------------------------------
     pc = 0x00000100;
+    var imageEnd = pc;
     for (final entry in processedLines) {
       var line = entry.$3;
 
@@ -101,6 +108,12 @@ class ParticleAssembler {
         final (labelPart, rest) = splitLabel(line);
         if (labelPart == null) break;
         if (labelPart.isNotEmpty) {
+          if (labelPart == imageEndSymbol) {
+            throw AssemblerError(
+                "'$imageEndSymbol' is defined by the assembler and cannot be used as a label",
+                entry.$1,
+                entry.$2);
+          }
           symbols[labelPart] = pc;
         }
         line = rest;
@@ -138,7 +151,13 @@ class ParticleAssembler {
         // Native Particle RISC instructions are 16 bits (2 bytes)
         pc += 2;
       }
+      // Highest address reached; an .org back to a lower address does not
+      // lower the end of the image
+      if (pc > imageEnd) imageEnd = pc;
     }
+
+    // End of the whole image, across all source files, aligned to 4
+    symbols[imageEndSymbol] = (imageEnd + 3) & ~3;
 
     // -------------------------------------------------------------------------
     // PASS 2: Code Emission, Word Assembly & Listing Formatting
@@ -645,22 +664,23 @@ class ParticleAssembler {
       return (0xE0 << 8) | (rr << 4) | (chan & 0x0F);
     }
 
+    // Register-channel FIFO forms use the opcodes of spec 4.10
     if (mnem == 'FIFO.STAT') {
       final rr = getR(0);
       final rl = ops.length > 1 ? parseReg(ops[1], fname, lno) : 0;
-      return (0xE2 << 8) | (rr << 4) | rl;
+      return (0xE4 << 8) | (rr << 4) | rl;
     }
 
     if (mnem == 'FIFO.TRYR') {
       final rr = getR(0);
       final rl = ops.length > 1 ? parseReg(ops[1], fname, lno) : 0;
-      return (0xE3 << 8) | (rr << 4) | rl;
+      return (0xE6 << 8) | (rr << 4) | rl;
     }
 
     if (mnem == 'FIFO.TRYW') {
       final rr = getR(0);
       final rl = ops.length > 1 ? parseReg(ops[1], fname, lno) : 0;
-      return (0xE4 << 8) | (rr << 4) | rl;
+      return (0xE7 << 8) | (rr << 4) | rl;
     }
 
     if (mnem == 'MBOX') {

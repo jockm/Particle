@@ -1,0 +1,37 @@
+// test_const_define: consts (integer, hex, negative, flag) used where literals go, and inline functions in place of function-like macros
+// Passes with trap(0); fails with trap(15).
+
+const u32 SIZE = 5;
+const u32 MASK = 0xF0;
+const s32 OFFSET = -2;
+const u32 FLAG = 1;
+
+inline u32 SQR(u32 x) {
+    return x * x;
+}
+
+inline u32 ADD3(u32 a, u32 b, u32 c) {
+    return a + b + c;
+}
+
+void main() {
+    u32 ok = 1;
+    u32 arr[SIZE];
+    if (arr.len != 5) ok = 0;
+    u32 v = MASK;
+    if (v != 0xF0) ok = 0;
+    s32 o = OFFSET;
+    if (o != -2) ok = 0;
+    u32 f = FLAG;
+    if (f != 1) ok = 0;
+    u32 n = 7;
+    u32 sq = SQR(n);
+    if (sq != 49) ok = 0;
+    u32 sum = ADD3(n, 1, 2);
+    if (sum != 10) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

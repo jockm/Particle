@@ -1,0 +1,55 @@
+// test_fifo: writefifo, readfifo and tryreadfifo(channel, variable).
+// tryreadfifo returns 1 and stores into the variable when data is waiting,
+// otherwise returns 0 and leaves the variable alone. Channels may be consts.
+// Passes with trap(0); fails with trap(15).
+
+const u32 CHAN = 2;
+
+type Box {
+    u8 tag;
+    u32 val;
+};
+
+void main() {
+    u32 ok = 1;
+    u32 x = 77;
+
+    // Empty channel: status 0, x unchanged
+    if (tryreadfifo(CHAN, x) != 0) ok = 0;
+    if (x != 77) ok = 0;
+
+    writefifo(CHAN, 1234);
+    writefifo(CHAN, 0x41);
+    writefifo(CHAN, 99);
+
+    if (tryreadfifo(CHAN, x) != 1) ok = 0;
+    if (x != 1234) ok = 0;
+
+    // Into a narrow field of a record
+    Box b;
+    b.val = 5;
+    if (tryreadfifo(CHAN, b.tag) != 1) ok = 0;
+    if (b.tag != 0x41) ok = 0;
+    if (b.val != 5) ok = 0;
+
+    // Into an array element, used in a condition
+    u32 arr[2];
+    if (tryreadfifo(CHAN, arr[1]) == 1) {
+        if (arr[1] != 99) ok = 0;
+    } else {
+        ok = 0;
+    }
+
+    // Drained again
+    if (tryreadfifo(CHAN, x) != 0) ok = 0;
+
+    // Blocking read
+    writefifo(3, 42);
+    if (readfifo(3) != 42) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

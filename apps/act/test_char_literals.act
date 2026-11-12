@@ -1,0 +1,25 @@
+// test_char_literals: character literals and escapes
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 c = 'A';
+    if (c != 65) ok = 0;
+    c = '0';
+    if (c != 48) ok = 0;
+    c = '\n';
+    if (c != 10) ok = 0;
+    c = '\t';
+    if (c != 9) ok = 0;
+    c = '\0';
+    if (c != 0) ok = 0;
+    c = '\\';
+    if (c != 92) ok = 0;
+    c = '\'';
+    if (c != 39) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

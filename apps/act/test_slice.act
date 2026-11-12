@@ -1,0 +1,56 @@
+// apps/act/test_slice.act
+// Test suite for Action open array slices (arr[start..end])
+
+u32 sum_slice(u32 buf[]) {
+    u32 total = 0;
+    u16 i = 0;
+    while (i < buf.len) {
+        total += buf[i];
+        i += 1;
+    }
+    return total;
+}
+
+u32 sum_subslice(u32 buf[], u16 s, u16 e) {
+    return sum_slice(buf[s..e]);
+}
+
+void zero_slice(u32 buf[]) {
+    u16 i = 0;
+    while (i < buf.len) {
+        buf[i] = 0;
+        i += 1;
+    }
+}
+
+void main() {
+    u32 arr[8];
+    u16 i = 0;
+    while (i < 8) {
+        arr[i] = (i + 1) * 10; // [10, 20, 30, 40, 50, 60, 70, 80]
+        i += 1;
+    }
+
+    // 1. Static slice of local array: arr[2..5] -> [30, 40, 50], sum = 120
+    u32 s1 = sum_slice(arr[2..5]);
+    if (s1 != 120) {
+        trap(15);
+    }
+
+    // 2. Dynamic slice forwarding inside callee: subslice [1..4] of arr[1..6] -> [30, 40, 50], sum = 120
+    u32 s2 = sum_subslice(arr[1..6], 1, 4);
+    if (s2 != 120) {
+        trap(15);
+    }
+
+    // 3. Mutate through slice: zero out arr[3..6] -> arr[3], arr[4], arr[5]
+    zero_slice(arr[3..6]);
+
+    if (arr[2] != 30 || arr[3] != 0 || arr[4] != 0 || arr[5] != 0 || arr[6] != 70) {
+        trap(15);
+    }
+
+    // Pass: Signal completion via Trap 0 with code 0xCAFE
+    asm("LOAD32 R1, 0x0000CAFE");
+    trap(0);
+}

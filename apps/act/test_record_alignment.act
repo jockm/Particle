@@ -1,0 +1,128 @@
+// test_record_alignment: record fields are aligned to their size, records
+// align to their most-aligned field and are padded to it, so mixed-width
+// records work in every place a record can live: locals, arrays of
+// records, the heap, globals, parameters, methods and embedded records.
+// A misaligned access raises trap 14, whose handler fails the test.
+// Passes with trap(0); fails with trap(15).
+
+type Mixed {
+    u8 b;           // offset 0
+    u16 w;          // offset 2
+    u32 g;          // offset 4
+    u8 tail;        // offset 8; size padded to 12
+};
+
+type Inner {
+    u16 h;          // offset 0
+    u32 v;          // offset 4; size 8
+};
+
+type Outer {
+    u8 tag;         // offset 0
+    Inner in;       // offset 4 (Inner aligns to 4)
+    u16 last;       // offset 12; size padded to 16
+};
+
+type Base {
+    u16 id;
+    u32 val;
+};
+
+type Derived {
+    u8 kind;
+    Base;           // embedded at offset 4
+};
+
+Mixed g_one;
+Mixed g_many[3];
+
+trap(14) on_misaligned() {
+    trap(15);
+}
+
+u32 Mixed.sum() {
+    return this.b + this.w + this.g + this.tail;
+}
+
+void fill(Mixed m, u32 k) {
+    m.b = k;
+    m.w = k * 100;
+    m.g = k * 100000;
+    m.tail = k + 1;
+}
+
+u32 total(Mixed m) {
+    return m.b + m.w + m.g + m.tail;
+}
+
+void main() {
+    u32 ok = 1;
+
+    if (sizeof(Mixed) != 12) ok = 0;
+    if (sizeof(Inner) != 8) ok = 0;
+    if (sizeof(Outer) != 16) ok = 0;
+    if (sizeof(Derived) != 12) ok = 0;
+
+    // Local record, through a parameter and a method
+    Mixed m;
+    fill(m, 3);
+    if (m.b != 3 || m.w != 300 || m.g != 300000 || m.tail != 4) ok = 0;
+    if (total(m) != 300307) ok = 0;
+    if (m.sum() != 300307) ok = 0;
+
+    // Local array of records: stride is the padded size
+    Mixed arr[4];
+    for (u32 i : 0..4) {
+        fill(arr[i], i + 1);
+    }
+    for (u32 i : 0..4) {
+        if (arr[i].b != i + 1) ok = 0;
+        if (arr[i].w != (i + 1) * 100) ok = 0;
+        if (arr[i].g != (i + 1) * 100000) ok = 0;
+        if (arr[i].tail != i + 2) ok = 0;
+    }
+
+    // Heap record and heap array of records
+    Mixed hm = Mixed.create();
+    fill(hm, 5);
+    if (hm.sum() != 500511) ok = 0;
+    Mixed ha[] = Mixed.createArray(3);
+    for (u32 i : 0..3) {
+        fill(ha[i], i + 6);
+    }
+    if (ha[0].g != 600000 || ha[2].tail != 9 || ha[1].w != 700) ok = 0;
+    hm.destroy();
+    ha.destroyArray();
+
+    // Globals: a record and an array of records
+    fill(g_one, 2);
+    for (u32 i : 0..3) {
+        fill(g_many[i], i + 7);
+    }
+    if (g_one.sum() != 200205) ok = 0;
+    if (g_many[0].g != 700000 || g_many[2].g != 900000) ok = 0;
+    if (g_many[1].tail != 9 || g_many[2].w != 900) ok = 0;
+    if (g_one.tail != 3) ok = 0;   // untouched by the array next to it
+
+    // Nested record at an aligned offset
+    Outer o;
+    o.tag = 0xAB;
+    o.in.h = 0x1234;
+    o.in.v = 0xCAFEBABE;
+    o.last = 0x5678;
+    if (o.tag != 0xAB || o.in.h != 0x1234) ok = 0;
+    if (o.in.v != 0xCAFEBABE || o.last != 0x5678) ok = 0;
+
+    // Embedded record: promoted fields at an aligned offset
+    Derived d;
+    d.kind = 1;
+    d.id = 0x4242;
+    d.val = 77777;
+    if (d.kind != 1 || d.id != 0x4242 || d.val != 77777) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

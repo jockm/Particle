@@ -51,7 +51,7 @@ _rt_alloc:
     FBRA.Z  R2, ._alloc_do_init_break
     FBRA    ._alloc_have_break
 ._alloc_do_init_break:
-    LOAD32  R2, _heap_start
+    LOAD32  R2, __image_end     ; Heap starts at the end of the image (defined by pasm)
     LOAD32  R13, _heap_ptr
     LD32    (R13), R2
     LOAD32  R13, _last_phys_size
@@ -697,7 +697,8 @@ _heap_ptr:
     .word 0
 _last_phys_size:
     .word 0
-_heap_start:
-    .word 0x00010000
+; The heap has no label here: it starts at __image_end, which pasm defines as
+; the first free byte after everything assembled (all source files), aligned
+; to 4. It grows up toward the stack.
 
 .endif

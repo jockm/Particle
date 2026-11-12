@@ -1,0 +1,15 @@
+name: action
+description: >-
+  Compiler for the Action systems language, targeting the Particle 32-bit RISC
+  processor through a pluggable backend.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+executables:
+  action: main
+
+dev_dependencies:
+  test: ^1.25.0

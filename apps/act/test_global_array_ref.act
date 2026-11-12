@@ -1,0 +1,24 @@
+// test_global_array_ref: a global array reference holding a heap array
+// Passes with trap(0); fails with trap(15).
+
+u32 g[];
+
+void init() {
+    g = u32.createArray(4);
+}
+
+void main() {
+    u32 ok = 1;
+    init();
+    g[1] = 5;
+    if (g[1] != 5) ok = 0;
+    if (g.len != 4) ok = 0;
+    g = u32.createArray(2);
+    g[0] = 9;
+    if (g[0] != 9) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

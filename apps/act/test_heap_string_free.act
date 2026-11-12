@@ -1,0 +1,57 @@
+// test_heap_string_free: destroying a heap string frees its whole block,
+// capacity header included, so the allocator hands the same block out
+// again for the next request of that size.
+// Passes with trap(0); fails with trap(15).
+
+// The string's address: it arrives in R1 and is returned unchanged.
+u32 addr_of(string s) {
+    asm("    ; R1 already holds the address");
+}
+
+void main() {
+    u32 ok = 1;
+    string s = string.create(20);
+    s[0] = 'h';
+    s[1] = 'i';
+    s[2] = 0;
+    if (s.capacity != 20) ok = 0;
+    if (s.len != 2) ok = 0;
+    u32 first = addr_of(s);
+    s.destroy();
+
+    string t = string.create(20);
+    if (addr_of(t) != first) ok = 0;   // the freed block is reused
+    t.destroy();
+
+    // A block freed between two live blocks is reused, and its neighbours
+    // are untouched
+    string a = string.create(40);
+    string b = string.create(40);
+    string c = string.create(40);
+    a[0] = 'a';
+    a[1] = 0;
+    c[0] = 'c';
+    c[1] = 0;
+    u32 mid = addr_of(b);
+    b.destroy();
+    string d = string.create(40);
+    if (addr_of(d) != mid) ok = 0;
+    if (a[0] != 'a' || c[0] != 'c') ok = 0;
+    if (a.capacity != 40 || c.capacity != 40 || d.capacity != 40) ok = 0;
+    a.destroy();
+    c.destroy();
+    d.destroy();
+
+    // Repeated create/destroy keeps reusing the same block
+    for (u32 i : 0..50) {
+        string u = string.create(20);
+        if (addr_of(u) != first) ok = 0;
+        u.destroy();
+    }
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

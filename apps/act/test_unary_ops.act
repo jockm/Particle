@@ -1,0 +1,28 @@
+// test_unary_ops: unary minus, bitwise NOT and logical NOT
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 x = 5;
+    u32 nx = -x;
+    if (nx != 0xFFFFFFFB) ok = 0;
+    s32 v = 5;
+    s32 nv = -v;
+    s32 t = nv + v;
+    if (t != 0) ok = 0;
+    u32 zero = 0;
+    u32 seven = 7;
+    u32 n1 = !zero;
+    if (n1 != 1) ok = 0;
+    u32 n2 = !seven;
+    if (n2 != 0) ok = 0;
+    u32 b = ~seven;
+    if (b != 0xFFFFFFF8) ok = 0;
+    u32 dbl = - -x;
+    if (dbl != 5) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

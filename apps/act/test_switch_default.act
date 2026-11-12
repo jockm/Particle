@@ -1,0 +1,26 @@
+// test_switch_default: default runs when no case matches
+// Passes with trap(0); fails with trap(15).
+
+u32 pick(u32 v) {
+    u32 r = 0;
+    switch (v) {
+        case 1:
+            r = 1;
+            break;
+        default:
+            r = 99;
+    }
+    return r;
+}
+
+void main() {
+    u32 ok = 1;
+    if (pick(1) != 1) ok = 0;
+    if (pick(7) != 99) ok = 0;
+    if (pick(0) != 99) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

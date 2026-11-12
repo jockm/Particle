@@ -1,0 +1,64 @@
+// test_method_slice.act - Test open array slices passed to type-bound methods
+
+type Multiplier {
+    u32 factor;
+}
+
+void Multiplier.scale_buf(u32 buf[]) {
+    u32 i = 0;
+    while (i < buf.len) {
+        buf[i] = buf[i] * this.factor;
+        i = i + 1;
+    }
+}
+
+u32 Multiplier.sum_slice(u32 buf[]) {
+    u32 total = 0;
+    u32 i = 0;
+    while (i < buf.len) {
+        total = total + buf[i];
+        i = i + 1;
+    }
+    return total * this.factor;
+}
+
+void main() {
+    Multiplier mult;
+    mult.factor = 2;
+
+    u32 arr[8];
+    u32 i = 0;
+    while (i < 8) {
+        arr[i] = i + 1; // 1, 2, 3, 4, 5, 6, 7, 8
+        i = i + 1;
+    }
+
+    // Pass slice arr[2..6] (elements at index 2, 3, 4, 5 -> values 3, 4, 5, 6)
+    // Scale by 2 -> becomes 6, 8, 10, 12
+    mult.scale_buf(arr[2..6]);
+
+    // Verify un-sliced prefix untouched
+    if (arr[0] != 1 || arr[1] != 2) {
+        trap(15);
+    }
+
+    // Verify scaled slice elements
+    if (arr[2] != 6 || arr[3] != 8 || arr[4] != 10 || arr[5] != 12) {
+        trap(15);
+    }
+
+    // Verify un-sliced suffix untouched
+    if (arr[6] != 7 || arr[7] != 8) {
+        trap(15);
+    }
+
+    // Call method returning a computed scalar over a sub-slice
+    // arr[2..5] -> elements: 6, 8, 10 (sum = 24), factor = 2 -> total = 48
+    u32 res = mult.sum_slice(arr[2..5]);
+    if (res != 48) {
+        trap(15);
+    }
+
+    // Pass: trigger clean exit with signature code
+    trap(0);
+}

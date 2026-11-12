@@ -1,0 +1,20 @@
+// test_import: import loads a module once; repeated and circular imports are ignored
+// Passes with trap(0); fails with trap(15).
+
+import "modules/import_helper.act";
+import "modules/import_helper.act";
+
+void main() {
+    u32 ok = 1;
+    if (helper_triple(4) != 12) ok = 0;
+    if (HELPER_CONST != 77) ok = 0;
+    HelperPair p;
+    p.left = 1;
+    p.right = 2;
+    if (helper_sum(p) != 3) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,30 @@
+// test_multidim_arrays: two- and three-dimensional arrays are row-major
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 grid[3][4];
+    for (u32 i : 0..3) {
+        for (u32 j : 0..4) {
+            u32 v = i * 10;
+            v = v + j;
+            grid[i][j] = v;
+        }
+    }
+    if (grid[0][0] != 0) ok = 0;
+    if (grid[1][2] != 12) ok = 0;
+    if (grid[2][3] != 23) ok = 0;
+    if (grid.len != 3) ok = 0;
+    if (grid.capacity != 4) ok = 0;
+    u8 cube[2][3][4];
+    cube[1][2][3] = 77;
+    cube[0][0][0] = 11;
+    if (cube[1][2][3] != 77) ok = 0;
+    if (cube[0][0][0] != 11) ok = 0;
+    if (cube[1][2][2] != 0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

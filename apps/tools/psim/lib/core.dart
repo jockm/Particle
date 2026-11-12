@@ -59,6 +59,22 @@ class ParticleCore {
 
   int cycleCount = 0;
   bool halted = false;
+
+  /// Why the core halted, as the simulator's exit code: the trap number for
+  /// a TRAP instruction that ends the run (0 or 15), or [exitPcOutOfMemory].
+  int? haltCode;
+
+  /// When true (the default) a `TRAP 0` instruction ends the run with exit
+  /// code 0. When false it jumps to the reset vector like any other trap.
+  bool exitOnReset = true;
+
+  /// Exit code: the PC ran past the end of memory without a trap.
+  static const int exitPcOutOfMemory = 18;
+
+  /// Set when a trap is taken while an instruction executes (for example a
+  /// misaligned data access), so the instruction does not overwrite the
+  /// vector address with its own next PC.
+  bool _trapTaken = false;
   bool stalled = false;
 
   ParticleCore({this.memSize = 0x20000, int numFifos = 4})
@@ -77,32 +93,39 @@ class ParticleCore {
     pc = trapBase;
     cycleCount = 0;
     halted = false;
+    haltCode = null;
     stalled = false;
     for (final f in fifos) {
       f.clear();
     }
   }
 
-  void triggerTrap(int trapIdx, [int? returnPc]) {
+  /// Takes trap [trapIdx]. Only a TRAP instruction ([fromInstruction])
+  /// numbered 0 (unless [exitOnReset] is off) or 15 ends the run; every
+  /// other trap, and every fault raised by the core, goes to its vector.
+  void triggerTrap(int trapIdx, [int? returnPc, bool fromInstruction = false]) {
     final ret = returnPc ?? ((pc + 2) & mask32);
     r[14] = ret;
 
-    if (trapIdx == 14) {
+    if (fromInstruction && trapIdx == 0 && exitOnReset) {
       final r1Hex = r[1].toRadixString(16).toUpperCase().padLeft(8, "0");
       final pcHex = ret.toRadixString(16).toUpperCase().padLeft(8, "0");
-      stdout.writeln("\n[SIM] Debug Quit Trap 14 triggered at PC: 0x$pcHex (R1=0x$r1Hex, Cycles=$cycleCount)");
+      stdout.writeln("\n[SIM] Reset Trap 0 triggered at PC: 0x$pcHex (R1=0x$r1Hex, Cycles=$cycleCount)");
       halted = true;
+      haltCode = 0;
       return;
     }
 
-    if (trapIdx == 15) {
+    if (fromInstruction && trapIdx == 15) {
       final pcHex = ret.toRadixString(16).toUpperCase().padLeft(8, "0");
       stdout.writeln("\n[SIM] Out-of-Bounds / Sentinel Trap 15 triggered at PC: 0x$pcHex (Cycles=$cycleCount)");
       halted = true;
+      haltCode = 15;
       return;
     }
 
     pc = (trapBase + (trapIdx * trapStride)) & mask32;
+    _trapTaken = true;
   }
 
   int read8(int addr) {
@@ -158,14 +181,19 @@ class ParticleCore {
 
   bool step() {
     if (halted || pc >= memSize) {
+      if (!halted) haltCode = exitPcOutOfMemory;
       halted = true;
       return false;
     }
 
     if ((pc & 1) != 0) {
       triggerTrap(14, pc);
+      _trapTaken = false;
+      cycleCount++;
       return true;
     }
+
+    _trapTaken = false;
 
     final inst = read16(pc);
     final opcode = (inst >> 8) & 0xFF;
@@ -340,7 +368,8 @@ class ParticleCore {
     } else if (opcode == 0x53) {
       final n = toSigned32(r[rr]);
       final d = toSigned32(r[rl]);
-      r[rr] = (d == 0) ? toUnsigned32(n) : toUnsigned32(n % d);
+      // remainder() truncates: the result takes the sign of the dividend
+      r[rr] = (d == 0) ? toUnsigned32(n) : toUnsigned32(n.remainder(d));
     } else if (opcode == 0x54) {
       final immS = (imm4 < 8) ? imm4 : imm4 - 16;
       r[rr] = (toSigned32(r[rr]) + immS) & mask32;
@@ -354,7 +383,8 @@ class ParticleCore {
     } else if (opcode == 0x57) {
       final immS = (imm4 < 8) ? imm4 : imm4 - 16;
       final n = toSigned32(r[rr]);
-      r[rr] = (immS == 0) ? toUnsigned32(n) : toUnsigned32(n % immS);
+      // remainder() truncates: the result takes the sign of the dividend
+      r[rr] = (immS == 0) ? toUnsigned32(n) : toUnsigned32(n.remainder(immS));
 
     // ---------------- Shifts & Logic (0x60 - 0x73) ----------------
     } else if (opcode == 0x60) {
@@ -515,10 +545,14 @@ class ParticleCore {
       r[rl] = nextPc;
       nextPc = target;
     } else if (opcode == 0xA2) {
-      triggerTrap(r[rr] & 0x0F, nextPc);
+      triggerTrap(r[rr] & 0x0F, nextPc, true);
+      _trapTaken = false;
+      cycleCount++;
       return true;
     } else if (opcode == 0xA3) {
-      triggerTrap(imm4 & 0x0F, nextPc);
+      triggerTrap(imm4 & 0x0F, nextPc, true);
+      _trapTaken = false;
+      cycleCount++;
       return true;
     } else if (opcode == 0xA4) {
       nextPc = (pc + (toSigned32(r[rr]) * 2)) & mask32;
@@ -643,7 +677,13 @@ class ParticleCore {
       }
     }
 
-    pc = nextPc;
+    // A fault taken during the instruction has already set the PC to its
+    // vector
+    if (_trapTaken) {
+      _trapTaken = false;
+    } else {
+      pc = nextPc;
+    }
     cycleCount++;
     return true;
   }

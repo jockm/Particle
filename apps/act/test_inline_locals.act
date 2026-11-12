@@ -1,0 +1,41 @@
+// test_inline_locals: inline functions may declare locals, including
+// arrays; they do not disturb the caller's variables of the same name.
+// Passes with trap(0); fails with trap(15).
+
+inline u32 square_plus_one(u32 v) {
+    u32 t = v * v;
+    return t + 1;
+}
+
+inline u32 sum3(u32 a, u32 b, u32 c) {
+    u32 tmp[3];
+    tmp[0] = a;
+    tmp[1] = b;
+    tmp[2] = c;
+    u32 s = 0;
+    for (u32 i : 0..3) {
+        s += tmp[i];
+    }
+    if (s > 100) {
+        return 100;
+    }
+    return s;
+}
+
+void main() {
+    u32 ok = 1;
+    u32 t = 7;
+    u32 tmp[2];
+    tmp[1] = 44;
+    if (square_plus_one(3) != 10) ok = 0;
+    if (t != 7) ok = 0;
+    if (sum3(1, 2, 3) != 6) ok = 0;
+    if (sum3(50, 50, 50) != 100) ok = 0;
+    if (tmp[1] != 44) ok = 0;
+    if (square_plus_one(t) + sum3(t, t, t) != 50 + 21) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,50 @@
+// apps/act/test_compiler.act
+
+u32 g_counter = 0;
+u32 g_status = 0;
+
+void print_char(u8 ch) {
+    writefifo(0, ch);
+}
+
+void print_str(string s) {
+    u32 i = 0;
+    while (s[i] != 0) {
+        print_char(s[i]);
+        i = i + 1;
+    }
+}
+
+u32 compute_sum(u32 a, u32 b) {
+    u32 temp = 0;
+    temp = a + b;
+    return temp;
+}
+
+void main() {
+    u32 sum = 0;
+    u32 i = 0;
+
+    print_str("Beginning test\n");
+
+    sum = compute_sum(10, 20);
+
+    while (i < 5) {
+        g_counter = g_counter + 1;
+        i = i + 1;
+    }
+
+    if (sum == 30) {
+        if (g_counter == 5) {
+            g_status = 0xCAFE;
+            print_str("PASS: test_compiler passed. Throwing Trap 0 to quit simulation.\n");
+            
+            trap(0);
+            return;
+        }
+    }
+
+    print_str("FAIL: test_compiler failed. Throwing Trap 15 to quit simulation.\n");
+    trap(15);
+    return;
+}

@@ -1,0 +1,37 @@
+// =============================================================================
+// File: lib/protokernel.act
+// Description: Stackless Cooperative Protothreads for Action / Particle
+// Attribution & Lineage:
+// - Original Protothreads Architecture & Design: Adam Dunkels <adam@sics.se>
+// - ProtoKernel Action / Particle Architecture: Jock Murphy
+// =============================================================================
+
+const u16 PK_WAITING = 0;
+const u16 PK_YIELDED = 1;
+const u16 PK_EXITED  = 2;
+const u16 PK_ENDED   = 3;
+
+type pt {
+    u16 lc;
+};
+
+// Inline lifecycle initializer
+inline void pk_init(type pt p) {
+    p.lc = 0;
+}
+
+// Coroutine operations. The compiler generates these in place; they have no
+// bodies. Each returns from the calling coroutine, so they are used as
+// statements. `step` is a constant, unique within the coroutine.
+
+// Save the continuation at `step` and return PK_YIELDED. The next call
+// resumes after the yield.
+u16 yield(type pt p, u16 step);
+
+// Resume point `step`: if `cond` is false, return PK_WAITING; the next call
+// re-tests `cond` here. Continue once it is true.
+u16 wait_until(type pt p, u16 step, u32 cond);
+
+// Reset the continuation and return PK_EXITED. The next call starts the
+// coroutine from the beginning.
+u16 pk_exit(type pt p);

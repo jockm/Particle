@@ -1,0 +1,33 @@
+// test_string_params: strings passed to string and open-array string parameters, including literals
+// Passes with trap(0); fails with trap(15).
+
+u32 slen(string s) {
+    return s.len;
+}
+
+u32 count_l(string s[]) {
+    u32 n = 0;
+    for (u32 i : 0..s.len) {
+        if (s[i] == 'l') n += 1;
+    }
+    return n;
+}
+
+void shout(string s[]) {
+    s[0] = 'H';
+}
+
+void main() {
+    u32 ok = 1;
+    if (slen("abc") != 3) ok = 0;
+    string name[16] = "hello";
+    if (slen(name) != 5) ok = 0;
+    if (count_l(name) != 2) ok = 0;
+    shout(name);
+    if (name[0] != 'H') ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

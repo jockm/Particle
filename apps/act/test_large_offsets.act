@@ -1,0 +1,76 @@
+// test_large_offsets: field offsets, array strides, slice offsets and
+// coroutine steps of 16 or more. Loading such constants uses a LOAD macro,
+// which builds the value in R14; addresses held in R14 must survive it.
+// Passes with trap(0); fails with trap(15).
+
+import "lib/protokernel.act";
+
+type Big {
+    u32 pad[5];         // 20 bytes, so the fields below are at 20 and 24
+    u32 a;
+    u16 b;
+};
+
+type Outer {
+    u8 head[17];
+    Big inner;          // at offset 17 (records are packed)
+};
+
+u32 sum_open(u32 xs[]) {
+    u32 s = 0;
+    for (u32 i : 0..xs.len) {
+        s += xs[i];
+    }
+    return s;
+}
+
+u16 stepper(type pt p) {
+    yield(p, 17);
+    yield(p, 300);
+}
+
+void main() {
+    u32 ok = 1;
+
+    Big big;
+    big.a = 11;
+    big.b = 22;
+    big.a += 5;
+    big.b *= 2;
+    if (big.a != 16 || big.b != 44) ok = 0;
+
+    Outer o;
+    o.inner.a = 7;
+    o.inner.a += 1;
+    o.inner.pad[4] = 9;
+    o.inner.pad[4] += 1;
+    if (o.inner.a != 8 || o.inner.pad[4] != 10) ok = 0;
+
+    // Array of 28-byte records: stride 28
+    Big many[3];
+    many[2].a = 5;
+    many[1].b = 6;
+    many[2].a += many[1].b;
+    if (many[2].a != 11 || many[1].b != 6) ok = 0;
+
+    // Slice whose start is computed and scaled by a large element size
+    u32 vals[40];
+    for (u32 i : 0..40) {
+        vals[i] = i;
+    }
+    u32 k = 9;
+    if (sum_open(vals[k * 2..k * 2 + 3]) != 18 + 19 + 20) ok = 0;
+
+    // Coroutine steps above 15
+    type pt t;
+    pk_init(t);
+    if (stepper(t) != PK_YIELDED || t.lc != 17) ok = 0;
+    if (stepper(t) != PK_YIELDED || t.lc != 300) ok = 0;
+    if (stepper(t) != PK_ENDED || t.lc != 0) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

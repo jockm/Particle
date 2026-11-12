@@ -1,0 +1,50 @@
+// test_local_zero_init: locals start at zero on every call, even after the stack was used
+// Passes with trap(0); fails with trap(15).
+
+u32 dirty() {
+    u32 a = 0xAAAAAAAA;
+    u32 b = 0xBBBBBBBB;
+    u32 c = 0xCCCCCCCC;
+    u32 d = 0xDDDDDDDD;
+    u32 e = 0xEEEEEEEE;
+    u32 r = a ^ b;
+    r = r ^ c;
+    r = r ^ d;
+    r = r ^ e;
+    return r;
+}
+
+u32 fresh() {
+    u32 a;
+    u32 b;
+    u32 c;
+    u32 d;
+    u32 e;
+    u32 r = a | b;
+    r = r | c;
+    r = r | d;
+    r = r | e;
+    return r;
+}
+
+u32 fresh_array() {
+    u32 arr[6];
+    u32 r = 0;
+    for (u32 i : 0..6) {
+        r = r | arr[i];
+    }
+    return r;
+}
+
+void main() {
+    u32 ok = 1;
+    u32 junk = dirty();
+    if (fresh() != 0) ok = 0;
+    junk = dirty();
+    if (fresh_array() != 0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

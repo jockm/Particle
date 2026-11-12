@@ -1,0 +1,24 @@
+// test_unsigned_narrow: u8 and u16 values are truncated on store and zero-extended on load
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u8 b = 255;
+    b = b + 1;
+    if (b != 0) ok = 0;
+    u8 c = 0x1234;
+    if (c != 0x34) ok = 0;
+    u16 w = 0x12345;
+    if (w != 0x2345) ok = 0;
+    u16 m = 0xFFFF;
+    u32 wide = m;
+    if (wide != 0xFFFF) ok = 0;
+    u8 top = 0x80;
+    u32 t = top;
+    if (t != 0x80) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

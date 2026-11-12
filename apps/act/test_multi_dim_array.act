@@ -1,0 +1,52 @@
+// Test multi-dimensional array layouts & row-major indexing
+
+u16 g_grid[3][3];
+
+void test_local_2d() {
+    u32 mat[3][4];
+    u32 r = 0;
+    while (r < 3) {
+        u32 c = 0;
+        while (c < 4) {
+            mat[r][c] = (r * 10) + c;
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    // Verify values
+    if (mat[0][0] != 0) { trap(15); }
+    if (mat[0][3] != 3) { trap(15); }
+    if (mat[1][2] != 12) { trap(15); }
+    if (mat[2][3] != 23) { trap(15); }
+}
+
+void test_global_2d() {
+    g_grid[0][0] = 100;
+    g_grid[1][2] = 250;
+    g_grid[2][1] = 500;
+
+    if (g_grid[0][0] != 100) { trap(15); }
+    if (g_grid[1][2] != 250) { trap(15); }
+    if (g_grid[2][1] != 500) { trap(15); }
+}
+
+void test_3d_cube() {
+    u8 cube[2][3][4];
+    cube[0][0][0] = 5;
+    cube[1][2][3] = 42;
+    cube[1][1][1] = 99;
+
+    if (cube[0][0][0] != 5) { trap(15); }
+    if (cube[1][2][3] != 42) { trap(15); }
+    if (cube[1][1][1] != 99) { trap(15); }
+}
+
+void main() {
+    test_local_2d();
+    test_global_2d();
+    test_3d_cube();
+
+    // Success
+    trap(0);
+}

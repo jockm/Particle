@@ -1,0 +1,31 @@
+import "lib/shapes.act";
+
+void Point.move(u32 dx, u32 dy) {
+    this.x = this.x + dx;
+    this.y = this.y + dy;
+}
+
+u32 Point.get_x() {
+    return this.x;
+}
+
+u32 Point.get_y() {
+    return this.y;
+}
+
+void main() {
+    Point pt;
+    pt.x = 100;
+    pt.y = 200;
+
+    pt.move(25, 50);
+
+    u32 px = pt.get_x();
+    u32 py = pt.get_y();
+
+    if (px == 125 && py == 250) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,29 @@
+// test_struct_array_field: array fields inside records
+// Passes with trap(0); fails with trap(15).
+
+type Buffer {
+    u32 count;
+    u32 vals[4];
+    u8 bytes[3];
+};
+
+void main() {
+    u32 ok = 1;
+    Buffer b;
+    b.count = 4;
+    for (u32 i : 0..4) {
+        b.vals[i] = i * 5;
+    }
+    b.bytes[2] = 0xAB;
+    if (b.vals[0] != 0) ok = 0;
+    if (b.vals[3] != 15) ok = 0;
+    if (b.bytes[2] != 0xAB) ok = 0;
+    if (b.count != 4) ok = 0;
+    if (b.vals.len != 4) ok = 0;
+    if (b.bytes.len != 3) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

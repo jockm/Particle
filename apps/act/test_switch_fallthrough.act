@@ -1,0 +1,33 @@
+// test_switch_fallthrough: each case ends with an implicit break;
+// `continue` falls through into the next case.
+// Passes with trap(0); fails with trap(15).
+
+u32 run(u32 v) {
+    u32 x = 0;
+    switch (v) {
+        case 1:
+            x += 1;
+            continue;
+        case 2:
+            x += 10;
+        case 3:
+            x += 100;
+            continue;
+        default:
+            x += 1000;
+    }
+    return x;
+}
+
+void main() {
+    u32 ok = 1;
+    if (run(1) != 11) ok = 0;
+    if (run(2) != 10) ok = 0;
+    if (run(3) != 1100) ok = 0;
+    if (run(9) != 1000) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

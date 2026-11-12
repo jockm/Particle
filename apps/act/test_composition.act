@@ -1,0 +1,41 @@
+type Engine {
+    u32 horsepower;
+    u32 fuel;
+};
+
+void Engine.refuel(u32 amount) {
+    this.fuel = this.fuel + amount;
+}
+
+u32 Engine.get_power() {
+    return this.horsepower;
+}
+
+type Chassis {
+    u32 weight;
+};
+
+type Car {
+    Engine;
+    Chassis;
+    u32 doors;
+};
+
+u32 Car.total_spec() {
+    return this.horsepower + this.weight + this.doors;
+}
+
+void main() {
+    Car c;
+    c.horsepower = 250;
+    c.fuel = 10;
+    c.weight = 1200;
+    c.doors = 4;
+
+    c.refuel(40);
+
+    u32 p = c.Engine.get_power();
+    u32 spec = c.total_spec();
+
+    trap(0);
+}

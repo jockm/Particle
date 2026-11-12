@@ -3661,6 +3661,8 @@ class CodeGen:
             self.emit(f"LD      R{target_reg}, R1")
 
 def main():
+    sys.stderr.write("[DEPRECATION] tools/act16c.py is deprecated in favor of compiled Dart psim in apps/tools/action.\n")
+
     parser = argparse.ArgumentParser(description="ACT16 Systems Language Compiler for Particle")
     parser.add_argument("sources", nargs="+", help="Input ACT16 source file(s) (.act / .c)")
     parser.add_argument("-o", "--output", default=None, help="Output assembly file (.asm)")

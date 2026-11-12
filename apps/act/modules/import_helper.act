@@ -1,0 +1,19 @@
+// Helper module for test_import.act. Not a test on its own.
+// Imports the test that imports it, to check that circular imports are harmless.
+import "../test_import.act";
+import "import_helper.act";
+
+const u32 HELPER_CONST = 77;
+
+type HelperPair {
+    u32 left;
+    u32 right;
+};
+
+u32 helper_triple(u32 v) {
+    return v * 3;
+}
+
+u32 helper_sum(HelperPair p) {
+    return p.left + p.right;
+}

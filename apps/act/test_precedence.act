@@ -1,0 +1,39 @@
+// test_precedence: operator precedence and left associativity (Action's rules, not C's)
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 a = 2;
+    u32 b = 3;
+    u32 c = 4;
+    // * binds tighter than +
+    u32 r = a * b + c;
+    if (r != 10) ok = 0;
+    // + binds tighter than <<
+    u32 one = 1;
+    r = one + one << a;
+    if (r != 8) ok = 0;
+    // bitwise & binds tighter than == (unlike C)
+    u32 x = 6;
+    u32 m = 3;
+    r = x & m == 2;
+    if (r != 1) ok = 0;
+    // & | ^ share one level, left to right: (5 | 2) & 3 == 3
+    u32 five = 5;
+    u32 two = 2;
+    r = five | two & m;
+    if (r != 3) ok = 0;
+    // - is left associative: (10 - 3) - 2 == 5
+    u32 ten = 10;
+    r = ten - b - two;
+    if (r != 5) ok = 0;
+    // / is left associative: (100 / 10) / 5 == 2
+    u32 h = 100;
+    r = h / ten / five;
+    if (r != 2) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

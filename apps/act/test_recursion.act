@@ -1,0 +1,28 @@
+// test_recursion: recursive functions
+// Passes with trap(0); fails with trap(15).
+
+u32 fact(u32 n) {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+
+u32 fib(u32 n) {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+void main() {
+    u32 ok = 1;
+    if (fact(5) != 120) ok = 0;
+    if (fact(10) != 3628800) ok = 0;
+    if (fib(10) != 55) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

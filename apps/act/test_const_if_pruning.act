@@ -1,0 +1,41 @@
+// test_const_if_pruning: if with a constant condition compiles only the taken branch (calls to undefined functions must disappear)
+// Passes with trap(0); fails with trap(15).
+
+const u32 DEBUG = 0;
+const u32 FEATURE = 1;
+const u32 LEGACY = 0;
+
+void main() {
+    u32 ok = 1;
+    if (DEBUG) {
+        undefined_debug_logger(1);
+        ok = 0;
+    }
+    if (FEATURE) {
+        ok = ok;
+    } else {
+        undefined_fallback();
+        ok = 0;
+    }
+    if (LEGACY) {
+        undefined_legacy();
+    }
+    if (sizeof(u32) == 4) {
+    } else {
+        undefined_size_handler();
+        ok = 0;
+    }
+    if (DEBUG || LEGACY) {
+        undefined_either();
+        ok = 0;
+    }
+    if (FEATURE && !DEBUG) {
+    } else {
+        ok = 0;
+    }
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

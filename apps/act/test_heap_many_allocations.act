@@ -1,0 +1,21 @@
+// test_heap_many_allocations: repeated allocate and free cycles do not corrupt data
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 keep[] = u32.createArray(4);
+    keep[0] = 0xCAFE;
+    for (u32 round : 0..20) {
+        u32 tmp[] = u32.createArray(8);
+        tmp[7] = round;
+        if (tmp[7] != round) ok = 0;
+        tmp.destroyArray();
+    }
+    if (keep[0] != 0xCAFE) ok = 0;
+    keep.destroyArray();
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

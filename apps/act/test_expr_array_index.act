@@ -1,0 +1,20 @@
+// test_expr_array_index: computed array indexes
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 arr[8];
+    for (u32 i : 0..8) {
+        arr[i] = i;
+    }
+    u32 j = 2;
+    u32 v = arr[j + 3];
+    if (v != 5) ok = 0;
+    arr[j * 3] = 99;
+    if (arr[6] != 99) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

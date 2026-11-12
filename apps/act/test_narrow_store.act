@@ -1,0 +1,34 @@
+// test_narrow_store: u8 and u16 array elements and record fields load and store the right width
+// Passes with trap(0); fails with trap(15).
+
+type Mixed {
+    u8 b;
+    u16 w;
+    u32 guard;
+};
+
+void main() {
+    u32 ok = 1;
+    u8 bytes[2];
+    bytes[0] = 0x1FF;
+    if (bytes[0] != 0xFF) ok = 0;
+    if (bytes[1] != 0) ok = 0;
+    u16 halves[2];
+    halves[0] = 0x12345;
+    if (halves[0] != 0x2345) ok = 0;
+    if (halves[1] != 0) ok = 0;
+    u32 rb = bytes[0];
+    if (rb != 0xFF) ok = 0;
+    Mixed m;
+    m.guard = 0xAABBCCDD;
+    m.b = 0x1FF;
+    m.w = 0x12345;
+    if (m.b != 0xFF) ok = 0;
+    if (m.w != 0x2345) ok = 0;
+    if (m.guard != 0xAABBCCDD) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

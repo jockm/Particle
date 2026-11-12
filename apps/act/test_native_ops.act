@@ -1,0 +1,35 @@
+// apps/act/test_native_ops.act
+
+void main() {
+    u32 a = 100;
+    u32 b = 100;
+    u32 c = 200;
+
+    // Single-cycle SEQ and SNE
+    u16 eq = (a == b);
+    u16 ne = (a != c);
+
+    // Single-cycle SLE
+    u16 le1 = (a <= b);
+    u16 le2 = (a <= c);
+
+    // Compound assignment operations
+    a += 50;   // 150
+    a -= 25;   // 125
+    a <<= 1;   // 250
+
+    if (eq == 1) {
+        if (ne == 1) {
+            if (le1 == 1) {
+                if (le2 == 1) {
+                    if (a == 250) {
+                        trap(0);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    trap(15);
+}

@@ -1,0 +1,20 @@
+// test_open_bounds_fail: an out-of-bounds index on an open array parameter
+// must stop at its bounds check with TRAP 15. Listed in ACT_TRAP_TESTS in
+// the Makefile, which requires exit 15 from that check.
+
+void store(u32 xs[], u32 i, u32 v) {
+    xs[i] = v;
+}
+
+void main() {
+    u32 arr[5];
+
+    // In-bounds write: valid
+    store(arr, 4, 1);
+
+    // Out-of-bounds write: index 5 >= length 5 -> MUST trigger TRAP 15
+    store(arr, 5, 99);
+
+    // If bounds check failed to fire, this TRAP 0 will execute (test failure)
+    trap(0);
+}

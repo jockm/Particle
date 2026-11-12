@@ -1,0 +1,30 @@
+// test_fifo_status: FIFO.STAT and FIFO.TRYW (register-channel forms),
+// through inline asm, assemble to the spec's 0xE4 and 0xE7.
+// Passes with trap(0); fails with trap(15).
+
+// Status word of channel `ch`: bit 0 empty, bit 1 full, bits 16:8 count
+u32 fifo_stat(u32 ch) {
+    asm("    FIFO.STAT R1, R1");
+}
+
+// Non-blocking write of v to channel ch; returns 1 if accepted
+u32 fifo_trywrite(u32 v, u32 ch) {
+    asm("    FIFO.TRYW R1, R2");
+    asm("    LD      R1, R14");
+}
+
+void main() {
+    u32 ok = 1;
+    if (fifo_stat(3) != 1) ok = 0;          // empty
+    if (fifo_trywrite(111, 3) != 1) ok = 0;
+    if (fifo_trywrite(222, 3) != 1) ok = 0;
+    if (fifo_stat(3) != 0x200) ok = 0;      // two entries, not empty
+    if (readfifo(3) != 111) ok = 0;
+    if (readfifo(3) != 222) ok = 0;
+    if (fifo_stat(3) != 1) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

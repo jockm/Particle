@@ -1,0 +1,27 @@
+// test_int_literals: decimal and hex literals of every immediate size
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 a = 0xFF;
+    if (a != 255) ok = 0;
+    u32 b = 0x10;
+    if (b != 16) ok = 0;
+    u32 c = 15;
+    if (c != 0xF) ok = 0;
+    u32 d = 0x1234;
+    if (d != 4660) ok = 0;
+    u32 e = 0x123456;
+    if (e != 1193046) ok = 0;
+    u32 f = 0xDEADBEEF;
+    if (f != 3735928559) ok = 0;
+    u32 g = 0xabcdef;
+    if (g != 0xABCDEF) ok = 0;
+    u32 z = 0;
+    if (z != 0x0) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

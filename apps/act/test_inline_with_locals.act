@@ -1,0 +1,17 @@
+// test_inline_with_locals: inline functions may declare local variables
+// Passes with trap(0); fails with trap(15).
+
+inline u32 square_plus_one(u32 v) {
+    u32 t = v * v;
+    return t + 1;
+}
+
+void main() {
+    u32 ok = 1;
+    if (square_plus_one(3) != 10) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

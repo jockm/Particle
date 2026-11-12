@@ -1,0 +1,37 @@
+u32 g_nums[8];
+u32 io_ports[4] @ 0x8000;
+
+void main() {
+    u32 local_buf[16];
+
+    u32 g_len = g_nums.len;
+    u32 b_len = io_ports.len;
+    u32 l_len = local_buf.len;
+
+    // Verify lengths
+    if (g_len != 8 || b_len != 4 || l_len != 16) {
+        trap(15);
+    }
+
+    // Populate local array using its own .len in loop condition
+    u32 i = 0;
+    while (i < local_buf.len) {
+        local_buf[i] = i * 2;
+        i = i + 1;
+    }
+
+    // Accumulate sum
+    u32 sum = 0;
+    i = 0;
+    while (i < local_buf.len) {
+        sum = sum + local_buf[i];
+        i = i + 1;
+    }
+
+    // Expected sum: 2 * (0 + 1 + ... + 15) = 2 * 120 = 240
+    if (sum == 240) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

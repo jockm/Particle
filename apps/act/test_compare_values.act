@@ -1,0 +1,29 @@
+// test_compare_values: comparisons used as values produce 0 or 1
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 a = 3;
+    u32 b = 5;
+    u32 t = a < b;
+    if (t != 1) ok = 0;
+    t = a > b;
+    if (t != 0) ok = 0;
+    t = a == a;
+    if (t != 1) ok = 0;
+    t = a != a;
+    if (t != 0) ok = 0;
+    t = b <= b;
+    if (t != 1) ok = 0;
+    t = a >= b;
+    if (t != 0) ok = 0;
+    s32 n = -2;
+    s32 p = 2;
+    t = n < p;
+    if (t != 1) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

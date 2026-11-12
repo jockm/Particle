@@ -1,0 +1,40 @@
+// test_coroutine_sequence: a coroutine runs its steps in order, ends with status 3 and restarts
+// Passes with trap(0); fails with trap(15).
+
+import "lib/protokernel.act";
+
+type Seq {
+    u16 lc;
+    u32 stage;
+};
+
+u32 steps(Seq s) {
+    s.stage = 1;
+    yield(s, 1);
+    s.stage = 2;
+    yield(s, 2);
+    s.stage = 3;
+}
+
+void main() {
+    u32 ok = 1;
+    Seq q;
+    u32 st = steps(q);
+    if (st != 1) ok = 0;
+    if (q.stage != 1) ok = 0;
+    st = steps(q);
+    if (st != 1) ok = 0;
+    if (q.stage != 2) ok = 0;
+    st = steps(q);
+    if (st != 3) ok = 0;
+    if (q.stage != 3) ok = 0;
+    if (q.lc != 0) ok = 0;
+    st = steps(q);
+    if (st != 1) ok = 0;
+    if (q.stage != 1) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

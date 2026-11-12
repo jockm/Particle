@@ -1,0 +1,77 @@
+// Test multi-dimensional array edge cases: reverse traversal, negative strides, and boundary conditions
+
+u32 g_matrix[3][3];
+
+void test_reverse_stride_2d() {
+    u32 mat[3][3];
+    u32 r = 0;
+    while (r < 3) {
+        u32 c = 0;
+        while (c < 3) {
+            mat[r][c] = (r * 3) + c; // values 0 .. 8
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+
+    // Reverse iterate with a flat index stepping across row boundaries
+    u32 flat = 8;
+    u32 expected = 8;
+    u32 count = 0;
+    while (count < 9) {
+        if (mat[flat / 3][flat % 3] != expected) {
+            trap(15);
+        }
+        if (flat > 0) {
+            flat = flat - 1;
+        }
+        if (expected > 0) {
+            expected = expected - 1;
+        }
+        count = count + 1;
+    }
+}
+
+void test_boundary_elements() {
+    // Test extremal corners of 3D volume
+    u16 vol[2][2][2];
+    vol[0][0][0] = 111;
+    vol[0][0][1] = 222;
+    vol[0][1][0] = 333;
+    vol[0][1][1] = 444;
+    vol[1][0][0] = 555;
+    vol[1][0][1] = 666;
+    vol[1][1][0] = 777;
+    vol[1][1][1] = 888;
+
+    if (vol[0][0][0] != 111) { trap(15); }
+    if (vol[1][1][1] != 888) { trap(15); }
+    if (vol[0][1][1] != 444) { trap(15); }
+    if (vol[1][0][0] != 555) { trap(15); }
+}
+
+void test_global_reverse_indexing() {
+    // Populate global matrix
+    u32 i = 0;
+    while (i < 3) {
+        u32 j = 0;
+        while (j < 3) {
+            g_matrix[i][j] = (i * 10) + j;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+
+    // Verify indexing with calculated descending expressions
+    u32 step = 2;
+    if (g_matrix[step][step] != 22) { trap(15); }
+    if (g_matrix[step - 1][step] != 12) { trap(15); }
+    if (g_matrix[step][step - 2] != 20) { trap(15); }
+}
+
+void main() {
+    test_reverse_stride_2d();
+    test_boundary_elements();
+    test_global_reverse_indexing();
+    trap(0); // Clean exit trap
+}

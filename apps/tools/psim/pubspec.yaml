@@ -1,5 +1,0 @@
-name: psim
-description: Particle RISC 32-bit Architecture Instruction Simulator and Interactive Debugger (p4db).
-version: 1.0.0
-environment:
-  sdk: '>=3.0.0 <4.0.0'

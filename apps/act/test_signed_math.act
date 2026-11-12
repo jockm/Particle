@@ -1,0 +1,55 @@
+// test_signed_math: signed operands use SDIV, SMOD, ASHIFTR and SSLT/SSLE;
+// unsigned operands keep DIV, MOD, SHIFTR and SLT/SLE.
+// Passes with trap(0); fails with trap(15).
+
+s32 g_neg = -20;
+
+s32 half(s32 a, s32 b) {
+    return (a - b) / 2;
+}
+
+s32 count_up(s32 from, s32 to) {
+    s32 n = 0;
+    for (s32 i : from..to) {
+        n += 1;
+    }
+    return n;
+}
+
+void main() {
+    u32 ok = 1;
+    s32 a = -7;
+    s32 b = 2;
+
+    if (a / b != -3) ok = 0;          // truncates toward zero
+    if (a % b != -1) ok = 0;          // sign of the dividend
+    if (a >> 1 != -4) ok = 0;         // arithmetic shift
+    if (half(1, 9) != -4) ok = 0;     // signed result of a subtraction
+    if (a >= 0) ok = 0;               // signed compare
+    if (!(a < b)) ok = 0;
+
+    s32 c = g_neg;
+    c /= 4;
+    if (c != -5) ok = 0;
+    c >>= 1;
+    if (c != -3) ok = 0;
+
+    s8 small = -8;
+    small /= 2;
+    if (small != -4) ok = 0;
+
+    if (count_up(-3, 2) != 5) ok = 0; // signed loop bound
+    if (count_up(2, -3) != 0) ok = 0;
+
+    // Unsigned stays unsigned
+    u32 big = 0xFFFFFFF0;
+    if (big / 16 != 0x0FFFFFFF) ok = 0;
+    if (big >> 4 != 0x0FFFFFFF) ok = 0;
+    if (big < 5) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,31 @@
+// test_expr_call_args: complex expressions as call arguments after the first
+// Passes with trap(0); fails with trap(15).
+
+u32 combine(u32 x, u32 y, u32 z) {
+    u32 r = x * 100;
+    u32 t = y * 10;
+    r = r + t;
+    r = r + z;
+    return r;
+}
+
+u32 three() {
+    return 3;
+}
+
+void main() {
+    u32 ok = 1;
+    u32 a = 1;
+    u32 b = 2;
+    u32 r = combine(1, a + b, 4);
+    if (r != 134) ok = 0;
+    r = combine(1, three(), 5);
+    if (r != 135) ok = 0;
+    r = combine(1, 2, !a);
+    if (r != 120) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,35 @@
+// test_globals: global scalars and arrays, with initializers, shared between functions
+// Passes with trap(0); fails with trap(15).
+
+u32 counter = 5;
+u32 table[4];
+u32 flag;
+
+void bump() {
+    counter += 1;
+}
+
+void fill() {
+    for (u32 i : 0..4) {
+        table[i] = i;
+    }
+}
+
+void main() {
+    u32 ok = 1;
+    if (counter != 5) ok = 0;
+    bump();
+    bump();
+    if (counter != 7) ok = 0;
+    if (flag != 0) ok = 0;
+    fill();
+    if (table[0] != 0) ok = 0;
+    if (table[3] != 3) ok = 0;
+    table[2] = 42;
+    if (table[2] != 42) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

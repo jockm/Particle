@@ -1,0 +1,39 @@
+u32 sum_slice(u32 data[]) {
+    u32 total = 0;
+    u32 i = 0;
+    while (i < data.len) {
+        total = total + data[i];
+        i = i + 1;
+    }
+    return total;
+}
+
+void main() {
+    u32 nums[5];
+    nums[0] = 10;
+    nums[1] = 20;
+    nums[2] = 30;
+    nums[3] = 40;
+    nums[4] = 50;
+
+    // 1. Full slice: nums[..] -> 10 + 20 + 30 + 40 + 50 = 150
+    u32 s_full = sum_slice(nums[..]);
+    if (s_full != 150) {
+        trap(15);
+    }
+
+    // 2. Slice from start: nums[..3] -> 10 + 20 + 30 = 60
+    u32 s_prefix = sum_slice(nums[..3]);
+    if (s_prefix != 60) {
+        trap(15);
+    }
+
+    // 3. Slice to end: nums[2..] -> 30 + 40 + 50 = 120
+    u32 s_suffix = sum_slice(nums[2..]);
+    if (s_suffix != 120) {
+        trap(15);
+    }
+
+    // Success
+    trap(0);
+}

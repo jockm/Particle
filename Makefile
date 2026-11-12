@@ -12,11 +12,8 @@ PBUILD       := ./pbuild
 # ------------------------------------------------------------------------------
 # Simulator Selection
 # ------------------------------------------------------------------------------
-# Default: Python reference simulator (tools/psim.py)
-# To switch to compiled native Dart simulator, comment out this line and uncomment
-# the Dart definition below:
+# Compiled Dart simulator (build it with 'make psim')
 PSIM         := build/tools/psim
-# PSIM         := build/tools/psim
 
 ROHD_DIR     := hdl/particle
 PARCORE_DIR  := hdl/parcore
@@ -25,6 +22,7 @@ TOOL_DIR     := apps/tools
 TOOL_BIN_DIR := $(BUILD_DIR)/tools
 PASM_LINT_BIN:= $(TOOL_BIN_DIR)/pasm_lint
 PASM_BIN     := $(TOOL_BIN_DIR)/pasm
+ACTION_BIN   := $(TOOL_BIN_DIR)/action
 PARCORE_BLD  := $(BUILD_DIR)/parcore
 
 # Recursive wildcard across firmware/parcore
@@ -34,7 +32,8 @@ FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWA
 APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
 APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 
-APP_ACT_SRCS  := $(wildcard apps/act/*.act)
+# heap_after_asm_main.act needs its .asm library; compiler-tests builds the pair
+APP_ACT_SRCS  := $(filter-out apps/act/heap_after_asm_main.act,$(wildcard apps/act/*.act))
 APP_ACT_BINS  := $(patsubst apps/act/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
 .PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests test-lint \
@@ -57,7 +56,8 @@ help:
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
 	@echo "  make test-sim         - Run instruction simulator verification"
-	@echo "  make compiler-tests   - Run all Action compiler test suites in psim"
+	@echo "  make compiler-tests   - Run Action compiler unit tests and all test suites in psim"
+	@echo "  make action           - Build the Action compiler (build/tools/action)"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries"
@@ -75,11 +75,11 @@ setup:
 
 lint: lint-asm
 
-lint-asm:
+lint-asm: $(PASM_LINT_BIN)
 	@echo "==> Linting Parcore firmware sources..."
-	@for f in $(FIRMWARE_SRCS); do $(PYTHON) tools/pasm_lint.py "$$f" || exit 1; done
+	@for f in $(FIRMWARE_SRCS); do $(PASM_LINT_BIN) "$$f" || exit 1; done
 	@echo "==> Linting ASM application sources..."
-	@for f in $(APP_ASM_SRCS); do $(PYTHON) tools/pasm_lint.py "$$f" || exit 1; done
+	@for f in $(APP_ASM_SRCS); do $(PASM_LINT_BIN) "$$f" || exit 1; done
 
 # ------------------------------------------------------------------------------
 # Generation Targets (SystemVerilog)
@@ -109,9 +109,7 @@ test-parcore: setup
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
 	@cd $(PARCORE_DIR) && ./test_pipeline.sh
 
-# Run instruction-level simulation tests.
-# Uses $(PSIM) as defined above (currently tools/psim.py).
-# To test compiled Dart instead: make psim && build/tools/psim $(BUILD_DIR)/branch_suite.bin
+# Run instruction-level simulation tests with $(PSIM) (build/tools/psim).
 test-sim: $(BUILD_DIR)/branch_suite.bin
 	@echo "==> Running instruction-level simulation tests ($(PSIM))..."
 	$(PSIM) $(BUILD_DIR)/branch_suite.bin
@@ -119,32 +117,70 @@ test-sim: $(BUILD_DIR)/branch_suite.bin
 	@echo "==> Running instruction-level simulation tests (build/tools/psim)..."
 	build/tools/psim $(BUILD_DIR)/branch_suite.bin
 
-ACT_TEST_SRCS := $(wildcard apps/act/*_test.act)
+# Tests that must end in a trap other than trap 0. For now each must stop
+# with trap 15 at one of the compiler's bounds checks.
+ACT_TRAP_TESTS := apps/act/test_dyn_bounds_fail.act \
+                  apps/act/test_fixed_bounds_fail.act \
+                  apps/act/test_open_bounds_fail.act
+ACT_TEST_SRCS := $(filter-out $(ACT_TRAP_TESTS),$(wildcard apps/act/test_*.act))
 
-compiler-tests:
+compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 	@mkdir -p $(BUILD_DIR)
+	@echo "==> Running Action compiler unit tests..."
+	@cd apps/tools/action && $(DART) test
 	@echo "==> Building and running Action compiler test suites..."
 	@failed=0; \
+	sim_result() { \
+		code=$$1; \
+		if [ $$code -eq 15 ]; then echo "[FAIL] test failed (trap 15)"; \
+		elif [ $$code -gt 15 ]; then echo "[FAIL] some other error occurred (exit $$code)"; \
+		elif [ $$code -ne 0 ]; then echo "[FAIL] unexpected exit $$code"; fi; \
+	}; \
+	trap_check() { \
+		out=$$($(PSIM) "$$1"); code=$$?; echo "$$out"; \
+		if [ $$code -ne 15 ]; then echo "[FAIL] expected trap 15 from a bounds check, got exit $$code"; return 1; fi; \
+		pc=$$(echo "$$out" | sed -n 's/.*Trap 15 triggered at PC: 0x\([0-9A-Fa-f]*\).*/\1/p' | head -1); \
+		addr=$$(printf '%08X' $$((0x$$pc - 2))); \
+		line=$$(awk -v a="$$addr" '$$1 == a { print $$3; exit }' "$$2"); \
+		if [ -z "$$line" ] || ! sed -n "$${line}p" "$$3" | grep -q "out-of-bounds trap"; then \
+			echo "[FAIL] trap 15 at 0x$$addr is not a bounds check"; return 1; fi; \
+	}; \
 	for src in $(ACT_TEST_SRCS); do \
 		base=$$(basename "$$src" .act); \
 		bin="$(BUILD_DIR)/$${base}.bin"; \
 		echo "----------------------------------------------------------------"; \
 		echo "Testing: $$src -> $$bin"; \
 		$(PBUILD) "$$src" -o "$$bin" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
-		$(PSIM) "$$bin" || { echo "[FAIL] $$bin failed simulation"; failed=1; break; }; \
+		$(PSIM) "$$bin" || { code=$$?; echo "[FAIL] $$bin failed simulation"; sim_result $$code; failed=1; break; }; \
 	done; \
+	if [ $$failed -eq 0 ]; then \
+		for src in $(ACT_TRAP_TESTS); do \
+			base=$$(basename "$$src" .act); \
+			bin="$(BUILD_DIR)/$${base}.bin"; \
+			echo "----------------------------------------------------------------"; \
+			echo "Testing (must stop at a bounds check with trap 15): $$src -> $$bin"; \
+			$(PBUILD) "$$src" -o "$$bin" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
+			trap_check "$$bin" "$(BUILD_DIR)/$${base}.lst" "$(BUILD_DIR)/$${base}.asm" || { echo "[FAIL] $$bin failed simulation"; failed=1; break; }; \
+		done; \
+	fi; \
 	if [ $$failed -eq 0 ]; then \
 		echo "----------------------------------------------------------------"; \
 		echo "Testing Multi-File Action: apps/act/multi_file_main.act apps/act/multi_file_math.act -> $(BUILD_DIR)/multi_file_test.bin"; \
 		$(PBUILD) apps/act/multi_file_main.act apps/act/multi_file_math.act -o "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] Build failed for multi-file Action test"; failed=1; }; \
-		$(PSIM) "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] multi_file_test.bin failed simulation"; failed=1; }; \
+		$(PSIM) "$(BUILD_DIR)/multi_file_test.bin" || { code=$$?; echo "[FAIL] multi_file_test.bin failed simulation"; sim_result $$code; failed=1; }; \
+	fi; \
+	if [ $$failed -eq 0 ]; then \
+		echo "----------------------------------------------------------------"; \
+		echo "Testing Action with an assembly library: apps/act/heap_after_asm_main.act apps/act/heap_after_asm_lib.asm -> $(BUILD_DIR)/heap_after_asm_test.bin"; \
+		$(PBUILD) apps/act/heap_after_asm_main.act apps/act/heap_after_asm_lib.asm -o "$(BUILD_DIR)/heap_after_asm_test.bin" || { echo "[FAIL] Build failed for Action with an assembly library"; failed=1; }; \
+		$(PSIM) "$(BUILD_DIR)/heap_after_asm_test.bin" || { code=$$?; echo "[FAIL] heap_after_asm_test.bin failed simulation"; sim_result $$code; failed=1; }; \
 	fi; \
 	if [ $$failed -ne 0 ]; then \
 		echo "==> [FAIL] Action compiler tests failed."; \
 		exit 1; \
 	else \
 		echo "==> Running Action negative & semantic diagnostic tests..."; \
-		$(PYTHON) tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
+		$(PYTHON) apps/tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
 		echo "==> [PASS] All Action compiler tests passed successfully."; \
 	fi
 
@@ -190,7 +226,7 @@ $(BUILD_DIR)/%.bin: apps/asm/%.asm
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@"
 
-$(BUILD_DIR)/%.bin: apps/act/%.act
+$(BUILD_DIR)/%.bin: apps/act/%.act $(ACTION_BIN)
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@" 
 $(BUILD_DIR):
@@ -207,9 +243,9 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint psim pasm lint-tool
+.PHONY: tools pasm-lint psim pasm action lint-tool
 
-tools: pasm-lint pasm psim
+tools: pasm-lint pasm psim action
 
 lint-tool: pasm-lint
 pasm-lint: $(PASM_LINT_BIN)
@@ -226,6 +262,13 @@ $(PASM_BIN): $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) | $(TOOL_B
 	@cd apps/tools/pasm && $(DART) pub get > /dev/null
 	@$(DART) compile exe apps/tools/pasm/bin/main.dart -o $@
 
+action: $(ACTION_BIN)
+
+$(ACTION_BIN): $(shell find apps/tools/action -name "*.dart" 2>/dev/null) apps/tools/action/pubspec.yaml | $(TOOL_BIN_DIR)
+	@echo "==> Compiling action..."
+	@cd apps/tools/action && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/action/bin/main.dart -o $@
+
 $(TOOL_BIN_DIR):
 	@mkdir -p $@
 
@@ -240,7 +283,7 @@ psim: $(BUILD_DIR)/tools/psim
 $(BUILD_DIR)/tools/psim: apps/tools/psim/bin/main.dart apps/tools/psim/lib/core.dart apps/tools/psim/lib/line_reader.dart
 	@mkdir -p $(BUILD_DIR)/tools
 	@echo "==> Compiling psim..."
-	dart compile exe apps/tools/psim/bin/main.dart -o $(BUILD_DIR)/tools/psim
+	$(DART) compile exe apps/tools/psim/bin/main.dart -o $(BUILD_DIR)/tools/psim
 
 # --- Guest RV32 Test Program Targets ---
 GUEST_GEN_DIR := apps/asm/gen

@@ -1,0 +1,15 @@
+// test_char_hex_escape: \x hex escapes in character literals
+// Passes with trap(0); fails with trap(15).
+
+void main() {
+    u32 ok = 1;
+    u32 c = '\x41';
+    if (c != 65) ok = 0;
+    c = '\x7f';
+    if (c != 127) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -1,0 +1,21 @@
+// test_volatile: volatile locals and globals are read and written normally
+// Passes with trap(0); fails with trap(15).
+
+volatile u32 g_status;
+
+void main() {
+    u32 ok = 1;
+    volatile u32 local = 3;
+    local = local + 1;
+    if (local != 4) ok = 0;
+    g_status = 1;
+    g_status = 2;
+    if (g_status != 2) ok = 0;
+    g_status += 5;
+    if (g_status != 7) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

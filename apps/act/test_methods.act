@@ -1,0 +1,53 @@
+// test_methods: methods with this, return values, and methods calling other methods
+// Passes with trap(0); fails with trap(15).
+
+type Counter {
+    u32 value;
+    u32 step;
+};
+
+void Counter.reset() {
+    this.value = 0;
+    this.step = 1;
+}
+
+void Counter.tick() {
+    this.value += this.step;
+}
+
+u32 Counter.get() {
+    return this.value;
+}
+
+void Counter.tick_twice() {
+    this.tick();
+    this.tick();
+}
+
+void Counter.add(u32 n) {
+    this.value += n;
+}
+
+void advance(Counter c) {
+    c.tick();
+}
+
+void main() {
+    u32 ok = 1;
+    Counter c;
+    c.reset();
+    c.tick();
+    if (c.get() != 1) ok = 0;
+    c.step = 5;
+    c.tick_twice();
+    if (c.value != 11) ok = 0;
+    c.add(100);
+    if (c.get() != 111) ok = 0;
+    advance(c);
+    if (c.value != 116) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}
