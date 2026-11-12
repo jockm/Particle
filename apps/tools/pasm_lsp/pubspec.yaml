@@ -1,0 +1,12 @@
+name: pasm_lsp
+description: Particle RISC Assembly Language Server (LSP)
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  pasm:
+    path: ../pasm
+  pasm_lint:
+    path: ../pasm_lint

@@ -21,6 +21,7 @@ BUILD_DIR    := build
 TOOL_DIR     := apps/tools
 TOOL_BIN_DIR := $(BUILD_DIR)/tools
 PASM_LINT_BIN:= $(TOOL_BIN_DIR)/pasm_lint
+PASM_LSP_BIN := $(TOOL_BIN_DIR)/pasm_lsp
 PASM_BIN     := $(TOOL_BIN_DIR)/pasm
 ACTION_BIN   := $(TOOL_BIN_DIR)/action
 PARCORE_BLD  := $(BUILD_DIR)/parcore
@@ -251,9 +252,9 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint psim pasm action lint-tool
+.PHONY: tools pasm-lint pasm-lsp psim pasm action lint-tool
 
-tools: pasm-lint pasm psim action
+tools: pasm-lint pasm-lsp pasm psim action
 
 lint-tool: pasm-lint
 pasm-lint: $(PASM_LINT_BIN)
@@ -262,6 +263,13 @@ $(PASM_LINT_BIN): $(shell find apps/tools/pasm_lint -name "*.dart" 2>/dev/null) 
 	@echo "==> Compiling pasm_lint..."
 	@cd apps/tools/pasm_lint && $(DART) pub get > /dev/null
 	@$(DART) compile exe apps/tools/pasm_lint/bin/main.dart -o $@
+
+pasm-lsp: $(PASM_LSP_BIN)
+
+$(PASM_LSP_BIN): $(shell find apps/tools/pasm_lsp -name "*.dart" 2>/dev/null) $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) $(shell find apps/tools/pasm_lint -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
+	@echo "==> Compiling pasm_lsp..."
+	@cd apps/tools/pasm_lsp && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/pasm_lsp/bin/main.dart -o $@
 
 pasm: $(PASM_BIN)
 

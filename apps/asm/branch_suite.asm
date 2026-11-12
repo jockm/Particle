@@ -79,3 +79,4 @@ _spin_done:
 
 _fail_halt:
     BBRA    _fail_halt          ; Terminal fail loop (backward branch)
+    

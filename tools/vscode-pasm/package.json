@@ -1,0 +1,39 @@
+{
+  "name": "particle-pasm",
+  "displayName": "Particle RISC Assembly (PASM)",
+  "description": "Syntax highlighting and Language Server support for Particle RISC Assembly (.pasm, .asm, .inc)",
+  "version": "0.1.0",
+  "publisher": "stufflabs",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:particle-asm"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "particle-asm",
+        "aliases": [
+          "Particle Assembly",
+          "pasm"
+        ],
+        "extensions": [
+          ".pasm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "particle-asm",
+        "scopeName": "source.pasm",
+        "path": "./syntaxes/pasm.tmLanguage.json"
+      }
+    ]
+  }
+}

@@ -1,3 +1,8 @@
 {
-    "cmake.sourceDirectory": "/Volumes/Sidcar/Projects/StuffLabs/Particle/TableGen/Particle"
+  "cmake.sourceDirectory": "/Volumes/Sidcar/Projects/StuffLabs/Particle/TableGen/Particle",
+  "files.associations": {
+    "*.asm": "particle-asm",
+    "*.pasm": "particle-asm",
+    "*.inc": "particle-asm"
+  }
 }
