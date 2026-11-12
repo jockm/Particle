@@ -9,6 +9,21 @@ class CompileError implements Exception {
 
   CompileError(this.message);
 
+  static final _locPrefix = RegExp(r'^\S+:\d+:\d+: ');
+
+  /// True when the message already starts with `file:line:col: `.
+  bool get hasLoc => _locPrefix.hasMatch(message);
+
+  /// This error with [loc] (`file:line:col`) in front, unless it already
+  /// names a location or [loc] is null.
+  CompileError at(String? loc) {
+    if (loc == null || hasLoc) return this;
+    return withMessage('$loc: $message');
+  }
+
+  /// A copy of this error (of the same kind) with [msg] as its message.
+  CompileError withMessage(String msg) => CompileError(msg);
+
   @override
   String toString() => message;
 }

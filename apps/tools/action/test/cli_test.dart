@@ -17,6 +17,13 @@ void main() {
       expect(parseArgs(['a.act']).boundsCheck, isTrue);
     });
 
+    test('reference checking is on by default and can be turned off', () {
+      expect(parseArgs(['a.act']).referenceCheck, isTrue);
+      expect(parseArgs(['-fno-reference-check', 'a.act']).referenceCheck, isFalse);
+      expect(parseArgs(['-fno-reference-check', '-freference-check', 'a.act']).referenceCheck,
+          isTrue);
+    });
+
     test('-h needs no sources', () {
       expect(parseArgs(['-h']).help, isTrue);
     });

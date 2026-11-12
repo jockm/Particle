@@ -14,6 +14,7 @@
 ; ==============================================================================
 
     .global _rt_alloc
+    .global _rt_alloc_zero
     .global _rt_free
     .global _rt_realloc
     .global __rt_realloc
@@ -191,6 +192,35 @@ _rt_alloc:
 ._alloc_exit:
     POP32   R5
     POP32   R4
+    POP32   R3
+    POP32   R2
+    POP32   R14
+    RRET
+
+; ------------------------------------------------------------------------------
+; _rt_alloc_zero: Allocate payload of R1 bytes, filled with zeros
+; Input:   R1 = size in bytes
+; Output:  R1 = pointer to zeroed payload (or 0 on failure)
+; ------------------------------------------------------------------------------
+_rt_alloc_zero:
+    PUSH32  R14
+    PUSH32  R2
+    PUSH32  R3
+    LD      R2, R1              ; R2 = requested size
+    RCALL   _rt_alloc
+    FBRA.Z  R1, ._alloc_zero_exit
+    ; The payload is a multiple of 4 bytes: clear (size + 3) & ~3 bytes
+    ADD     R2, 3
+    LOAD32  R3, 0xFFFFFFFC
+    AND     R2, R3
+    LD      R3, R1              ; R3 = cursor
+._alloc_zero_loop:
+    FBRA.Z  R2, ._alloc_zero_exit
+    LD32    (R3), R0
+    ADD     R3, 4
+    SUB     R2, 4
+    BBRA    ._alloc_zero_loop
+._alloc_zero_exit:
     POP32   R3
     POP32   R2
     POP32   R14

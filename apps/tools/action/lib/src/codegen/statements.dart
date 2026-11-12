@@ -1,7 +1,7 @@
 part of 'codegen.dart';
 
 extension _Statements on CodeGen {
-  void _validateFnTypeAssignment(Object targetType, AstNode rhsExpr) {
+  void _validateFnTypeAssignment(Object targetType, AstNode rhsExpr, [String? targetName]) {
     final cleanTgt = cleanName(targetType);
     final rhsTObj = _getExprType(rhsExpr).$1;
     final rhsT = rhsTObj is String ? rhsTObj : rhsTObj.toString();
@@ -81,11 +81,11 @@ extension _Statements on CodeGen {
     }
 
     // 6. Primitive scalar target with struct/reference RHS
-    const primitives = ['u8', 's8', 'u16', 's16', 'u32', 's32'];
+    const primitives = ['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool'];
     if (primitives.contains(cleanTgt)) {
       if (structs.containsKey(cleanRhs)) {
         throw CompileError(
-            "Cannot assign record reference of type '$cleanRhs' to scalar variable of type '$targetType'");
+            "cannot assign a reference to a '$cleanRhs' to ${targetName != null ? "'$targetName'" : 'a variable'} of type '$targetType'");
       }
       if (cleanRhs == 'string' && rhsExpr is! IntLitNode) {
         throw CompileError(
@@ -95,6 +95,14 @@ extension _Statements on CodeGen {
   }
 
   void genStmt(AstNode stmt) {
+    try {
+      _genStmt(stmt);
+    } on CompileError catch (e) {
+      throw e.at(stmt.loc);
+    }
+  }
+
+  void _genStmt(AstNode stmt) {
     if (stmt is BlockNode) {
       genBlock(stmt);
       return;
@@ -146,6 +154,7 @@ extension _Statements on CodeGen {
       final defaultHolder = <String?>[null];
       final orderedLabels = <String>[];
       _collectSwitchLabels(stmt.body, cases, defaultHolder, orderedLabels);
+      _checkCaseConsts(stmt);
 
       // Evaluate switch discriminant into R1
       genExpr(stmt.expr, 1);
@@ -180,9 +189,7 @@ extension _Statements on CodeGen {
     } else if (stmt is VarDeclNode) {
       _validateBackendType(stmt.typeName, "local variable '${stmt.name}'");
       if (stmt.isConst) {
-        if (!predefinedConstants.containsKey(stmt.name)) {
-          constants[stmt.name] = _evalConstExpr(stmt.initExpr);
-        }
+        _defineLocalConst(stmt);
         return;
       }
       _resolveVarDecl(stmt);
@@ -198,9 +205,13 @@ extension _Statements on CodeGen {
           _emitStringInit(stmt.name, init, cap);
           return;
         }
-        _validateFnTypeAssignment(stmt.typeName, init);
+        if (stmt.dimExprs.isEmpty) {
+          _checkConstFits(init, cleanName(stmt.typeName), stmt.isPtr, "variable '${stmt.name}'");
+        }
+        _validateFnTypeAssignment(stmt.typeName, init, stmt.name);
         _checkRecordAssignment(stmt.name, init);
         genExpr(init, 1);
+        if (!stmt.isPtr && stmt.dimExprs.isEmpty) _normalizeBool(stmt.typeName, init, 1);
         final name = stmt.name;
         if (init is HeapAllocNode ||
             init is HeapArrayAllocNode ||
@@ -261,6 +272,7 @@ extension _Statements on CodeGen {
         emit('POP32   R2', 'Restore compound RHS');
         stackOffset -= 4;
         _emitBinaryCalc(opChar, 1, 2, signed: _isSignedCompound(t.name, stmt.rhs));
+        _normalizeBoolResult(t.isPtr ? null : t.name, 1);
         _emitStoreTyped(14, 1, t.name, t.isPtr);
       } else if (lhs is ArrayAccessNode) {
         final (tName, _) = _emitArrayElemAddr(lhs, 14, 3, true);
@@ -268,6 +280,7 @@ extension _Statements on CodeGen {
         emit('POP32   R2', 'Restore compound RHS');
         stackOffset -= 4;
         _emitBinaryCalc(opChar, 1, 2, signed: _isSignedCompound(tName, stmt.rhs));
+        _normalizeBoolResult(tName, 1);
         _emitStoreTyped(14, 1, tName, false);
         return;
       } else if (lhs is MemberAccessNode) {
@@ -285,6 +298,7 @@ extension _Statements on CodeGen {
         emit('POP32   R2', 'Restore compound RHS');
         stackOffset -= 4;
         _emitBinaryCalc(opChar, 1, 2, signed: _isSignedCompound(f.type, stmt.rhs));
+        _normalizeBoolResult(f.isPtr ? null : f.type, 1);
         _emitStoreTyped(14, 1, f.type, f.isPtr);
       }
       return;
@@ -345,6 +359,13 @@ extension _Statements on CodeGen {
             "Tuple return arity mismatch in '$currentFuncName': expected $expectedArity, got ${stmt.exprs.length}");
       }
 
+      final retTypes = retTypeInfo.$1 as List;
+      for (var i = 0; i < stmt.exprs.length; i++) {
+        final rt = retTypes[i];
+        final (Object? rtName, bool rtPtr) = rt is (Object?, bool) ? rt : (rt, false);
+        _checkConstFits(stmt.exprs[i], rtName, rtPtr,
+            "return value ${i + 1} of '$currentFuncName'");
+      }
       final numReturns = stmt.exprs.length;
       // Check if all return expressions are simple leaves (IntLitNode or VarAccessNode)
       // which can safely be placed directly into R1..Rn without evaluation clobbering
@@ -399,8 +420,20 @@ extension _Statements on CodeGen {
         throw CompileError(
             "Function '$currentFuncName' declared with tuple return of arity ${(retTypeInfo.$1 as List).length}, cannot return scalar or void");
       }
+      if (currentFuncIsTask && inlineReturnStack.isEmpty) {
+        // A task's result is always its status: 'return;' ends the task
+        if (stmt.expr != null) {
+          throw CompileError(
+              "task '$currentFuncName' cannot return a value; 'return;' ends the task");
+        }
+        emit('FBRA    ._task_end_$currentFuncName', 'End the task');
+        return;
+      }
       if (stmt.expr != null) {
+        _checkConstFits(stmt.expr, retTypeInfo.$1, retTypeInfo.$2,
+            "return value of '$currentFuncName'");
         genExpr(stmt.expr!, 1);
+        if (!retTypeInfo.$2) _normalizeBool(retTypeInfo.$1, stmt.expr!, 1);
       }
       if (inlineReturnStack.isNotEmpty) {
         final (lblInlineEnd, initialOffset) = inlineReturnStack.last;
@@ -550,6 +583,20 @@ extension _Statements on CodeGen {
   }
 
   void _genCondJump(AstNode condExpr, String falseTarget) {
+    try {
+      _genCondJumpInner(condExpr, falseTarget);
+    } on CompileError catch (e) {
+      throw e.at(condExpr.loc);
+    }
+  }
+
+  void _genCondJumpInner(AstNode condExpr, String falseTarget) {
+    // A condition that is an operation on constants is decided now
+    final folded = _foldedCondition(condExpr);
+    if (folded != null) {
+      if (!folded) emit('FBRA     $falseTarget', 'Constant condition is false');
+      return;
+    }
     // Optimized control-flow branch fusion for relational comparisons and short-circuiting
     if (condExpr is BinaryOpNode && condExpr.op == '&&') {
       _genCondJump(condExpr.left, falseTarget);
@@ -568,6 +615,7 @@ extension _Statements on CodeGen {
 
     if (condExpr is BinaryOpNode &&
         ['==', '!=', '<=', '>=', '<', '>'].contains(condExpr.op)) {
+      _checkBinaryConsts(condExpr);
       genExpr(condExpr.left, 1);
       emit('PUSH32  R1', 'Save LHS for comparison branch');
       stackOffset += 4;
@@ -614,6 +662,19 @@ extension _Statements on CodeGen {
   }
 
   void _genCondJumpTrue(AstNode condExpr, String trueTarget) {
+    try {
+      _genCondJumpTrueInner(condExpr, trueTarget);
+    } on CompileError catch (e) {
+      throw e.at(condExpr.loc);
+    }
+  }
+
+  void _genCondJumpTrueInner(AstNode condExpr, String trueTarget) {
+    final folded = _foldedCondition(condExpr);
+    if (folded != null) {
+      if (folded) emit('FBRA    $trueTarget', 'Constant condition is true');
+      return;
+    }
     // Jump to true_target if cond_expr evaluates to TRUE (!= 0)
     if (condExpr is BinaryOpNode && condExpr.op == '||') {
       _genCondJumpTrue(condExpr.left, trueTarget);

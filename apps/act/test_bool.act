@@ -1,0 +1,32 @@
+// test_bool: bool holds 0 or 1; true and false are 1 and 0; other values are stored as 0 or 1
+// Passes with trap(0); fails with trap(15).
+
+type Flags { bool on; u8 pad; bool off; };
+bool g = true;
+bool isBig(u32 v) { return v; }
+u32 count(bool b) { return b; }
+void main() {
+    u32 ok = 1;
+    bool a = true;
+    bool b = false;
+    u32 seven = 7;
+    bool c = seven;
+    if (c != true) ok = 0;
+    if (a != 1 || b != 0) ok = 0;
+    if (isBig(300) != true) ok = 0;
+    if (count(seven) != 1) ok = 0;
+    Flags f;
+    f.on = seven;
+    f.pad = 9;
+    if (f.on != true || f.pad != 9 || f.off != false) ok = 0;
+    bool arr[3];
+    arr[1] = seven;
+    if (arr[1] != 1 || arr[0] != 0) ok = 0;
+    b += seven;
+    if (b != true) ok = 0;
+    if (sizeof(bool) != 1 || sizeof(Flags) != 3) ok = 0;
+    if (!g) ok = 0;
+    bool d = seven > 3;
+    if (!d) ok = 0;
+    if (ok == 1) { trap(0); } else { trap(15); }
+}

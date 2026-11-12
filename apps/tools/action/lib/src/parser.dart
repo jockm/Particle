@@ -15,21 +15,32 @@ import 'ast.dart';
 import 'errors.dart';
 import 'lexer.dart';
 
-const _primitiveTypes = ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64'];
+const _primitiveTypes = ['u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'bool'];
+
+/// Integer types that can receive `.createArray(n)` directly.
+const _arrayElemTypes = ['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool'];
 
 class Parser {
   final List<Token> tokens;
   int pos = 0;
   final Set<String> knownTypes = {};
 
-  Parser(this.tokens);
+  /// Type aliases (`type Name = Target;`), each resolved to a type that
+  /// is not an alias. Uses of an alias name as a type are replaced by the
+  /// target. Filled in by the driver after a first pass over the program.
+  final Map<String, String> aliases;
+
+  Parser(this.tokens, {this.aliases = const {}});
+
+  /// [name] with any alias resolved.
+  String _resolveAlias(String name) => aliases[name] ?? name;
 
   /// Action has no pointers: a `*` after a type name is a syntax error.
   void _rejectPointerType(String tName) {
     if (peek().val == '*') {
       final t = peek();
       throw CompileError(
-          "${t.loc}: pointer type '${tName.trim()}*' is not supported; Action has no pointers (records and arrays are passed by reference)");
+          "${t.loc}: pointer type '${tName.trim()}*' is not supported; Action has no pointers (user-defined types and arrays are passed by reference)");
     }
   }
 
@@ -78,11 +89,11 @@ class Parser {
     if (t.val == 'type') {
       consume();
       final sName = consume('IDENT').val;
-      return sName;
+      return _resolveAlias(sName);
     } else if ([..._primitiveTypes, 'string', 'void'].contains(t.val)) {
       return consume().val;
     } else if (t.type == 'IDENT') {
-      return consume().val;
+      return _resolveAlias(consume().val);
     }
     throw CompileError("${t.loc}: Expected type specifier, got '${t.val}'");
   }
@@ -166,6 +177,31 @@ class Parser {
   }
 
   AstNode parseTopLevel() {
+    final start = peek();
+    try {
+      final node = _parseTopLevel();
+      node.loc ??= start.loc;
+      return node;
+    } on CompileError catch (e) {
+      throw e.at(start.loc);
+    }
+  }
+
+  AstNode _parseTopLevel() {
+    // asm ReturnType name(params);  -- a routine written in assembly
+    if (peek().val == 'asm' && ahead(1).val != '(') {
+      final asmTok = consume();
+      final decl = parseTopLevel();
+      if (decl is! FuncDeclNode ||
+          decl.body != null ||
+          decl.isInline ||
+          decl.trapExpr != null) {
+        throw CompileError(
+            "${asmTok.loc}: 'asm' must be followed by a function prototype, such as 'asm u32 name(u32 a);'");
+      }
+      decl.isAsm = true;
+      return decl;
+    }
     if (peek().val == 'import') {
       return parseImport();
     }
@@ -184,6 +220,27 @@ class Parser {
     if (peek().val == 'inline') {
       consume();
       isInline = true;
+    }
+
+    // task name(State t, ...) { ... }: a coroutine. It is parsed as a
+    // function returning its u16 status.
+    if (peek().val == 'task' && ahead(1).type == 'IDENT' && ahead(2).val == '(') {
+      final taskTok = peek();
+      if (isInline || isVolatile) {
+        throw CompileError(
+            "${taskTok.loc}: a task cannot be ${isInline ? 'inline' : 'volatile'}");
+      }
+      tokens[pos] = Token('KEYWORD', 'u16', taskTok.lineno, taskTok.col, taskTok.fname);
+      final decl = parseTopLevel();
+      if (decl is! FuncDeclNode || decl.body == null) {
+        throw CompileError("${taskTok.loc}: task '${ahead(0).val}' needs a body");
+      }
+      if (decl.params.isEmpty) {
+        throw CompileError(
+            "${taskTok.loc}: task '${decl.name}' needs its state as the first parameter, as in 'task ${decl.name}(pt t)'");
+      }
+      decl.isTask = true;
+      return decl;
     }
 
     // trap(N) name() { ... }: a trap handler
@@ -205,8 +262,22 @@ class Parser {
     if (peek().val == 'type' &&
         ahead(1).type == 'IDENT' &&
         ['{', '='].contains(ahead(2).val)) {
-      consume();
+      final typeTok = consume();
       final tName = consume('IDENT').val;
+      if (peek().val == '=' && ahead(1).val != 'fn') {
+        // type Name = Target;  -- an alias
+        consume();
+        final target = parseType();
+        if (peek().val == '[' || peek().val == '*') {
+          throw CompileError(
+              "${peek().loc}: '$tName' cannot alias an array; aliases name a scalar, string, user-defined or function type");
+        }
+        if (peek().val == ';') {
+          consume('PUNCT', ';');
+        }
+        knownTypes.add(tName);
+        return TypeAliasNode(tName, target, typeTok.loc);
+      }
       if (peek().val == '=') {
         consume();
         consume('KEYWORD', 'fn');
@@ -236,10 +307,27 @@ class Parser {
         consume('PUNCT', '{');
         final fields = <FieldDecl>[];
         while (peek().val != '}' && peek().type != 'EOF') {
+          // ref T name;  -- a reference to a T stored elsewhere
+          if (peek().val == 'ref') {
+            final refTok = consume();
+            final rType = parseType();
+            _rejectPointerType(rType);
+            final rName = consume('IDENT').val;
+            if (peek().val == '[') {
+              throw CompileError(
+                  "${refTok.loc}: 'ref' is for a reference to one value; for a reference to a heap array write '$rType $rName[]' without 'ref'");
+            }
+            if (peek().val == ';') {
+              consume('PUNCT', ';');
+            }
+            fields.add(FieldDecl(rType, true, rName, const [], false)..loc = refTok.loc);
+            continue;
+          }
+          final fTok = peek();
           final fType = parseType();
           if (peek().val == ';') {
             consume('PUNCT', ';');
-            if (['u8', 's8', 'u16', 's16', 'u32', 's32', 'void']
+            if (['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'void']
                 .contains(fType)) {
               throw CompileError(
                   "Cannot anonymously embed primitive scalar type '$fType'");
@@ -250,15 +338,27 @@ class Parser {
           _rejectPointerType(fType);
           final fName = consume('IDENT').val;
           final fDims = <AstNode>[];
+          var arrayRef = false;
           while (peek().val == '[') {
             consume('PUNCT', '[');
+            if (peek().val == ']') {
+              // T name[]: a reference to a heap array
+              consume('PUNCT', ']');
+              if (fDims.isNotEmpty || peek().val == '[') {
+                throw CompileError(
+                    "${fTok.loc}: field '$fName': a heap array reference is written '$fType $fName[]', with no other dimensions");
+              }
+              arrayRef = true;
+              break;
+            }
             fDims.add(_parseConstExpr());
             consume('PUNCT', ']');
           }
           if (peek().val == ';') {
             consume('PUNCT', ';');
           }
-          fields.add(FieldDecl(fType, false, fName, fDims, false));
+          fields.add(FieldDecl(fType, arrayRef, fName, fDims, false, isArrayRef: arrayRef)
+            ..loc = fTok.loc);
         }
         consume('PUNCT', '}');
         if (peek().val == ';') {
@@ -311,7 +411,7 @@ class Parser {
     if (peek().val == '.') {
       consume('PUNCT', '.');
       final methodName = consume('IDENT').val;
-      final boundType = name;
+      final boundType = _resolveAlias(name);
       boundStruct = boundType;
       name = '${boundType}_$methodName';
     }
@@ -412,6 +512,17 @@ class Parser {
   }
 
   AstNode parseStatement() {
+    final start = peek();
+    try {
+      final node = _parseStatement();
+      node.loc ??= start.loc;
+      return node;
+    } on CompileError catch (e) {
+      throw e.at(start.loc);
+    }
+  }
+
+  AstNode _parseStatement() {
     var tok = peek();
     if (tok.val == 'verify') {
       return parseVerify();
@@ -654,19 +765,25 @@ class Parser {
 
   AstNode parseExpr() => parseAssignment();
 
+  /// Gives [node] the location of [tok] (unless it has one) and returns it.
+  T _at<T extends AstNode>(Token tok, T node) {
+    node.loc ??= tok.loc;
+    return node;
+  }
+
   AstNode parseAssignment() {
     final node = parseLogicalOr();
     final tok = peek();
     if (tok.val == '=') {
       consume();
       final rhs = parseAssignment();
-      return BinaryOpNode('=', node, rhs);
+      return _at(tok, BinaryOpNode('=', node, rhs));
     } else if (tok.type == 'COMPOUND_ASSIGN' ||
-        ['+=', '-=', '*=', '/=', '&=', '|=', '^=', '<<=', '>>=']
+        ['+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=']
             .contains(tok.val)) {
       final op = consume().val;
       final rhs = parseAssignment();
-      return CompoundAssignNode(op, node, rhs);
+      return _at(tok, CompoundAssignNode(op, node, rhs));
     }
     return node;
   }
@@ -674,8 +791,8 @@ class Parser {
   AstNode parseLogicalOr() {
     var node = parseLogicalAnd();
     while (peek().val == '||') {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseLogicalAnd());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseLogicalAnd()));
     }
     return node;
   }
@@ -683,8 +800,8 @@ class Parser {
   AstNode parseLogicalAnd() {
     var node = parseRelational();
     while (peek().val == '&&') {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseRelational());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseRelational()));
     }
     return node;
   }
@@ -692,8 +809,8 @@ class Parser {
   AstNode parseRelational() {
     var node = parseBitwise();
     while (['==', '!=', '<', '<=', '>', '>='].contains(peek().val)) {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseBitwise());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseBitwise()));
     }
     return node;
   }
@@ -701,8 +818,8 @@ class Parser {
   AstNode parseBitwise() {
     var node = parseShift();
     while (['&', '|', '^'].contains(peek().val)) {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseShift());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseShift()));
     }
     return node;
   }
@@ -710,8 +827,8 @@ class Parser {
   AstNode parseShift() {
     var node = parseAdditive();
     while (['<<', '>>'].contains(peek().val)) {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseAdditive());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseAdditive()));
     }
     return node;
   }
@@ -719,8 +836,8 @@ class Parser {
   AstNode parseAdditive() {
     var node = parseMultiplicative();
     while (['+', '-'].contains(peek().val)) {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseMultiplicative());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseMultiplicative()));
     }
     return node;
   }
@@ -728,8 +845,8 @@ class Parser {
   AstNode parseMultiplicative() {
     var node = parseUnary();
     while (['*', '/', '%'].contains(peek().val)) {
-      final op = consume().val;
-      node = BinaryOpNode(op, node, parseUnary());
+      final opTok = consume();
+      node = _at(opTok, BinaryOpNode(opTok.val, node, parseUnary()));
     }
     return node;
   }
@@ -739,11 +856,11 @@ class Parser {
     if (t.val == '*' || t.val == '&') {
       final what = t.val == '*' ? 'pointer dereference' : 'address-of';
       throw CompileError(
-          "${t.loc}: $what '${t.val}' is not supported; Action has no pointers (records and arrays are passed by reference)");
+          "${t.loc}: $what '${t.val}' is not supported; Action has no pointers (user-defined types and arrays are passed by reference)");
     }
     if (['-', '~', '!'].contains(t.val)) {
       final op = consume().val;
-      return UnaryOpNode(op, parseUnary());
+      return _at(t, UnaryOpNode(op, parseUnary()));
     }
     return parsePostfix();
   }
@@ -763,6 +880,7 @@ class Parser {
         throw CompileError(
             "${t.loc}: '->' is not supported; Action has no pointers, use '.'");
       }
+      final postTok = peek();
       if (peek().val == '.') {
         consume();
         final member = consume('IDENT').val;
@@ -783,7 +901,7 @@ class Parser {
 
           // Intercept dynamic allocation pseudo-constructors
           // Receiver node is a VarAccessNode naming a type, or identifier 'string'
-          final rcvName = node is VarAccessNode ? node.name : null;
+          final rcvName = node is VarAccessNode ? _resolveAlias(node.name) : null;
 
           if (member == 'create') {
             if (rcvName == 'string') {
@@ -857,11 +975,23 @@ class Parser {
       } else {
         break;
       }
+      node.loc ??= postTok.loc;
     }
     return node;
   }
 
   AstNode parsePrimary() {
+    final start = peek();
+    try {
+      final node = _parsePrimary();
+      node.loc ??= start.loc;
+      return node;
+    } on CompileError catch (e) {
+      throw e.at(start.loc);
+    }
+  }
+
+  AstNode _parsePrimary() {
     final tok = peek();
     if (tok.val == 'sizeof') {
       consume('KEYWORD', 'sizeof');
@@ -871,7 +1001,7 @@ class Parser {
         final tArg = consume().val;
         _rejectPointerType(tArg);
         consume('PUNCT', ')');
-        final sz = ['u8', 's8', 'string'].contains(tArg)
+        final sz = ['u8', 's8', 'bool', 'string'].contains(tArg)
             ? 1
             : (['u16', 's16'].contains(tArg)
                 ? 2
@@ -886,6 +1016,13 @@ class Parser {
       } else if (argTok.type == 'IDENT' && ahead(1).val == ')') {
         final tArg = consume('IDENT').val;
         consume('PUNCT', ')');
+        if (aliases.containsKey(tArg)) {
+          final target = aliases[tArg]!;
+          if (const ['u8', 's8', 'bool', 'string'].contains(target)) return IntLitNode(1);
+          if (const ['u16', 's16'].contains(target)) return IntLitNode(2);
+          if (const ['u32', 's32'].contains(target)) return IntLitNode(4);
+          return SizeofNode(target);
+        }
         return SizeofNode(tArg);
       } else {
         final expr = parseExpr();
@@ -903,13 +1040,17 @@ class Parser {
       final val = raw.isNotEmpty ? raw.codeUnitAt(0) : 0;
       return IntLitNode(val);
     }
+    if (tok.val == 'true' || tok.val == 'false') {
+      consume();
+      return IntLitNode(tok.val == 'true' ? 1 : 0);
+    }
     if (tok.type == 'STRING') {
       consume();
       final raw = decodeEscapes(tok.val.substring(1, tok.val.length - 1));
       return StringLitNode(raw);
     }
     if (tok.type == 'IDENT' ||
-        ([..._primitiveTypes.take(6), 'string'].contains(tok.val) &&
+        ([..._arrayElemTypes, 'string'].contains(tok.val) &&
             pos + 1 < tokens.length &&
             ahead(1).val == '.')) {
       final name = consume().val;
@@ -928,7 +1069,11 @@ class Parser {
         }
         consume('PUNCT', ')');
         if (name == 'trap' && args.length == 1 && args[0] is IntLitNode) {
-          return TrapNode((args[0] as IntLitNode).val);
+          final n = (args[0] as IntLitNode).val;
+          if (n < 0 || n > 15) {
+            throw CompileError('${tok.loc}: trap number $n is out of range (0-15)');
+          }
+          return TrapNode(n);
         }
         return CallNode(name, args);
       }

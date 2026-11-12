@@ -31,7 +31,7 @@ class ParticleAsmBackend extends Backend {
   bool supportsType(String tName) {
     final clean = tName.trim();
     // Particle RISC is currently a 32-bit architecture; u64/s64 are not natively supported
-    return ['u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void']
+    return ['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'string', 'void']
         .contains(clean);
   }
 
@@ -68,10 +68,24 @@ class ParticleAsmBackend extends Backend {
   @override
   void genHeapAlloc(int dstReg, int sizeBytes) {
     emitImmediate(1, sizeBytes);
-    emit('RCALL   _rt_alloc', 'Heap alloc $sizeBytes bytes');
+    emit('RCALL   _rt_alloc_zero', 'Heap alloc $sizeBytes bytes (zeroed)');
+    _checkAllocation();
     if (dstReg != 1) {
       emit('LD      R$dstReg, R1');
     }
+  }
+
+  @override
+  void genNullTrap(int reg, String what) {
+    final ok = newLabel('ref_ok');
+    emit('FBRA.NZ R$reg, $ok', 'Reference is not null');
+    emit('TRAP    15', 'Null reference trap ($what)');
+    emitLabel(ok);
+  }
+
+  /// After an allocator call: traps if it failed (R1 = 0).
+  void _checkAllocation() {
+    if (referenceCheck) genNullTrap(1, 'allocation failed');
   }
 
   @override
@@ -97,7 +111,8 @@ class ParticleAsmBackend extends Backend {
       emit('MULL    R1, R2');
     }
     emit('ADD     R1, 4', 'Include 4-byte length prefix header');
-    emit('RCALL   _rt_alloc', 'Allocate dynamic array');
+    emit('RCALL   _rt_alloc_zero', 'Allocate dynamic array (zeroed)');
+    _checkAllocation();
     emit('POP32   R2', 'Restore count for header');
     // Store count in prefix header [Offset 0: count]
     emit('ST32    (R1), R2', 'Store array length header');
@@ -140,6 +155,7 @@ class ParticleAsmBackend extends Backend {
     emit('SUB     R1, 4', 'Adjust pointer to raw chunk header');
     // 4. Invoke runtime allocator realloc
     emit('RCALL   _rt_realloc', 'Resize dynamic memory chunk');
+    _checkAllocation();
     // 5. Restore new element count and update length header
     emit('POP32   R2', 'Restore new count for header');
     emit('ST32    (R1), R2', 'Update array length header');
@@ -156,7 +172,8 @@ class ParticleAsmBackend extends Backend {
     emit('PUSH32  R$capReg', 'Preserve capacity for header');
     emit('LD      R1, R$capReg');
     emit('ADD     R1, 4', 'Include 4-byte capacity prefix header');
-    emit('RCALL   _rt_alloc', 'Allocate dynamic string');
+    emit('RCALL   _rt_alloc_zero', 'Allocate dynamic string (zeroed)');
+    _checkAllocation();
     emit('POP32   R2', 'Restore capacity for header');
     // Store capacity header
     emit('LD32    (R1), R2', 'Store string capacity header');

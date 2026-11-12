@@ -2,11 +2,13 @@
 
 **Tutorial · User Guide · Reference**
 
-Action is a small, C-like systems language for the **Particle** 32-bit RISC processor (16-bit compact instruction set). The Action compiler turns one or more source files into Particle assembly. Action is built for bare-metal work: memory-mapped I/O, hardware FIFOs, trap handlers, inline assembly and cooperative multitasking. It also gives you conveniences that C does not have: bounds-checked arrays, methods attached to types, multiple return values, compile-time assertions and ownership-checked heap allocation. Action has **no pointers**: instances of user-defined types and arrays are passed by reference automatically.
+Action is a small systems language. It is built for work close to the hardware: memory-mapped I/O, hardware FIFOs, trap handlers, inline assembly and cooperative multitasking. It also provides bounds-checked arrays, methods attached to types, multiple return values, type aliases, compile-time assertions and ownership-checked heap allocation. Action has **no pointers**: instances of user-defined types and arrays are passed by reference automatically.
+
+Today the compiler generates code for the **Particle** processor, and the parts of this guide about generated code, the runtime and the tools describe that target. Support for other platforms is planned.
 
 This document has three parts:
 
-1. **Tutorial**: a guided tour, from "hello" to coroutines.
+1. **Tutorial**: a guided tour, from "hello" to tasks.
 2. **User Guide**: building and running programs, organizing projects, the generated code and the runtime.
 3. **Reference**: the complete language definition, plus known limitations.
 
@@ -29,7 +31,7 @@ This document has three parts:
 - [Part 2: User Guide](#part-2-user-guide)
   - [2.1 Building and running programs](#21-building-and-running-programs)
   - [2.2 Multi-file projects](#22-multi-file-projects)
-  - [2.3 Bounds checking](#23-bounds-checking)
+  - [2.3 Bounds and reference checking](#23-bounds-and-reference-checking)
   - [2.4 Understanding the output](#24-understanding-the-output)
   - [2.5 The runtime support files](#25-the-runtime-support-files)
   - [2.6 Calling convention and inline assembly](#26-calling-convention-and-inline-assembly)
@@ -46,7 +48,7 @@ This document has three parts:
   - [3.8 User-defined types](#38-user-defined-types)
   - [3.9 Arrays, strings and slices](#39-arrays-strings-and-slices)
   - [3.10 Heap allocation and ownership](#310-heap-allocation-and-ownership)
-  - [3.11 Coroutines](#311-coroutines)
+  - [3.11 Tasks](#311-tasks)
   - [3.12 Hardware intrinsics and traps](#312-hardware-intrinsics-and-traps)
   - [3.13 Compile-time evaluation](#313-compile-time-evaluation)
   - [3.14 Keywords](#314-keywords)
@@ -95,7 +97,7 @@ The example already shows several features:
 
 ## 1.2 Variables and types
 
-Action has six integer types, a string type and `void`:
+Action has six integer types, `bool`, a string type and `void`:
 
 | Type | Size | Range |
 |------|------|-------|
@@ -105,6 +107,7 @@ Action has six integer types, a string type and `void`:
 | `s16` | 2 bytes | −32 768 … 32 767 |
 | `u32` | 4 bytes | 0 … 4 294 967 295 |
 | `s32` | 4 bytes | −2 147 483 648 … 2 147 483 647 |
+| `bool` | 1 byte  | 0 (`false`) or 1 (`true`) |
 | `string` | 1 byte per character | null-terminated character buffer |
 
 ```c
@@ -116,7 +119,18 @@ void main() {
 
     count = count + delta;
     count += 1;             // compound assignment
+    count %= 4;             // every arithmetic operator has one
 }
+```
+
+`true` and `false` are built-in constants, 1 and 0. A `bool` always holds 0 or 1: storing any other constant in one is an error, and a value of another type is stored as 1 if it is non-zero and 0 if it is zero:
+
+```c
+bool ready = false;
+u32 flags = 0x40;
+bool any = flags;       // stored as 1
+bool big = flags > 10;  // comparisons already give 0 or 1
+bool bad = 2;           // error: the constant 2 does not fit in bool
 ```
 
 All arithmetic is done in 32-bit registers. Narrow values are zero-extended (unsigned) or sign-extended (signed) when loaded, and truncated when stored. Division, remainder, right shift and comparisons are **signed** when an operand has a signed type (see [3.5](#35-expressions-and-operators)).
@@ -327,6 +341,16 @@ A variable of a user-defined type is either **stored in place** or a **reference
 
 Instances are **never copied**. Assigning to a variable stored in place is a compile error, and so is making a reference point at an instance stored on the stack.
 
+A field can hold a reference too. `ref T name;` refers to a `T` stored elsewhere, and `T name[];` refers to a heap array (see [1.10](#110-heap-memory-and-ownership)). Without `ref`, a field of a user-defined type is stored in place, inside the outer value:
+
+```c
+type Node {
+    u32 value;
+    ref Node next;      // a reference: a type can refer to itself this way
+    u8 payload[];       // a reference to a heap array
+}
+```
+
 **Embedding** places one type inside another, without a field name. The embedded type's fields and methods become available directly on the outer type:
 
 ```c
@@ -376,8 +400,20 @@ verify(FAULT == 11, "enum numbering changed");
 ```
 
 - `const` values and `enum` members exist only at compile time and use no memory.
-- A constant can be used **anywhere a literal can**: array sizes, `case` labels, `@` addresses, trap numbers, FIFO channels and coroutine step numbers.
+- A constant can be used **anywhere a literal can**: array sizes, `case` labels, `@` addresses, trap numbers and FIFO channels.
 - `verify(condition, "message")` stops compilation with your message if the condition is false. It works at the top level and inside functions.
+
+**How constants get their types.** A literal, an `enum` member, a `sizeof`, or an expression made only of those is **untyped**: it takes the type of whatever it is used with, and it is an error if the value does not fit. A `const` has the type it is declared with, and its value must fit that type.
+
+```c
+u8 b = 300;            // error: the constant 300 does not fit in u8
+u32 m = ~0;            // error: ~0 is -1, which does not fit in u32; write 0xFFFFFFFF
+const u32 X = -1;      // error: -1 does not fit in u32
+s32 x = -1;            // fine
+if (x < -1) { }        // -1 takes x's type, s32, so the comparison is signed
+```
+
+Expressions made only of constants are computed exactly, without wrapping at 32 bits, so `-1 < 0` is true and `(1 << 40) >> 20` is `0x100000`. Only the result has to fit where it is used. See [3.13](#313-compile-time-evaluation) for the full rules.
 
 ```c
 const u32 CMD_READ  = 1;
@@ -393,6 +429,19 @@ void handle(u32 cmd) {
     }
 }
 ```
+
+**Type aliases** give another name to an existing type, the way C programs use `size_t` or `time_t`:
+
+```c
+type size_t = u32;
+type millis = u32;
+
+millis elapsed(millis start, millis now) {
+    return now - start;
+}
+```
+
+An alias is interchangeable with its type: a `size_t` can be used anywhere a `u32` can. Aliases can name scalars, `string`, user-defined types and function types, but not arrays.
 
 There is no preprocessor. Constants replace `#define`, `import` replaces `#include` (see [3.2](#32-modules-and-imports)), and `-D NAME=VALUE` on the command line defines a constant (see [2.1](#21-building-and-running-programs)).
 
@@ -469,19 +518,64 @@ void main() {
 
 A heap array is always declared with `[]` (`u32 samples[]`). Giving `createArray` to a plain `u32` or to a fixed-size array is a compile error.
 
-Heap references are **affine**: each one has exactly one owner. Assigning a reference to another variable **moves** it:
+A heap reference has exactly one owner. Assigning it to another variable **moves** it:
 
 ```c
 void main() {
     u32 a[] = u32.createArray(4);
-    u32 b[] = u32.createArray(1);
-    b.destroyArray();
-    b = a;              // ownership moves to b
-    u32 n = a.len;      // compile error: use of moved reference 'a'
+    u32 b[] = a;        // ownership moves to b
+    u32 n = a.len;      // compile error: 'a' was moved to another variable and can no longer be used
 }
 ```
 
-The compiler also rejects freeing the same reference twice, and freeing an array that was only **borrowed** as a parameter:
+The compiler follows each reference held in a function's variables along **every path** through the function, through branches and loops, and knows at each point whether it is valid, null (set to 0, destroyed, or never given a value) or moved. Using a reference that is not **definitely valid** is an error:
+
+```c
+type Item { u32 id; }
+
+Item find(u32 id) {
+    if (id == 0) {
+        return 0;               // so a call to find may give null
+    }
+    Item it = Item.create();
+    it.id = id;
+    return it;
+}
+
+void main() {
+    Item a = find(7);
+    a.id = 1;                   // compile error: 'a' may be null here; check it with 'a.exists()' first
+    if (a.exists()) {
+        a.id = 1;               // fine: a is valid here
+        a.destroy();
+    }
+    a.id = 2;                   // compile error: 'a' is null here
+}
+```
+
+- `create()` and `createArray()` always give a valid reference. If the heap is exhausted, the program traps instead (see [2.3](#23-bounds-and-reference-checking)).
+- A function whose every `return` gives a valid reference returns a valid reference. Otherwise its result may be null and has to be checked.
+- `x.exists()` makes `x` valid where the test is true and null where it is false. `!x.exists()`, `x.exists() != 0`, `x.exists() == 1` and `x != 0` work too, and so do `&&` and `||`: `if (a.exists() && a.id == 7)` is fine.
+- A reference held in a global or a field cannot be followed this way, so a variable given one may be null. Using a null reference held in a global or a field traps at run time (see [2.3](#23-bounds-and-reference-checking)).
+- Memory from `create()`, `createArray()` and `string.create()` is zeroed, so the reference fields of a new value start out null.
+
+Storing a reference in a field **moves** it into the field, which then owns it:
+
+```c
+void main() {
+    Node head = Node.create();
+    Node second = Node.create();
+    head.next = second;         // head.next now owns it
+    second.value = 2;           // compile error: 'second' was moved to another variable or field
+    head.next.value = 2;        // fine (checked for null at run time)
+    head.next.destroy();        // frees it and sets head.next to 0
+    head.destroy();             // does not free anything head's fields refer to
+}
+```
+
+Reading a field into a variable (`Node n = head.next;`) copies the reference: both then refer to the same value, and the compiler does not stop you from destroying it through one and then using the other.
+
+The compiler also rejects freeing an array that was only **borrowed** as a parameter:
 
 ```c
 void process(u32 data[]) {
@@ -491,29 +585,29 @@ void process(u32 data[]) {
 
 ## 1.11 Cooperative tasks
 
-Action supports **stackless coroutines** for cooperative multitasking. A task function can pause with `yield` or `wait_until` and later resume where it left off, or start over with `pk_exit`. These operations come from `lib/protokernel.act`, which you import.
+A **task** is a function that can pause and later resume where it left off, so several tasks can share one core without threads: a loop calls each in turn, and each runs until it pauses. Tasks are declared with `task`. They pause with `yield` or `wait_until`, or start over with `pk_exit`. These operations come from `lib/protokernel.act`, which you import.
 
-The task's state lives in a type whose **first field is a 16-bit continuation counter**. `protokernel.act` provides one, `type pt { u16 lc; }`, or you can declare your own with `lc` first:
+A task's first parameter is its **state**: an instance of a type whose first field is a `u16`, where the task keeps its place. `protokernel.act` provides `type pt { u16 lc; }`, or you can declare your own with a `u16` first:
 
 ```c
 import "lib/protokernel.act";
 
 type Blinker {
-    u16 lc;          // continuation counter: must be the first field
+    u16 lc;          // where the task resumes: must be the first field
     u32 toggles;
 }
 
 u32 LED @ 0x40002000;
 
-u16 blink(Blinker t) {
+task blink(Blinker t) {
     while (1) {
         LED = 1;
-        yield(t, 1);                          // pause; resume here next call
+        yield(t);                          // pause; resume here next call
         LED = 0;
-        wait_until(t, 2, readfifo(0) == 1);   // pause until a condition holds
+        wait_until(t, readfifo(0) == 1);   // pause until a condition holds
         t.toggles += 1;
         if (t.toggles == 100) {
-            pk_exit(t);                       // stop; the next call starts from the top
+            pk_exit(t);                    // stop; the next call starts from the top
         }
     }
 }
@@ -527,16 +621,28 @@ void main() {
 }
 ```
 
-Each call runs the task until its next pause point and returns a status, which `protokernel.act` names:
+Each call runs the task until its next pause and returns a `u16` status, which `protokernel.act` names:
 
 | Status | Constant | Meaning |
 |--------|----------|---------|
 | 0 | `PK_WAITING` | a `wait_until` condition was false |
 | 1 | `PK_YIELDED` | the task reached a `yield` |
 | 2 | `PK_EXITED`  | the task called `pk_exit` |
-| 3 | `PK_ENDED`   | the task ran off the end and was reset to the start |
+| 3 | `PK_ENDED`   | the task ran off the end or ran `return;`, and was reset to the start |
 
-**Important:** local variables are *not* preserved across a pause, because they are re-zeroed every time the function is entered. Keep any state you need in the task's fields.
+**Local variables do not survive a pause.** Keep anything you need after a pause in the task's state. The compiler enforces this: reading a local after a pause, when it was set before the pause and not set again, is an error. A `for` loop whose body pauses is also an error, because its counter is a local; use a `while` loop with the counter in the state:
+
+```c
+type Counter { u16 lc; u32 i; }
+
+task count(Counter c) {
+    c.i = 0;
+    while (c.i < 10) {
+        yield(c);
+        c.i += 1;
+    }
+}
+```
 
 ---
 
@@ -570,6 +676,8 @@ build/tools/action [options] source.act [more.act ...]     # {tktk fix me}
 | `-I DIR`, `--include-dir DIR` | Add a directory to search for `import` (repeatable). |
 | `-fbounds-check` | Enable run-time array bounds checks (the default). |
 | `-fno-bounds-check` | Disable run-time bounds checks. |
+| `-freference-check` | Enable run-time reference checks (the default). |
+| `-fno-reference-check` | Disable run-time reference checks. |
 | `-h`, `--help` | Show usage. |
 
 The compiler stops at the first error, printing `action: error: …` and exiting with status 1. A command-line mistake exits with status 2.
@@ -594,7 +702,7 @@ The usual file extension is `.act`.
 ./pbuild main.act drivers.act asmlib.asm -o build/fw.bin # {tktk fix me}
 ```
 
-It accepts `.act` and `.asm` sources together, and passes `-D`, `-I` and the bounds-check flags through to the tools. `--sim` runs the binary in psim, `--debug` runs it under psim's debugger, and `--no-exit-on-reset` is passed to psim. If a tool it needs has not been built, pbuild says which `make` target builds it. If a tool fails, pbuild exits with that tool's status; after `--sim` it exits with psim's status (see [2.7](#27-running-in-the-simulator)).
+It accepts `.act` and `.asm` sources together, and passes `-D`, `-I`, the bounds-check flags and the reference-check flags through to the tools. `--sim` runs the binary in psim, `--debug` runs it under psim's debugger, and `--no-exit-on-reset` is passed to psim. If a tool it needs has not been built, pbuild says which `make` target builds it. If a tool fails, pbuild exits with that tool's status; after `--sim` it exits with psim's status (see [2.7](#27-running-in-the-simulator)).
 
 ## 2.2 Multi-file projects
 
@@ -603,7 +711,8 @@ There is no linker, so a program is built from **all of its source files at once
 - `import "file.act";` loads another module (see [3.2](#32-modules-and-imports)). Each file is loaded only once, so repeated or circular imports are harmless.
 - All declarations are merged. Types, constants and functions from any file can be used in any other.
 - A function may have **only one definition** across all files. Defining it twice is an error that names both files.
-- **Prototypes** (`u32 f(u32 x);`) can appear anywhere. A prototype with no definition in any Action file refers to a routine written in assembly.
+- **Prototypes** (`u32 f(u32 x);`) can appear anywhere. Every prototype must have a definition in some Action file, or the compiler reports it.
+- **Routines written in assembly** are declared with `asm` in front of the prototype: `asm u32 checksum(u32 data[]);`. Calls to them become `RCALL _checksum`, and the `.asm` file given to `pbuild` must provide the label.
 - **Assembly libraries** (`.asm` files given to `pbuild`) are assembled after the compiled program. The heap starts after everything assembled, so they are safe from it.
 
 A typical layout:
@@ -613,7 +722,7 @@ project/
 ├── lib/
 │   ├── common.inc      (assembler support, see 2.5)
 │   ├── alloc.asm       (heap allocator, see 2.5)
-│   ├── protokernel.act (coroutine support)
+│   ├── protokernel.act (task support)
 │   ├── string.act      (string functions)
 │   └── uart.act        (your shared Action module)
 ├── main.act
@@ -625,7 +734,7 @@ project/
 import "lib/uart.act";
 ```
 
-## 2.3 Bounds checking
+## 2.3 Bounds and reference checking
 
 With bounds checking on (the default), every array index is checked:
 
@@ -639,6 +748,15 @@ With bounds checking on (the default), every array index is checked:
 An out-of-range index executes `TRAP 15`. On hardware, trap 15 goes to its vector, so a `trap(15)` handler can report the fault. In psim, a `TRAP 15` instruction ends the run with exit status 15.
 
 `-fno-bounds-check` {tktk fix me} removes the checks, which makes the code smaller and faster.
+
+### Reference checks
+
+The compiler checks the references in a function's variables at compile time (see [3.10](#310-heap-allocation-and-ownership)). With reference checking on (the default), it adds run-time checks for what it cannot check there:
+
+- Before a reference held in a global or a field is used (a field or element read or written, `.len`, `.capacity`, a method call, passing it to a function, destroying or resizing it), it is checked to be non-null.
+- After `create()`, `createArray()`, `string.create()` and `resize()`, the allocator's result is checked, so running out of heap traps rather than giving a null reference.
+
+A failed check executes `TRAP 15`, like a failed bounds check. `-fno-reference-check` {tktk fix me} removes these checks.
 
 ## 2.4 Understanding the output
 
@@ -676,7 +794,7 @@ Heap arrays and strings store a 4-byte header (element count or capacity) **imme
 
 These Action modules are also in `lib/`:
 
-- **`lib/protokernel.act`**: the coroutine operations and status constants (see [3.11](#311-coroutines)).
+- **`lib/protokernel.act`**: the task operations and status constants (see [3.11](#311-tasks)).
 - **`lib/string.act`**: `string_copy(dst[], src)`, `string_concat(dst[], src)`, `string_compare(a, b)`, `string_equals(a, b)` and `string_find(s, ch)`.
 
 ## 2.6 Calling convention and inline assembly
@@ -697,7 +815,7 @@ You need this when you write `asm(...)` blocks or link to hand-written assembly.
 - **Slots 1–4** go in R1–R4. **Slots 5 and up** go on the stack: before evaluating the arguments, the caller reserves 4 bytes per extra slot below its stack pointer, with slot 5 at the lowest address, and releases the area after the call. The callee finds slot 5 just above its saved return address.
 - **No registers are preserved across calls.** Assume R1–R14 are clobbered.
 - Labels: functions and globals are `_name`. Methods are `_Type_method`, so a free function named `Point_move` would collide with method `Point.move`.
-- **Trap handlers** are called from their vector after `FAST_ENTER_TRAP` swaps R1–R14 with the shadow registers, so the interrupted code's registers are untouched. There is one shadow bank, so a trap taken inside a handler overwrites the saved registers.
+- **Trap handlers** are called from their vector after `FAST_ENTER_TRAP` swaps R1–R14 with the shadow registers, so the interrupted code's registers are untouched.
 
 Inline assembly is copied verbatim into the output, one instruction per line:
 
@@ -736,7 +854,7 @@ void main() {
 
 ## 2.8 Error messages
 
-Every message is printed as `action: error: …`. Many include `file:line:column`. Common ones:
+Every message is printed as `action: error: …`. A message about the program starts with the `file:line:column` it refers to, such as `main.act:12:8:`. Common ones:
 
 | Message (abridged) | Cause |
 |--------------------|-------|
@@ -748,10 +866,22 @@ Every message is printed as `action: error: …`. Many include `file:line:column
 | `Compile-time verification failed: '…'` | A `verify` condition was false. |
 | `Cannot assign array allocation to non-array variable '…'` | `createArray` was given to a plain variable. Declare it with `[]`. |
 | `Cannot assign array allocation to fixed-size array '…'` | `createArray` was given to `T x[N]`. Declare it as `T x[]`. |
-| `Cannot assign to record '…' stored on the stack` | Instances are never copied. Make the variable a reference. |
-| `Cannot assign record '…' stored on the stack to reference '…'` | A reference cannot point at an instance stored on the stack. |
-| `Cannot destroy record '…' stored on the stack` | Only references from `.create()` can be destroyed. |
-| `use of moved or deallocated affine reference '…'` | A heap reference was used after a move or free. |
+| `cannot assign to '…': it is a '…' stored on the stack` | Instances are never copied. Make the variable a reference. |
+| `cannot assign '…', a '…' stored on the stack, to reference '…'` | A reference cannot point at an instance stored on the stack. The same applies to a reference field. |
+| `cannot assign a '…' stored inside another type or an array to reference '…'` | A reference cannot point into another value. |
+| `cannot destroy '…': it is a '…' stored on the stack` | Only references from `.create()` can be destroyed. |
+| `'ref' needs a user-defined type` | `ref` was used with a scalar or `string`. For an array reference write `T name[]`. |
+| `global '…' of type '…' cannot have an initializer unless it is a reference` | A global stored in place cannot be initialized. |
+| `the constant N does not fit in bool` | A `bool` holds only 0 or 1. |
+| `-D true=…: 'true' is built in and cannot be redefined` | `true` and `false` cannot be defined with `-D`. |
+| `'…' is null here (it was set to 0, destroyed, or never given a value)` | A reference was used where it is certainly null. |
+| `'…' may be null here; check it with '….exists()' first` | A reference was used where it is null on some path, or came from a global or from a function that can return null. |
+| `'…' was moved to another variable or field and can no longer be used` | A reference was used after it was assigned to another variable or stored in a field (`may have been moved` if on some paths only). |
+| `argument N of '…' is null` | `0` was passed for a parameter of a user-defined type. |
+| `variable '…': the constant N does not fit in T` | An untyped constant does not fit the type it is used as. Assignments, arguments, return values, `case` labels and operands give the same message with their own description. |
+| `constant '…': the value N does not fit in T` | A `const`'s value does not fit its declared type. |
+| `constant expression overflows T` | An expression on typed constants gave a result outside its type. |
+| `division by zero` | Division or remainder by a constant 0. |
 | `cannot destroy borrowed reference parameter '…'` | A parameter was freed inside the function that borrowed it. |
 | `Function signature mismatch: cannot assign …` | A function value does not match the function type. |
 | `Maximum 4 scalar return values supported` | A tuple has more than four elements. |
@@ -766,7 +896,14 @@ Every message is printed as `action: error: …`. Many include `file:line:column
 | `the channel must be a constant` | A FIFO channel was not a constant. |
 | `'…' is a trap handler; it runs only when its trap is taken` | A trap handler was called or used as a function value. |
 | `trap N is bound to both '…' and '…'` | Two handlers for the same trap. |
-| `'…' returns from the coroutine; use it as a statement` | `yield`, `wait_until` or `pk_exit` was used inside an expression. |
+| `'…' returns from the task; use it as a statement` | `yield`, `wait_until` or `pk_exit` was used inside an expression. |
+| `'…' can only be used in a task function` | `yield`, `wait_until` or `pk_exit` was used outside a `task`. |
+| `task '…': '…' is read after a pause but was set before it` | A local's value was expected to survive a pause. Keep it in the task's state. |
+| `task '…': the 'for' loop over '…' pauses` | A `for` loop's counter does not survive a pause. Use a `while` loop with the counter in the state. |
+| `task '…' cannot return a value` | A task returns its status; `return;` ends it. |
+| `'…' is declared but never defined` | A prototype has no definition. If the routine is written in assembly, declare it with `asm`. |
+| `trap number N is out of range (0-15)` | `trap(N)` with a number outside 0–15. |
+| `type alias '…' names unknown type '…'` | The alias's target is not a type. |
 
 ---
 
@@ -792,7 +929,7 @@ Every message is printed as `action: error: …`. Many include `file:line:column
 ```
 +  -  *  /  %  &  |  ^  ~  !  <  >  =
 == != <= >= << >> && || -> ..
-+= -= *= /= &= |= ^= <<= >>=
++= -= *= /= %= &= |= ^= <<= >>=
 :  ;  ,  (  )  {  }  [  ]  @  .
 ```
 
@@ -828,8 +965,9 @@ Each file is loaded once, however many times it is imported, so circular imports
 | `s16` | 2 | yes | sign-extend | low 16 bits |
 | `u32` | 4 | no  | — | — |
 | `s32` | 4 | yes | — | — |
+| `bool` | 1 | no | zero-extend | 0 or 1 (non-zero becomes 1) |
 
-Expressions are evaluated at 32 bits. Literals, and expressions whose type the compiler cannot determine, are treated as `u32`.
+Expressions are evaluated at 32 bits. Constants take the type they are used with (see [3.13](#313-compile-time-evaluation)). `true` and `false` are the constants 1 and 0.
 
 ### `string`
 
@@ -846,6 +984,7 @@ There are no pointer types. A **reference** is a 4-byte address managed by the c
 - parameters of user-defined types, and variables of those types given a reference value (see [3.8](#38-user-defined-types))
 - heap arrays and strings (`T x[] = T.createArray(n)`)
 - open array parameters (`T a[]`)
+- fields declared `ref T name` or `T name[]` (see [3.8](#38-user-defined-types))
 
 ### User-defined types
 
@@ -867,6 +1006,19 @@ A function type is a 4-byte code address. See [3.7](#37-functions).
 ### Enum types
 
 `enum Name { ... }` defines integer constants (see [3.4](#34-declarations)). The enum name is not a distinct type. Declare variables that hold enum values as `u32` (or another integer type).
+
+### Type aliases
+
+```
+type Name = Type;
+```
+
+`Name` becomes another name for `Type`. They are interchangeable: values of one can be used wherever the other is expected, and `sizeof`, signedness, methods and `create()` behave identically.
+
+- `Type` can be a scalar, `string`, a user-defined type, a function type or another alias. Arrays cannot be aliased.
+- Aliases can be declared in any order and in any module, like types.
+- An alias whose target does not exist, an alias that refers back to itself, and a name that is already a type are errors.
+- Defining a method through an alias (`void Pos.shift(...)` with `type Pos = Point;`) defines it on the aliased type.
 
 ## 3.4 Declarations
 
@@ -893,7 +1045,7 @@ Type name[D] @ ADDRESS;        // bound array
 const Type NAME = constant-expression;
 ```
 
-The value is computed at compile time (see [3.13](#313-compile-time-evaluation)) and no storage is created. A constant can be used anywhere a literal can. A `-D NAME=VALUE` on the command line defines a constant, and overrides a `const` of the same name.
+The value is computed at compile time (see [3.13](#313-compile-time-evaluation)) and no storage is created. The value must fit `Type`, and the constant has that type. A constant can be used anywhere a literal can. A `-D NAME=VALUE` on the command line defines a constant, and overrides a `const` of the same name (taking its type).
 
 ### Enums
 
@@ -917,7 +1069,7 @@ verify(constant-expression, "message");
 
 | Level | Operators | Associativity |
 |-------|-----------|---------------|
-| 1 | `=` `+=` `-=` `*=` `/=` `&=` `\|=` `^=` `<<=` `>>=` | right |
+| 1 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | right |
 | 2 | `\|\|` | left |
 | 3 | `&&` | left |
 | 4 | `==` `!=` `<` `<=` `>` `>=` | left |
@@ -932,13 +1084,13 @@ verify(constant-expression, "message");
 
 ### Arithmetic and bitwise
 
-`+ - * / %`, `& | ^ ~`, `<< >>`, and unary `-` (negation). There is no `%=` operator.
+`+ - * / %`, `& | ^ ~`, `<< >>`, and unary `-` (negation). Each binary arithmetic and bitwise operator has a compound assignment form, such as `%=`.
 
 `/`, `%` and `>>` are **signed** (truncating division, remainder with the sign of the dividend, arithmetic shift) when either operand is signed: a variable, field or function result of type `s8`, `s16` or `s32`, or arithmetic involving one, such as `(a - b) / 2` with `s32 a`. Otherwise they are unsigned.
 
 ### Comparison
 
-`== != < <= > >=` produce 0 or 1. The comparison is **signed** under the same rule as above, and unsigned otherwise. Literals are unsigned, so `-1 < 0` is false. Store the value in an `s32` first if you need a signed comparison.
+`== != < <= > >=` produce 0 or 1. The comparison is **signed** under the same rule as above, and unsigned otherwise. A constant operand takes the other operand's type (see [3.13](#313-compile-time-evaluation)), so `x < -1` is a signed comparison when `x` is signed, and an error when `x` is unsigned. A comparison of two constants is computed exactly: `-1 < 0` is true.
 
 ### Logical
 
@@ -997,7 +1149,7 @@ The heap operations `.create()`, `.createArray()`, `.destroy()`, `.destroyArray(
 | Return | `return;`, `return expr;` or `return (e1, e2, …);` |
 | Tuple assign | `(targets) = call;` |
 | Assembly | `asm("text");` |
-| Coroutine | `yield(task, STEP);`, `wait_until(task, STEP, cond);`, `pk_exit(task);` (see [3.11](#311-coroutines)) |
+| Task operation | `yield(t);`, `wait_until(t, cond);`, `pk_exit(t);`, only in a task (see [3.11](#311-tasks)) |
 | Assertion | `verify(const-expr, "msg");` |
 
 **Conditions** are true when non-zero.
@@ -1015,6 +1167,7 @@ The heap operations `.create()`, `.createArray()`, `.destroy()`, `.destroyArray(
 ```
 ReturnType name(params) { body }
 ReturnType name(params);                       // prototype
+asm ReturnType name(params);                   // routine written in assembly
 (T1, T2, ...) name(params) { body }            // tuple return, up to 4
 inline ReturnType name(params) { body }
 ReturnType TypeName.method(params) { body }    // method, see 3.8
@@ -1037,6 +1190,8 @@ Slots 1–4 travel in R1–R4 and later slots on the stack (see [2.6](#26-callin
 
 **Inline functions** are expanded at each call site. They have no address and cannot be recursive. They may declare locals, which live in their own frame for the duration of the expansion.
 
+**Prototypes:** every prototype must be matched by a definition in the Action sources, which may come later or in another file. A routine written in assembly is declared with `asm` in front of its prototype instead; it must not also be defined in Action. Its label is `_name`, and it follows the calling convention in [2.6](#26-calling-convention-and-inline-assembly).
+
 **`main`** is special. It sets up the stack and runs, and when it returns the processor enters a halt loop. `main` may be declared `void` or `u32`.
 
 **Function values:** a variable of function type `F` can be assigned a function whose parameter types and return type **exactly** match `F`, or a value of the same function type. Assigning a function to a non-function variable, or a non-function to a function variable, is a compile-time error. Calling `v(args)` on a function variable `v` makes an indirect call. Trap handlers cannot be used as function values.
@@ -1048,15 +1203,24 @@ type Name {
     Type field;
     Type field[D1][D2];
     Type field[];           // reference to a heap array
+    ref OtherType field;    // reference to an OtherType
     OtherType field;        // nested by value
     OtherType;              // embedded (anonymous)
 }
 ```
 
 - Field semicolons are optional, and so is the `;` after the closing brace.
-- **Layout:** fields are placed in declaration order, each at the next offset that is a multiple of its **alignment**: 1 for `u8`/`s8`/`string`, 2 for `u16`/`s16`, 4 for `u32`/`s32` and references, and for a nested or embedded type, that type's alignment. A type aligns to its most-aligned field, and its size is padded to a multiple of that, so arrays of it stay aligned. Use `verify(sizeof(Name) == N, "...")` to pin a layout.
+- **Layout:** fields are placed in declaration order, each at the next offset that is a multiple of its **alignment**: 1 for `u8`/`s8`/`bool`/`string`, 2 for `u16`/`s16`, 4 for `u32`/`s32` and references, and for a nested or embedded type, that type's alignment. A type aligns to its most-aligned field, and its size is padded to a multiple of that, so arrays of it stay aligned. Use `verify(sizeof(Name) == N, "...")` to pin a layout.
 - Types may be declared in any order. Types that contain each other by value are an error.
 - Embedding a scalar type (`u32;`) is not allowed.
+
+**Reference fields:** `ref OtherType field;` and `Type field[];` each hold one pointer-sized reference. `OtherType` may be the type being declared, which is how linked structures are built. `ref` needs a user-defined type; for an array write `Type field[]`.
+
+- A new value from `create()` has its reference fields null, since allocations are zeroed.
+- Assigning a reference variable to the field moves it there (see [3.10](#310-heap-allocation-and-ownership)). Assigning `T.create()`, `T.createArray(n)`, `0` or another reference field also works. Assigning a value stored in place is an error.
+- `obj.field.member`, `obj.field[i]`, `.len`, `.capacity`, method calls and passing the field to a function go through the reference. With reference checks on, each first checks it is not null; element access is also bounds-checked against the heap header.
+- `obj.field.destroy()` or `obj.field.destroyArray()` frees the value and sets the field to 0. `obj.field.resize(n)` updates the field. `obj.field.exists()` tests it.
+- Destroying `obj` does not free what its fields refer to.
 
 **Embedding:** `OtherType;` inlines `OtherType`'s fields at that position, aligned as a nested field of that type would be. Its fields can then be accessed directly on the outer type. If the outer type declares a field with the same name, the outer field wins. Methods of the embedded type can be called on the outer type, and the receiver is adjusted to point at the embedded part. You can also refer to the embedded part as a whole by its type name: `sprite.Point`.
 
@@ -1104,9 +1268,9 @@ Slices are valid **only** as open-array arguments. Their bounds may be any expre
 
 | Expression | Effect |
 |------------|--------|
-| `T.createArray(n)` | Allocates an array of `n` elements of type `T` (any scalar or user-defined type). Assign it to `T name[]`. |
+| `T.createArray(n)` | Allocates an array of `n` zeroed elements of type `T` (any scalar or user-defined type). Assign it to `T name[]`. |
 | `string.create(cap)` | Allocates a string buffer of capacity `cap`, initially empty. |
-| `T.create()` | Allocates one `T` and returns a reference to it. |
+| `T.create()` | Allocates one `T`, zeroed, and returns a reference to it. |
 | `h.resize(n)` | Resizes heap array `h` to `n` elements and updates `h`. |
 | `h.destroyArray()` / `h.destroy()` | Frees `h` and sets the variable to 0. |
 | `h.exists()` | 1 if `h` is non-zero, else 0. |
@@ -1132,49 +1296,60 @@ Heap arrays and strings carry a 4-byte header that holds the length (arrays) or 
 
 ### Ownership rules
 
-These rules are checked at compile time, within each function:
+These rules are checked at compile time, along every path through each function, for the references held in its variables and parameters:
 
-1. A variable that receives a heap allocation **owns** it.
-2. `b = a`, where `a` owns a reference, **moves** ownership to `b`. Reading `a` afterward is an error.
-3. After `destroy`/`destroyArray`, the variable counts as moved. Destroying or resizing it again is an error.
-4. Parameters are **borrowed**. They cannot be destroyed, and cannot be moved into a variable that already owns a reference.
+1. A variable that receives a heap allocation **owns** it. `create()`, `createArray()` and `string.create()` give a valid reference.
+2. `b = a`, `T b = a;` and `obj.field = a`, where `a` is a reference variable, **move** the reference to `b` or the field. After that, `a` cannot be used at all, not even tested, until it is given a new value.
+3. `x = 0`, `x.destroy()` and `x.destroyArray()` make `x` null. A local reference declared without a value is null.
+4. A reference must be **definitely valid** to be used: reading or writing a field or element, `.len`, `.capacity`, calling a method on it, passing it to a function, destroying or resizing it. On every path to the use, it must have been allocated, received from a function that always returns a valid reference, or tested with `exists()`.
+5. Assigning, returning, comparing (`==`, `!=`) and testing (`exists()`) a reference only require that it has not been moved.
+6. Where paths meet (after an `if`, at the top of a loop), a reference that is valid on one path and null or moved on another **may be** null or moved, and must be tested before it is used.
+7. A function returns a valid reference when every `return` in it gives a definitely valid one, even when it calls itself. Otherwise a call's result may be null.
+8. Parameters are valid on entry and **borrowed**: they cannot be destroyed, and cannot be moved into a variable that owns a reference. Passing `0` for a parameter of a user-defined type is an error.
+9. References in globals and fields are not followed. A variable given one may be null. With reference checks on, using a null reference held in a global or a field traps (see [2.3](#23-bounds-and-reference-checking)). Reading a field into a variable copies the reference; using one copy after the value was destroyed through the other is not caught.
 
-The checks follow the source text from top to bottom and do not account for branches or loops. They only apply to direct uses of the variable name: indexing a moved array (`a[0]`) is not caught. Nothing frees memory automatically.
+Nothing frees memory automatically.
 
-## 3.11 Coroutines
+## 3.11 Tasks
 
-```c
-import "lib/protokernel.act";
+```
+task name(State t, other parameters...) { body }
 
-yield(task, STEP);
-wait_until(task, STEP, condition);
-pk_exit(task);
+yield(t);
+wait_until(t, condition);
+pk_exit(t);
 ```
 
-`lib/protokernel.act` declares these three as prototypes, together with the status constants `PK_WAITING` (0), `PK_YIELDED` (1), `PK_EXITED` (2) and `PK_ENDED` (3), the task type `pt` (`u16 lc;`) and the inline initializer `pk_init(p)`. With those prototypes in the program, the compiler generates the operations in place. Without them, `yield` and the others are ordinary names.
+A task is a function that can pause and resume. `lib/protokernel.act` declares the three operations as prototypes, together with the status constants `PK_WAITING` (0), `PK_YIELDED` (1), `PK_EXITED` (2) and `PK_ENDED` (3), the state type `pt` (`u16 lc;`) and the inline initializer `pk_init(p)`.
 
-- `task` names the task state: an instance of a type whose **first field is `u16`**. The continuation counter is stored in those first 16 bits.
-- `STEP` is a constant, unique within the function and not 0. Step 0 is the initial entry.
-- Every operation in one function must refer to the **same** task.
-- They are statements, because they return from the coroutine. Using one inside an expression is an error.
+**Declaring a task:**
+- The first parameter is the task's **state**: an instance of a type whose **first field is `u16`**. The resume point is kept there. More parameters are allowed; they are passed afresh on every call.
+- A task returns a `u16` status and has no declared return type. `return;` ends the task; `return value;` is an error.
+- A task can be called like a function and used as a function value of type `fn(State, ...) -> u16`.
+- A task must have a body, and cannot be `inline`.
+
+**Operations:**
+- They are allowed only inside a task, and their first argument must be the task's state parameter.
+- They are statements, because they return from the task. Using one inside an expression is an error.
+- The compiler numbers the resume points itself.
 
 **Behavior:**
-- On entry, the function reads the counter. If it is 0, the function starts at the top. Otherwise it jumps to the matching step.
-- `yield(task, N)` stores N, returns `PK_YIELDED`, and resumes just after the `yield` on the next call.
-- `wait_until(task, N, cond)` evaluates `cond`. If it is true, execution continues. If it is false, the function stores N and returns `PK_WAITING`. On the next call, the function resumes at this `wait_until` and evaluates `cond` again.
-- `pk_exit(task)` resets the counter to 0 and returns `PK_EXITED`. The next call starts from the top.
-- Falling off the end of the function resets the counter to 0 and returns `PK_ENDED`. An explicit `return` skips the reset and returns its own value.
+- On entry, the task reads its resume point. At the start (0) it runs from the top; otherwise it continues where it paused.
+- `yield(t)` returns `PK_YIELDED`. The next call resumes just after it.
+- `wait_until(t, cond)` evaluates `cond`. If it is true, execution continues. If it is false, the task returns `PK_WAITING`, and the next call evaluates `cond` again.
+- `pk_exit(t)` resets the resume point and returns `PK_EXITED`. The next call starts from the top.
+- Running off the end, or `return;`, resets the resume point and returns `PK_ENDED`.
 
-**Restrictions:**
-- The operations may appear anywhere in the body, including inside `for`, `while`, `if` and `switch`.
-- Locals are re-zeroed on every entry, including a `for` loop's variable. Persistent state must be stored in the task's fields.
-- Declare the function's return type as `u16` or `u32` so callers can read the status.
+**Locals:**
+- Locals do not survive a pause. Reading a local after a pause, when it was set before the pause and not set again since, is an error. Keep such values in the state.
+- A `for` loop whose body pauses is an error, because its counter is a local. Use a `while` loop with the counter in the state.
+- Parameters other than the state are passed on every call, so they can be read after a pause.
 
 ## 3.12 Hardware intrinsics and traps
 
 | Call | Generates | Notes |
 |------|-----------|-------|
-| `trap(N)` | `TRAP N` | `N` is a constant from 0 to 15. Evaluates to 0. |
+| `trap(N)` | `TRAP N` | `N` is a constant from 0 to 15; anything else is an error. Evaluates to 0. |
 | `readfifo(CH)` | `FIFO.R` | Blocking read from channel `CH`. Returns the word read. |
 | `writefifo(CH, value)` | `FIFO.W` | Writes `value` to channel `CH`. |
 | `tryreadfifo(CH, x)` | `FIFO.TRYR` | Non-blocking read into the variable, field or element `x`. Returns 1 and stores the word if data was waiting; otherwise returns 0 and leaves `x` unchanged. |
@@ -1209,7 +1384,7 @@ A vector with no handler simply returns. For a fault such as a misaligned access
 
 ## 3.13 Compile-time evaluation
 
-Constant expressions are used by `const`, `verify`, `enum` values, array dimensions, `@` addresses, `case` labels, trap numbers, FIFO channels, coroutine steps and global initializers. They may contain:
+Constant expressions are used by `const`, `verify`, `enum` values, array dimensions, `@` addresses, `case` labels, trap numbers, FIFO channels and global initializers. Any other expression made only of constants is also computed at compile time. They may contain:
 
 - integer literals and character literals
 - names of `const` values and `enum` members, in any order (a cycle is an error)
@@ -1218,13 +1393,30 @@ Constant expressions are used by `const`, `verify`, `enum` values, array dimensi
 - unary `- ~ !`
 - binary `+ - * / % & | ^ << >> == != < <= > >= && ||` (`&&` and `||` are logical operators)
 
-Arithmetic is done modulo 2³². Division or modulo by zero yields 0.
+Constant expressions are computed **exactly**, with no limit on size: `-1 < 0` is true, and `(1 << 40) >> 20` is `0x100000`. Division truncates toward zero, and the remainder has the sign of the dividend. Division or remainder by zero is an error, and so is a negative shift count.
+
+**Types of constants:**
+- Literals, character literals, `true`, `false`, `enum` members, `sizeof`, constants from `-D`, and expressions made only of those are **untyped**. Comparisons, `!`, `&&` and `||` give an untyped 0 or 1.
+- A `const` has its declared type, and its value must fit it. An expression involving a typed constant has that type, and its result must fit: with `const u8 A = 200;`, `A + A` is an error. `~` on an unsigned typed constant flips the bits of its width: with `const u16 M = 0xFFFF;`, `~M` is 0. Two typed constants of different types combine like variables: `s32` if either is signed, otherwise `u32`.
+- An untyped constant takes the type it is used as, and must fit it: the variable it initializes or is assigned to (also with `+=` and the like), the parameter it is passed as, the function's return type, the `switch` value's type for a `case` label, or the type of the other operand of a binary operator. The result of an operator on variables is a 32-bit value: `s32` if it is signed under the rule in [3.5](#35-expressions-and-operators), otherwise `u32`. A shift count only has to be non-negative.
+- Anywhere else, an untyped value must fit in 32 bits (−2³¹ to 2³²−1).
+- A typed constant used where another type is expected behaves like a variable of its type, and is not checked.
+
+| Integer type | Range |
+|--------------|-------|
+| `bool` | 0 to 1 |
+| `u8` | 0 to 255 |
+| `s8` | −128 to 127 |
+| `u16` | 0 to 65535 |
+| `s16` | −32768 to 32767 |
+| `u32` | 0 to 4294967295 |
+| `s32` | −2147483648 to 2147483647 |
 
 ## 3.14 Keywords
 
-**In use:** `asm` `break` `case` `const` `continue` `default` `else` `enum` `fn` `for` `if` `import` `inline` `return` `s8` `s16` `s32` `sizeof` `string` `switch` `type` `u8` `u16` `u32` `verify` `void` `volatile` `while`
+**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `false` `fn` `for` `if` `import` `inline` `ref` `return` `s8` `s16` `s32` `sizeof` `string` `switch` `true` `type` `u8` `u16` `u32` `verify` `void` `volatile` `while`
 
-**Built-in names** (identifiers with special meaning): `this`, `trap`, `readfifo`, `writefifo`, `tryreadfifo`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `len`, `capacity`. `yield`, `wait_until` and `pk_exit` are special only when `lib/protokernel.act` is imported.
+**Built-in names** (identifiers with special meaning): `this`, `trap`, `readfifo`, `writefifo`, `tryreadfifo`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `len`, `capacity`. `task` starts a task declaration when it is followed by a name and `(`. `yield`, `wait_until` and `pk_exit` are task operations when `lib/protokernel.act` is imported.
 
 ## 3.15 Known limitations and pitfalls
 
@@ -1232,13 +1424,5 @@ These come from the current compiler's behavior. Code around them until they cha
 
 | Issue | What happens | Workaround |
 |-------|-------------|------------|
-| Literal comparisons are unsigned | `-1 < 0` is false | Put the value in a signed variable. |
-| Ownership checks don't follow branches | Moves inside `if` affect later code as if always taken | Keep ownership transfers straight-line where possible. |
 | Locals are function-scoped | Same name in two blocks shares storage | Use distinct names. |
-| `trap(N)` with `N` above 15 | Not reported; only the low 4 bits are kept, so `trap(16)` is `TRAP 0` | Keep trap numbers in 0–15. |
-| No `%=` operator | Syntax error | Write `x = x % n;`. |
-| Coroutine locals | Re-zeroed on every resume, including a `for` loop's variable | Keep state in the task's fields. |
-| One shadow register bank | A trap taken inside a trap handler overwrites the saved registers | Keep handlers short and avoid raising traps from them. |
 | Trap 0 cannot be bound | Compile error | Not decided yet. |
-| Vector table size | Every program with `main` reserves all 16 vectors, so code starts at `0x500` | — |
-| Prototype with no definition | The call assembles only if an assembly file provides the label | Give `pbuild` the `.asm` file that defines it. |

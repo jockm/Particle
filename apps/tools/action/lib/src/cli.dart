@@ -6,7 +6,8 @@
 // Python compiler's argparse interface:
 //
 //   action [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR]
-//          [-fbounds-check] [-fno-bounds-check] sources [sources ...]
+//          [-fbounds-check] [-fno-bounds-check]
+//          [-freference-check] [-fno-reference-check] sources [sources ...]
 
 import 'dart:io';
 
@@ -18,7 +19,7 @@ const String toolName = 'action';
 
 const String usageLine =
     'usage: $toolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-fbounds-check]\n'
-    '              [-fno-bounds-check]\n'
+    '              [-fno-bounds-check] [-freference-check] [-fno-reference-check]\n'
     '              sources [sources ...]';
 
 const String helpText = '''$usageLine
@@ -35,7 +36,9 @@ options:
   -I, --include-dir INCLUDE_DIR
                         Add include search directory
   -fbounds-check        Enable runtime array bounds checking (default)
-  -fno-bounds-check     Disable runtime array bounds checking''';
+  -fno-bounds-check     Disable runtime array bounds checking
+  -freference-check     Enable runtime null reference checking (default)
+  -fno-reference-check  Disable runtime null reference checking''';
 
 /// argparse-style option names used in error messages.
 const _displayName = {
@@ -51,6 +54,7 @@ class CliArgs {
   final List<String> defines = [];
   final List<String> includeDirs = [];
   bool boundsCheck = true;
+  bool referenceCheck = true;
   bool help = false;
 }
 
@@ -109,6 +113,10 @@ CliArgs parseArgs(List<String> argv) {
       a.boundsCheck = true;
     } else if (arg == '-fno-bounds-check') {
       a.boundsCheck = false;
+    } else if (arg == '-freference-check') {
+      a.referenceCheck = true;
+    } else if (arg == '-fno-reference-check') {
+      a.referenceCheck = false;
     } else if (arg.startsWith('--')) {
       final eq = arg.indexOf('=');
       final name = eq < 0 ? arg : arg.substring(0, eq);
@@ -172,7 +180,8 @@ int runCli(List<String> argv) {
         options: CompileOptions(
             includeDirs: args.includeDirs,
             defines: args.defines,
-            boundsCheck: args.boundsCheck));
+            boundsCheck: args.boundsCheck,
+            referenceCheck: args.referenceCheck));
     File(output).writeAsStringSync(asmCode);
   } on CompileError catch (e) {
     stderr.writeln('$toolName: error: ${e.message}');

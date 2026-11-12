@@ -94,6 +94,11 @@ extension _References on CodeGen {
     if (rhs is HeapAllocNode) return true;
     if (rhs is IntLitNode && rhs.val == 0) return true;
     if (rhs is VarAccessNode) return knownRefs.contains(rhs.name);
+    if (rhs is MemberAccessNode) {
+      // A 'ref' field holds a reference
+      final (t, isPtr) = _getExprType(rhs);
+      return isPtr && _isRecordTypeName(t);
+    }
     if (rhs is CallNode) {
       final (t, _) = _getExprType(rhs);
       return _isRecordTypeName(t);
@@ -156,7 +161,7 @@ extension _References on CodeGen {
     final isRef = t.isRef;
     if (!isRef) {
       throw CompileError(
-          "Cannot assign to record '$name' stored on the stack; records are not copied. "
+          "cannot assign to '$name': it is a '${cleanName(t.name)}' stored on the stack, and values of user-defined types are not copied. "
           "Declare it with a reference value (for example '= ${cleanName(t.name)}.create()') to make it a reference");
     }
     if (rhs is VarAccessNode) {
@@ -166,13 +171,13 @@ extension _References on CodeGen {
           !rt.isPtr &&
           !arrayDims.containsKey(rhs.name)) {
         throw CompileError(
-            "Cannot assign record '${rhs.name}' stored on the stack to reference '$name'");
+            "cannot assign '${rhs.name}', a '${cleanName(rt.name)}' stored on the stack, to reference '$name'");
       }
     } else if (rhs is MemberAccessNode || rhs is ArrayAccessNode) {
-      final (rt, _) = _getExprType(rhs);
-      if (_isRecordTypeName(rt)) {
+      final (rt, rIsPtr) = _getExprType(rhs);
+      if (_isRecordTypeName(rt) && !rIsPtr) {
         throw CompileError(
-            "Cannot assign a record stored inside another record or array to reference '$name'");
+            "cannot assign a '${cleanName(rt)}' stored inside another type or an array to reference '$name'");
       }
     }
   }

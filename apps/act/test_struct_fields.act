@@ -22,7 +22,8 @@ void main() {
     if (m.c != 0x77) ok = 0;
     if (m.d != -2) ok = 0;
     if (m.e != -100000) ok = 0;
-    m.c = 0x1AB;
+    u32 wide9 = 0x1AB;  // a constant that does not fit u8 is an error
+    m.c = wide9;
     if (m.c != 0xAB) ok = 0;
     if (m.b != 0x5566) ok = 0;
     if (m.d != -2) ok = 0;

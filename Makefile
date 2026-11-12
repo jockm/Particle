@@ -118,10 +118,16 @@ test-sim: $(BUILD_DIR)/branch_suite.bin
 	build/tools/psim $(BUILD_DIR)/branch_suite.bin
 
 # Tests that must end in a trap other than trap 0. For now each must stop
-# with trap 15 at one of the compiler's bounds checks.
+# with trap 15 at one of the compiler's checks: by default a bounds check;
+# a test whose source has a line "// Must stop at: <text>" must stop at the
+# check whose .asm line contains <text>.
 ACT_TRAP_TESTS := apps/act/test_dyn_bounds_fail.act \
                   apps/act/test_fixed_bounds_fail.act \
-                  apps/act/test_open_bounds_fail.act
+                  apps/act/test_open_bounds_fail.act \
+                  apps/act/test_null_global_fail.act \
+                  apps/act/test_global_heap_bounds_fail.act \
+                  apps/act/test_field_bounds_fail.act \
+                  apps/act/test_field_null_fail.act
 ACT_TEST_SRCS := $(filter-out $(ACT_TRAP_TESTS),$(wildcard apps/act/test_*.act))
 
 compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
@@ -138,12 +144,12 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 	}; \
 	trap_check() { \
 		out=$$($(PSIM) "$$1"); code=$$?; echo "$$out"; \
-		if [ $$code -ne 15 ]; then echo "[FAIL] expected trap 15 from a bounds check, got exit $$code"; return 1; fi; \
+		if [ $$code -ne 15 ]; then echo "[FAIL] expected trap 15 from a '$$4' check, got exit $$code"; return 1; fi; \
 		pc=$$(echo "$$out" | sed -n 's/.*Trap 15 triggered at PC: 0x\([0-9A-Fa-f]*\).*/\1/p' | head -1); \
 		addr=$$(printf '%08X' $$((0x$$pc - 2))); \
 		line=$$(awk -v a="$$addr" '$$1 == a { print $$3; exit }' "$$2"); \
-		if [ -z "$$line" ] || ! sed -n "$${line}p" "$$3" | grep -q "out-of-bounds trap"; then \
-			echo "[FAIL] trap 15 at 0x$$addr is not a bounds check"; return 1; fi; \
+		if [ -z "$$line" ] || ! sed -n "$${line}p" "$$3" | grep -qF "$$4"; then \
+			echo "[FAIL] trap 15 at 0x$$addr is not a '$$4' check"; return 1; fi; \
 	}; \
 	for src in $(ACT_TEST_SRCS); do \
 		base=$$(basename "$$src" .act); \
@@ -158,9 +164,11 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 			base=$$(basename "$$src" .act); \
 			bin="$(BUILD_DIR)/$${base}.bin"; \
 			echo "----------------------------------------------------------------"; \
-			echo "Testing (must stop at a bounds check with trap 15): $$src -> $$bin"; \
+			marker=$$(sed -n 's|^// Must stop at: ||p' "$$src" | head -1); \
+			[ -n "$$marker" ] || marker="out-of-bounds trap"; \
+			echo "Testing (must stop with trap 15 at a '$$marker' check): $$src -> $$bin"; \
 			$(PBUILD) "$$src" -o "$$bin" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
-			trap_check "$$bin" "$(BUILD_DIR)/$${base}.lst" "$(BUILD_DIR)/$${base}.asm" || { echo "[FAIL] $$bin failed simulation"; failed=1; break; }; \
+			trap_check "$$bin" "$(BUILD_DIR)/$${base}.lst" "$(BUILD_DIR)/$${base}.asm" "$$marker" || { echo "[FAIL] $$bin failed simulation"; failed=1; break; }; \
 		done; \
 	fi; \
 	if [ $$failed -eq 0 ]; then \

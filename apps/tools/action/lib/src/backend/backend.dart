@@ -60,6 +60,14 @@ abstract class Backend {
   /// Allocate [sizeBytes] on heap; return base pointer in [dstReg].
   void genHeapAlloc(int dstReg, int sizeBytes);
 
+  /// When true, a failed allocation (the allocator returns 0) traps instead
+  /// of giving a null reference (`-freference-check`, the default).
+  bool referenceCheck = true;
+
+  /// Emits a trap (TRAP 15 on Particle) taken when [reg] holds 0, a null
+  /// reference; [what] names it in the listing.
+  void genNullTrap(int reg, String what);
+
   /// Free memory block at [addrReg].
   void genHeapFree(int addrReg);
 

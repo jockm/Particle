@@ -18,6 +18,7 @@ extension _Expressions on CodeGen {
         emit('LOAD32  R$targetReg, _$name');
         if (isRef) {
           emit('LD32    R$targetReg, (R$targetReg)', "Dereference global reference '$name'");
+          if (referenceCheck) backend.genNullTrap(targetReg, "global '$name'");
         }
       } else {
         _undefinedName(name);
@@ -32,6 +33,7 @@ extension _Expressions on CodeGen {
       if (baseIsPtr) {
         emit('LD32    R$targetReg, (R$targetReg)',
             "Dereference pointer base '${baseExpr.nodeName ?? ''}'");
+        if (baseExpr is MemberAccessNode) _checkFieldRef(baseExpr.member, targetReg);
       }
       if (f.offset > 0) {
         if (targetReg == 14) {
@@ -47,6 +49,15 @@ extension _Expressions on CodeGen {
       genExpr(node, targetReg);
     }
   }
+
+  /// True for a variable holding a heap array reference (`T x[]`), as
+  /// opposed to a fixed array or an open array parameter.
+  bool _isHeapArrayRef(String name) =>
+      (locals.containsKey(name) || globals.contains(name)) &&
+      typeOf(name).isPtr &&
+      !openArrays.contains(name) &&
+      !arrayDims.containsKey(name) &&
+      !arrayLens.containsKey(name);
 
   (Object, int) _emitArrayElemAddr(ArrayAccessNode node,
       [int addrReg = 14, int idxScratch = 2, bool isWrite = false]) {
@@ -101,11 +112,33 @@ extension _Expressions on CodeGen {
           emit('FBRA.NZ R13, $lblInBounds', 'Branch if within array bounds');
           emit('TRAP    15', 'Open array out-of-bounds trap ($baseName)');
           emitLabel(lblInBounds);
+        } else if (dimIdx == 0 && _refField(baseNode)?.isArrayRef == true) {
+          // Heap array held in a field: check against its header
+          final field = (baseNode as MemberAccessNode).member;
+          emit('PUSH32  R3', 'Preserve index');
+          stackOffset += 4;
+          _emitLvalueAddr(baseNode, 14);
+          emit('POP32   R3', 'Restore index');
+          stackOffset -= 4;
+          emit('LD32    R14, (R14)', "Load heap pointer for field '$field'");
+          _checkFieldRef(field, 14);
+          emit('SUB     R14, 4', 'Point to prefix header');
+          emit('LD32    R14, (R14)', 'Read dynamic bound from prefix header');
+          final (baseT, _) = _getExprType(baseNode);
+          if (isWrite && cleanType(baseT) == 'string') {
+            emit('SUB     R14, 1', 'Reserve null terminator for dynamic string write');
+          }
+          emit('LD      R13, R3', 'Preserve index for bounds check');
+          emit('SLT     R13, R14', 'Check dynamic $field[i] < bound');
+          emit('FBRA.NZ R13, $lblInBounds', 'Branch if within array bounds');
+          emit('TRAP    15', 'Dynamic heap out-of-bounds trap ($field)');
+          emitLabel(lblInBounds);
         } else if (baseName != null &&
-            affineState.containsKey(baseName) &&
+            (affineState.containsKey(baseName) || _isHeapArrayRef(baseName)) &&
             dimIdx == 0) {
           // Dynamic heap array / string bounds check via prefix header at (base - 4)
-          if (locals.containsKey(baseName)) {
+          final isGlobal = !locals.containsKey(baseName);
+          if (!isGlobal) {
             final lenOff = stackOffset - locals[baseName]!;
             emitImmediate(14, lenOff);
             emit('ADD     R14, R15');
@@ -113,6 +146,9 @@ extension _Expressions on CodeGen {
             emit('LOAD32  R14, _$baseName', "Address of global '$baseName'");
           }
           emit('LD32    R14, (R14)', "Load heap pointer for '$baseName'");
+          if (isGlobal && referenceCheck) {
+            backend.genNullTrap(14, "global '$baseName'");
+          }
           emit('SUB     R14, 4', 'Point to prefix header');
           emit('LD32    R14, (R14)', 'Read dynamic bound from prefix header');
           final (baseT, _) = _getExprType(baseNode);
@@ -207,9 +243,19 @@ extension _Expressions on CodeGen {
         // A global array reference (`T g[]`) holds the heap address
         emit('LD32    R$addrReg, (R$addrReg)',
             "Dereference global array reference '$baseName'");
+        // With bounds checks on, the bounds check above already did this
+        if (referenceCheck && !boundsCheck) {
+          backend.genNullTrap(addrReg, "global '$baseName'");
+        }
       }
     } else if (baseNode is MemberAccessNode) {
       _emitLvalueAddr(baseNode, addrReg);
+      if (_refField(baseNode)?.isArrayRef == true) {
+        emit('LD32    R$addrReg, (R$addrReg)',
+            "Dereference heap array field '${baseNode.member}'");
+        // With bounds checks on, the bounds check above already did this
+        if (!boundsCheck) _checkFieldRef(baseNode.member, addrReg);
+      }
     } else {
       genExpr(baseNode, addrReg);
     }
@@ -228,6 +274,16 @@ extension _Expressions on CodeGen {
   }
 
   void genExpr(AstNode expr, [int targetReg = 1]) {
+    try {
+      _genExpr(expr, targetReg);
+    } on CompileError catch (e) {
+      throw e.at(expr.loc);
+    }
+  }
+
+  void _genExpr(AstNode expr, int targetReg) {
+    // An operation on constants is evaluated exactly at compile time
+    if (_emitFoldedConst(expr, targetReg)) return;
     if (expr is HeapAllocNode) {
       final cleanT = cleanName(expr.typeName);
       final sz = structSize(cleanT);
@@ -249,31 +305,29 @@ extension _Expressions on CodeGen {
         throw CompileError(
             "cannot destroy borrowed reference parameter '$targetVar'");
       }
-      if (targetVar != null && affineState.containsKey(targetVar)) {
-        if (affineState[targetVar] == 'MOVED') {
-          throw CompileError(
-              "cannot destroy already moved/destroyed reference '$targetVar'");
-        }
-      }
       if (targetVar != null &&
           _isRecordTypeName(typeOf(targetVar).name) &&
           !typeOf(targetVar).isRef &&
           !typeOf(targetVar).isPtr &&
           !arrayDims.containsKey(targetVar)) {
         throw CompileError(
-            "Cannot destroy record '$targetVar' stored on the stack; only references from .create() can be destroyed");
+            "cannot destroy '$targetVar': it is a '${cleanName(typeOf(targetVar).name)}' stored on the stack; only references from .create() can be destroyed");
       }
+      final field = _refField(expr.expr);
       genExpr(expr.expr, 1);
+      _checkGlobalRef(expr.expr, 1);
+      if (field != null) _checkFieldRef((expr.expr as MemberAccessNode).member, 1);
       if (targetVar != null && affineState.containsKey(targetVar)) {
         affineState[targetVar] = 'MOVED';
       }
       // Arrays and heap strings carry a 4-byte header below the address
-      final isArr = targetVar != null &&
-          (dynamicArrays.contains(targetVar) ||
-              arrayDims.containsKey(targetVar) ||
-              arrayLens.containsKey(targetVar) ||
-              openArrays.contains(targetVar) ||
-              cleanType(typeOf(targetVar).name) == 'string');
+      final isArr = (field != null && field.isArrayRef) ||
+          (targetVar != null &&
+              (dynamicArrays.contains(targetVar) ||
+                  arrayDims.containsKey(targetVar) ||
+                  arrayLens.containsKey(targetVar) ||
+                  openArrays.contains(targetVar) ||
+                  cleanType(typeOf(targetVar).name) == 'string'));
       if (isArr) {
         backend.genArrayFree(1);
       } else {
@@ -284,28 +338,44 @@ extension _Expressions on CodeGen {
         emitImmediate(14, off);
         emit('ADD     R14, R15');
         emit('ST32    (R14), R0', "Zero out destroyed affine reference '$targetVar'");
+      } else if (targetVar != null && globals.contains(targetVar)) {
+        emit('LOAD32  R14, _$targetVar');
+        emit('ST32    (R14), R0', "Zero out destroyed global reference '$targetVar'");
+      } else if (field != null) {
+        _emitLvalueAddr(expr.expr, 14);
+        emit('ST32    (R14), R0', "Zero out destroyed reference field '${(expr.expr as MemberAccessNode).member}'");
       }
       return;
     } else if (expr is HeapArrayResizeNode) {
       final targetVar = expr.expr is VarAccessNode ? (expr.expr as VarAccessNode).name : null;
-      if (targetVar != null && affineState.containsKey(targetVar)) {
-        if (affineState[targetVar] == 'MOVED') {
-          throw CompileError(
-              "cannot resize moved/destroyed reference '$targetVar'");
-        }
-      }
+      final field = _refField(expr.expr);
       // 1. Determine element size
       Object elemT = 'u32';
       if (targetVar != null) {
         elemT = typeOf(targetVar).name;
+      } else if (field != null) {
+        elemT = field.type;
       }
       final elemSize = _getElemSize(elemT, false);
 
-      // 2. Evaluate new count into R2
-      genExpr(expr.newLenExpr, 2);
+      if (field != null) {
+        // The field's address computation may use R2, so load the array
+        // pointer first and keep it while the count is evaluated
+        genExpr(expr.expr, 1);
+        _checkFieldRef((expr.expr as MemberAccessNode).member, 1);
+        emit('PUSH32  R1', 'Preserve array pointer');
+        stackOffset += 4;
+        genExpr(expr.newLenExpr, 2);
+        emit('POP32   R1', 'Restore array pointer');
+        stackOffset -= 4;
+      } else {
+        // 2. Evaluate new count into R2
+        genExpr(expr.newLenExpr, 2);
 
-      // 3. Load current array pointer into R1
-      genExpr(expr.expr, 1);
+        // 3. Load current array pointer into R1
+        genExpr(expr.expr, 1);
+        _checkGlobalRef(expr.expr, 1);
+      }
 
       // 4. Invoke backend resize (returns updated payload in R1)
       backend.genArrayResize(1, 1, elemSize, 2);
@@ -316,6 +386,17 @@ extension _Expressions on CodeGen {
         emitImmediate(14, off);
         emit('ADD     R14, R15');
         emit('ST32    (R14), R1', "Update local reference '$targetVar' after resize");
+      } else if (targetVar != null && globals.contains(targetVar)) {
+        emit('LOAD32  R14, _$targetVar');
+        emit('ST32    (R14), R1', "Update global reference '$targetVar' after resize");
+      } else if (field != null) {
+        emit('PUSH32  R1', 'Preserve resized pointer');
+        stackOffset += 4;
+        _emitLvalueAddr(expr.expr, 14);
+        emit('POP32   R1', 'Restore resized pointer');
+        stackOffset -= 4;
+        emit('ST32    (R14), R1',
+            "Update reference field '${(expr.expr as MemberAccessNode).member}' after resize");
       }
 
       if (targetReg != 1) {
@@ -324,13 +405,8 @@ extension _Expressions on CodeGen {
       return;
     } else if (expr is HeapArrayFreeNode) {
       final targetVar = expr.expr is VarAccessNode ? (expr.expr as VarAccessNode).name : null;
-      if (targetVar != null && affineState.containsKey(targetVar)) {
-        if (affineState[targetVar] == 'MOVED') {
-          throw CompileError(
-              "cannot destroy already moved/destroyed reference '$targetVar'");
-        }
-      }
       genExpr(expr.expr, 1);
+      _checkGlobalRef(expr.expr, 1);
       if (targetVar != null && affineState.containsKey(targetVar)) {
         affineState[targetVar] = 'MOVED';
       }
@@ -378,7 +454,6 @@ extension _Expressions on CodeGen {
       _emitLoadTyped(targetReg, 14, tName, false);
     } else if (expr is VarAccessNode) {
       final name = expr.name;
-      _checkAffineAccess(name);
       if (constants.containsKey(name)) {
         emitImmediate(targetReg, constants[name]!);
         return;
@@ -439,6 +514,7 @@ extension _Expressions on CodeGen {
     } else if (expr is CompoundAssignNode) {
       // Compound assignment: lhs op= rhs
       final opChar = expr.op.substring(0, expr.op.length - 1); // Strip trailing '='
+      _checkCompoundConst(expr, opChar);
       genExpr(expr.rhs, 2);
       emit('PUSH32  R2', 'Save compound RHS');
       stackOffset += 4;
@@ -462,6 +538,7 @@ extension _Expressions on CodeGen {
         emit('POP32   R2', 'Restore compound RHS');
         stackOffset -= 4;
         _emitBinaryCalc(opChar, 1, 2, signed: _isSignedCompound(t.name, expr.rhs));
+        _normalizeBoolResult(t.isPtr ? null : t.name, 1);
         _emitStoreTyped(14, 1, t.name, t.isPtr);
         if (targetReg != 1) {
           emit('LD      R$targetReg, R1');
@@ -472,6 +549,7 @@ extension _Expressions on CodeGen {
         emit('POP32   R2', 'Restore compound RHS');
         stackOffset -= 4;
         _emitBinaryCalc(opChar, 1, 2, signed: _isSignedCompound(tName, expr.rhs));
+        _normalizeBoolResult(tName, 1);
         _emitStoreTyped(14, 1, tName, false);
         if (targetReg != 1) {
           emit('LD      R$targetReg, R1');
@@ -491,6 +569,7 @@ extension _Expressions on CodeGen {
         emit('POP32   R2', 'Restore compound RHS');
         stackOffset -= 4;
         _emitBinaryCalc(opChar, 1, 2, signed: _isSignedCompound(f.type, expr.rhs));
+        _normalizeBoolResult(f.isPtr ? null : f.type, 1);
         _emitStoreTyped(14, 1, f.type, f.isPtr);
         if (targetReg != 1) {
           emit('LD      R$targetReg, R1');
@@ -530,12 +609,27 @@ extension _Expressions on CodeGen {
           "Dynamic .$member for open array '${baseExpr.name}'");
       return;
     }
+    final arrField = _refField(baseExpr);
+    if (arrField != null && arrField.isArrayRef && (member == 'len' || member == 'capacity')) {
+      // A heap array or string held in a field
+      final field = (baseExpr as MemberAccessNode).member;
+      genExpr(baseExpr, 14);
+      _checkFieldRef(field, 14);
+      if (cleanName(arrField.type) == 'string' && member == 'len') {
+        _emitStringScanAt14(field, targetReg);
+      } else {
+        emit('SUB     R14, 4', 'Point to prefix header');
+        emit('LD32    R$targetReg, (R14)', "Read .$member of field '$field' from its header");
+      }
+      return;
+    }
     if (member == 'capacity') {
       if (baseExpr is VarAccessNode &&
           (affineState.containsKey(baseExpr.name) ||
               typeOf(baseExpr.name, const TypeInfo('', false)).isPtr)) {
         // Dynamic heap capacity header at base[-4]
         genExpr(baseExpr, 14);
+        _checkGlobalRef(baseExpr, 14);
         emit('SUB     R14, 4', 'Point to prefix header');
         emit('LD32    R$targetReg, (R14)', 'Read dynamic capacity header');
         return;
@@ -571,12 +665,14 @@ extension _Expressions on CodeGen {
       if (isDynamic && tName != 'string') {
         // Dynamic heap array length header at base[-4]
         genExpr(baseExpr, 14);
+        _checkGlobalRef(baseExpr, 14);
         emit('SUB     R14, 4', 'Point to prefix header');
         emit('LD32    R$targetReg, (R14)', 'Read dynamic array length header');
         return;
       } else if (isDynamic && tName == 'string' && member == 'capacity') {
         // Dynamic heap string capacity header at base[-4]
         genExpr(baseExpr, 14);
+        _checkGlobalRef(baseExpr, 14);
         emit('SUB     R14, 4', 'Point to prefix header');
         emit('LD32    R$targetReg, (R14)', 'Read dynamic string capacity header');
         return;
@@ -673,17 +769,27 @@ extension _Expressions on CodeGen {
     if (expr.op == '=') {
       final left = expr.left;
       final right = expr.right;
+      Object? targetType;
+      if (left is VarAccessNode || left is MemberAccessNode || left is ArrayAccessNode) {
+        final (lt, lp) = _getExprType(left);
+        _checkConstFits(right, lt, lp, 'assignment to ${_targetName(left)}');
+        if (!lp) targetType = lt;
+      }
       // A field's address is computed first and the RHS evaluated once
       // after it; every other target evaluates the RHS first.
       if (left is! MemberAccessNode) {
         genExpr(right, 1);
+        _normalizeBool(targetType, right, 1);
       }
       if (left is MemberAccessNode) {
+        final rf = _refField(left);
+        if (rf != null) _checkRefFieldAssignment(left, rf, right);
         // Compute lvalue address into R13 BEFORE evaluating RHS or altering stack offset
         _emitLvalueAddr(left, 13);
         emit('PUSH32  R13', 'Preserve lvalue address');
         stackOffset += 4;
         genExpr(right, 1);
+        _normalizeBool(targetType, right, 1);
         emit('POP32   R13', 'Restore lvalue address');
         stackOffset -= 4;
         final (tName, isPtr) = _getExprType(left);
@@ -735,7 +841,6 @@ extension _Expressions on CodeGen {
                 "cannot take ownership of borrowed parameter '$rhsName'");
           }
           if (affineState.containsKey(rhsName)) {
-            _checkAffineAccess(rhsName);
             affineState[rhsName] = 'MOVED';
             affineState[name] = 'VALID';
             if (dynamicArrays.contains(rhsName)) {
@@ -748,7 +853,7 @@ extension _Expressions on CodeGen {
           affineState[name] = 'VALID';
         }
         final t = typeOf(name);
-        _validateFnTypeAssignment(t.name, right);
+        _validateFnTypeAssignment(t.name, right, name);
         _checkRecordAssignment(name, right);
         if (boundAddrs.containsKey(name)) {
           emitImmediate(14, boundAddrs[name]!);
@@ -768,6 +873,7 @@ extension _Expressions on CodeGen {
       return;
     }
 
+    _checkBinaryConsts(expr);
     genExpr(expr.left, 1);
     emit('PUSH32  R1', 'Save LHS');
     stackOffset += 4;
@@ -821,13 +927,19 @@ extension _Expressions on CodeGen {
       } on NotConstantError {
         throw CompileError('trap: the trap number must be a constant');
       }
+      if (n < 0 || n >= backend.vectorCount) {
+        // Constants are evaluated modulo 2^32; show a negative one as such
+        final shown = n > 0x7FFFFFFF ? n - 0x100000000 : n;
+        throw CompileError(
+            'trap number $shown is out of range (0-${backend.vectorCount - 1})');
+      }
       emit('TRAP    $n', 'Trigger Trap #$n');
       emit('LD      R$targetReg, 0');
       return;
     }
     if (_isCoroutineOp(expr.name)) {
       throw CompileError(
-          "'${expr.name}' returns from the coroutine; use it as a statement, not in an expression");
+          "'${expr.name}' returns from the task; use it as a statement, not in an expression");
     }
     if (expr.name.startsWith('__METHOD__')) {
       final mName = expr.name.replaceAll('__METHOD__', '');
@@ -845,6 +957,14 @@ extension _Expressions on CodeGen {
       if (rcvNode is CallNode) {
         // Evaluated receiver returned pointer in R1
         genExpr(rcvNode, 1);
+      } else if (_refField(rcvNode) != null) {
+        // A reference field holds the receiver's address
+        genExpr(rcvNode, 1);
+        _checkFieldRef((rcvNode as MemberAccessNode).member, 1);
+        if (embedOffset > 0) {
+          emitImmediate(2, embedOffset);
+          emit('ADD     R1, R2', 'Adjust receiver for embedded type (+$embedOffset)');
+        }
       } else {
         // Pass receiver by reference into R1
         _emitLvalueAddr(rcvNode, 1);
@@ -947,6 +1067,8 @@ extension _Expressions on CodeGen {
       for (var i = 0; i < func.params.length; i++) {
         final p = func.params[i];
         final argExpr = expr.args[i];
+        _checkConstFits(argExpr, p.type, p.isPtr || p.isOpenArr,
+            "argument ${i + 1} of '${expr.name}'");
         final cleanPt = cleanName(p.type);
         final isRef = structs.containsKey(cleanPt) && !p.isPtr;
         types[p.name] = TypeInfo(p.type, p.isPtr, isRef);
@@ -954,6 +1076,7 @@ extension _Expressions on CodeGen {
           _emitLvalueAddr(argExpr, 1);
         } else {
           genExpr(argExpr, 1);
+          if (!p.isPtr) _normalizeBool(p.type, argExpr, 1);
         }
         emit('PUSH32  R1', "Spill inline param '${p.name}'");
         stackOffset += 4;
@@ -1124,6 +1247,10 @@ extension _Expressions on CodeGen {
   /// registers, is moved into place instead of pushed.
   void _genCallArgList(List<AstNode> args, List<ParamSig> paramSigs,
       [int startReg = 1, _StackArgs? area]) {
+    for (var i = 0; i < args.length && i < paramSigs.length; i++) {
+      final p = paramSigs[i];
+      if (!p.isOpen) _checkConstFits(args[i], p.type, p.isPtr, 'argument ${i + 1}');
+    }
     final lastSlot = startReg - 1 + _argSlotCount(args, paramSigs);
     if (lastSlot <= 4 && args.every(_isLeafArg)) {
       var curReg = startReg;
@@ -1283,10 +1410,20 @@ extension _Expressions on CodeGen {
           // A heap array reference: pass its address, and the count from
           // the heap header just below it
           genExpr(arg, curReg);
+          _checkGlobalRef(arg, curReg);
           emit('LD      R${curReg + 1}, R$curReg');
           emit('SUB     R${curReg + 1}, 4', 'Point to prefix header');
           emit('LD32    R${curReg + 1}, (R${curReg + 1})',
               "Heap array length for '$argName'");
+        } else if (_refField(arg)?.isArrayRef == true) {
+          // A heap array held in a field: its address, and the count from
+          // the heap header just below it
+          genExpr(arg, curReg);
+          _checkFieldRef((arg as MemberAccessNode).member, curReg);
+          emit('LD      R${curReg + 1}, R$curReg');
+          emit('SUB     R${curReg + 1}, 4', 'Point to prefix header');
+          emit('LD32    R${curReg + 1}, (R${curReg + 1})',
+              "Heap array length for field '${arg.member}'");
         } else {
           _emitLvalueAddr(arg, curReg);
           final (argT, _) = _getExprType(arg);
@@ -1299,9 +1436,16 @@ extension _Expressions on CodeGen {
         }
       }
     } else if (pType != null && pType.isNotEmpty && structs.containsKey(pType) && !pIsPtr) {
-      _emitLvalueAddr(arg, curReg);
+      if (_refField(arg) != null) {
+        // A reference field holds the address to pass
+        genExpr(arg, curReg);
+        _checkFieldRef((arg as MemberAccessNode).member, curReg);
+      } else {
+        _emitLvalueAddr(arg, curReg);
+      }
     } else {
       genExpr(arg, curReg);
+      if (!pIsPtr) _normalizeBool(pType, arg, curReg);
     }
   }
 
@@ -1331,7 +1475,7 @@ extension _Expressions on CodeGen {
       _isSignedName(lhsType) || _isSignedOperand(rhs);
 
   /// Emits `rDst = rDst op rSrc` for a compound assignment. [signed] selects
-  /// SDIV and ASHIFTR for '/' and '>>'.
+  /// SDIV, SMOD and ASHIFTR for '/', '%' and '>>'.
   void _emitBinaryCalc(String op, int rDst, int rSrc, {bool signed = false}) {
     switch (op) {
       case '+':
@@ -1342,6 +1486,8 @@ extension _Expressions on CodeGen {
         emit('MULL    R$rDst, R$rSrc');
       case '/':
         emit(signed ? 'SDIV    R$rDst, R$rSrc' : 'DIV     R$rDst, R$rSrc');
+      case '%':
+        emit(signed ? 'SMOD    R$rDst, R$rSrc' : 'MOD     R$rDst, R$rSrc');
       case '&':
         emit('AND     R$rDst, R$rSrc');
       case '|':
@@ -1363,7 +1509,7 @@ extension _Expressions on CodeGen {
   void _emitLoadTyped(int dst, int addrReg, Object tName, bool isPtr) {
     if (isPtr || _isWordType(tName)) {
       emit('LD32     R$dst, (R$addrReg)');
-    } else if (tName == 'u8') {
+    } else if (tName == 'u8' || tName == 'bool') {
       emit('LD8      R$dst, (R$addrReg)');
     } else if (tName == 's8') {
       emit('LD8      R$dst, (R$addrReg)');
@@ -1381,7 +1527,7 @@ extension _Expressions on CodeGen {
   void _emitStoreTyped(int addrReg, int src, Object tName, bool isPtr) {
     if (isPtr || _isWordType(tName)) {
       emit('ST32     (R$addrReg), R$src');
-    } else if (tName == 'u8' || tName == 's8') {
+    } else if (tName == 'u8' || tName == 's8' || tName == 'bool') {
       emit('ST8      (R$addrReg), R$src');
     } else if (tName == 'u16' || tName == 's16') {
       emit('ST16     (R$addrReg), R$src');

@@ -20,18 +20,22 @@ inline void pk_init(type pt p) {
     p.lc = 0;
 }
 
-// Coroutine operations. The compiler generates these in place; they have no
-// bodies. Each returns from the calling coroutine, so they are used as
-// statements. `step` is a constant, unique within the coroutine.
+// Coroutine operations, for use in task functions:
+//
+//     task blink(pt t) { ... yield(t); ... }
+//
+// The compiler generates these in place; they have no bodies. `t` is the
+// task's state (its first parameter). The compiler numbers the resume points
+// itself. Each returns from the task, so they are used as statements.
 
-// Save the continuation at `step` and return PK_YIELDED. The next call
-// resumes after the yield.
-u16 yield(type pt p, u16 step);
+// Save the continuation and return PK_YIELDED. The next call resumes after
+// the yield.
+u16 yield(type pt p);
 
-// Resume point `step`: if `cond` is false, return PK_WAITING; the next call
-// re-tests `cond` here. Continue once it is true.
-u16 wait_until(type pt p, u16 step, u32 cond);
+// If `cond` is false, return PK_WAITING; the next call re-tests `cond` here.
+// Continue once it is true.
+u16 wait_until(type pt p, u32 cond);
 
-// Reset the continuation and return PK_EXITED. The next call starts the
-// coroutine from the beginning.
+// Reset the continuation and return PK_EXITED. The next call starts the task
+// from the beginning.
 u16 pk_exit(type pt p);

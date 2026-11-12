@@ -5,16 +5,10 @@ part of 'codegen.dart';
 /// is reported as a normal compile error (Python raised `ValueError`).
 class NotConstantError extends CompileError {
   NotConstantError(super.message);
-}
 
-/// Python floor division (`//`).
-int _floorDiv(int a, int b) {
-  final q = a ~/ b;
-  return (q * b != a && (a < 0) != (b < 0)) ? q - 1 : q;
+  @override
+  CompileError withMessage(String msg) => NotConstantError(msg);
 }
-
-/// Python modulo: the result has the sign of the divisor.
-int _pyMod(int a, int b) => a - b * _floorDiv(a, b);
 
 extension _TypeRules on CodeGen {
   /// Infers `(type name, is pointer)` for an expression.
@@ -82,7 +76,7 @@ extension _TypeRules on CodeGen {
         final (baseT, _) = _getExprType(curr.expr);
         final sName = cleanName(baseT);
         final f = fieldOf(sName, curr.member);
-        return (f.type, false);
+        return (cleanType(f.type) == 'string' ? 'u8' : f.type, false);
       }
       return ('u32', false);
     } else if (expr is CallNode) {
@@ -109,7 +103,7 @@ extension _TypeRules on CodeGen {
 
   /// Byte size of a scalar or record type name (the `sizeof` rules).
   int _sizeOfTypeName(String tClean) {
-    if (['u8', 's8', 'string'].contains(tClean)) return 1;
+    if (['u8', 's8', 'bool', 'string'].contains(tClean)) return 1;
     if (['u16', 's16'].contains(tClean)) return 2;
     if (['u32', 's32', 'void'].contains(tClean) || fnTypes.containsKey(tClean)) {
       return 4;
@@ -136,103 +130,44 @@ extension _TypeRules on CodeGen {
     return null;
   }
 
-  int _evalConstExpr(AstNode? expr) {
-    if (expr == null) return 0;
-    if (expr is IntLitNode) {
-      return expr.val;
-    } else if (expr is VarAccessNode) {
-      final c = _constValue(expr.name);
-      if (c != null) return c;
-      final sz = _arrayByteSize(expr.name);
+  /// Value of constant expression [expr] as a 32-bit pattern (its exact
+  /// value modulo 2^32). See [_constExact] for the rules.
+  int _evalConstExpr(AstNode? expr) => _bits32(_constExact(expr).value);
+
+  /// Value of `sizeof(...)`.
+  int _sizeofValue(SizeofNode expr) {
+    Object target = expr.target;
+    // If target is a variable name, resolve to its type
+    if (target is String) {
+      final vName = target;
+      final sz = _arrayByteSize(vName);
       if (sz != null) return sz;
-      throw NotConstantError(
-          "Constant expression references non-constant symbol '${expr.name}'");
-    } else if (expr is SizeofNode) {
-      Object target = expr.target;
-      // If target is a variable name, resolve to its type
-      if (target is String) {
-        final vName = target;
-        final sz = _arrayByteSize(vName);
-        if (sz != null) return sz;
-        if (types.containsKey(vName)) {
-          final tInfo = types[vName]!;
-          if (tInfo.isPtr) {
-            // pointer
-            return 4;
-          }
-          target = tInfo.name;
+      if (types.containsKey(vName)) {
+        final tInfo = types[vName]!;
+        if (tInfo.isPtr) {
+          // pointer
+          return 4;
         }
-        return _sizeOfTypeName(cleanName(target));
-      } else if (target is VarAccessNode) {
-        final sz = _arrayByteSize(target.name);
-        if (sz != null) return sz;
-        final (tName, isP) = _getExprType(target);
-        if (isP) return 4;
-        return _sizeOfTypeName(cleanName(tName));
-      } else {
-        final (tName, isP) = _getExprType(target as AstNode);
-        if (isP) return 4;
-        return _sizeOfTypeName(cleanName(tName));
+        target = tInfo.name;
       }
-    } else if (expr is UnaryOpNode) {
-      final val = _evalConstExpr(expr.operand);
-      if (expr.op == '-') {
-        return (-val) & 0xFFFFFFFF;
-      } else if (expr.op == '~') {
-        return (~val) & 0xFFFFFFFF;
-      } else if (expr.op == '!') {
-        return val == 0 ? 1 : 0;
-      }
-    } else if (expr is BinaryOpNode) {
-      final left = _evalConstExpr(expr.left);
-      final right = _evalConstExpr(expr.right);
-      switch (expr.op) {
-        case '+':
-          return (left + right) & 0xFFFFFFFF;
-        case '-':
-          return (left - right) & 0xFFFFFFFF;
-        case '*':
-          return (left * right) & 0xFFFFFFFF;
-        case '/':
-          return right != 0 ? _floorDiv(left, right) & 0xFFFFFFFF : 0;
-        case '%':
-          return right != 0 ? _pyMod(left, right) & 0xFFFFFFFF : 0;
-        case '&':
-          return (left & right) & 0xFFFFFFFF;
-        case '|':
-          return (left | right) & 0xFFFFFFFF;
-        case '^':
-          return (left ^ right) & 0xFFFFFFFF;
-        case '<<':
-          return (left << (right & 31)) & 0xFFFFFFFF;
-        case '>>':
-          return (left >> (right & 31)) & 0xFFFFFFFF;
-        case '==':
-          return left == right ? 1 : 0;
-        case '!=':
-          return left != right ? 1 : 0;
-        case '<':
-          return left < right ? 1 : 0;
-        case '<=':
-          return left <= right ? 1 : 0;
-        case '>':
-          return left > right ? 1 : 0;
-        case '>=':
-          return left >= right ? 1 : 0;
-        case '&&':
-          return (left != 0 && right != 0) ? 1 : 0;
-        case '||':
-          return (left != 0 || right != 0) ? 1 : 0;
-      }
+      return _sizeOfTypeName(cleanName(target));
+    } else if (target is VarAccessNode) {
+      final sz = _arrayByteSize(target.name);
+      if (sz != null) return sz;
+      final (tName, isP) = _getExprType(target);
+      if (isP) return 4;
+      return _sizeOfTypeName(cleanName(tName));
+    } else {
+      final (tName, isP) = _getExprType(target as AstNode);
+      if (isP) return 4;
+      return _sizeOfTypeName(cleanName(tName));
     }
-    throw NotConstantError(
-        'Expression cannot be evaluated as constant: ${_pyClassName(expr)}');
   }
 
   int _getElemSize(Object? tName, bool isPtr) {
     if (isPtr) return 4;
     final clean = cleanName(tName);
-    if (['u8', 's8', 'string'].contains(clean)) {
+    if (['u8', 's8', 'bool', 'string'].contains(clean)) {
       return 1;
     } else if (['u16', 's16'].contains(clean)) {
       return 2;

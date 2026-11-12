@@ -1,0 +1,11 @@
+// test_global_heap_bounds_fail: an index past the end of a heap array held in a global stops at the bounds check
+// Passes when the simulator stops with trap 15 at that check; trap(0) at the end means the check is missing.
+
+u32 g[];
+
+void main() {
+    g = u32.createArray(3);
+    g[2] = 1;
+    g[3] = 1;
+    trap(0);
+}

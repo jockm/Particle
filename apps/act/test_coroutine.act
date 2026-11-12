@@ -1,6 +1,8 @@
-// test_coroutine: yield, wait_until and pk_exit from lib/protokernel.act.
-// Checks the returned status values, resuming at the right step, pk_exit
-// restarting the coroutine, and resuming inside for and switch bodies.
+// test_coroutine: task functions with yield, wait_until and pk_exit from
+// lib/protokernel.act. Checks the returned status values, resuming at the
+// right point, pk_exit restarting the task, resuming inside while and switch
+// bodies, 'return;' ending a task, tasks as function values, and a task
+// with a parameter besides its state.
 // Passes with trap(0); fails with trap(15).
 
 import "lib/protokernel.act";
@@ -9,11 +11,11 @@ u32 g_trace = 0;
 u32 g_ready = 0;
 u32 g_mode = 0;
 
-u16 steps(type pt p) {
+task steps(type pt p) {
     g_trace = g_trace * 10 + 1;
-    yield(p, 1);
+    yield(p);
     g_trace = g_trace * 10 + 2;
-    wait_until(p, 2, g_ready == 1);
+    wait_until(p, g_ready == 1);
     g_trace = g_trace * 10 + 3;
     if (g_mode == 1) {
         pk_exit(p);
@@ -21,20 +23,45 @@ u16 steps(type pt p) {
     g_trace = g_trace * 10 + 4;
 }
 
-u16 in_loop(type pt p) {
-    for (u32 i : 0..2) {
+type Counter {
+    u16 lc;
+    u32 i;          // the loop counter lives in the task's state
+};
+
+task in_loop(Counter c) {
+    while (c.i < 2) {
         g_trace = g_trace * 10 + 5;
-        yield(p, 1);
+        yield(c);
         g_trace = g_trace * 10 + 6;
-        break;
+        c.i += 1;
     }
 }
 
-u16 in_switch(type pt p) {
+// 'return;' ends the task: the counter resets and the status is PK_ENDED
+task early(type pt p) {
+    g_trace = g_trace * 10 + 1;
+    yield(p);
+    if (g_mode == 2) {
+        return;
+    }
+    g_trace = g_trace * 10 + 2;
+    yield(p);
+}
+
+// A parameter besides the state is passed fresh on every call
+task adder(type pt p, u32 amount) {
+    g_trace += amount;
+    yield(p);
+    g_trace += amount * 10;
+}
+
+type Task = fn(pt) -> u16;
+
+task in_switch(type pt p) {
     switch (g_mode) {
         case 7:
             g_trace = g_trace * 10 + 7;
-            yield(p, 1);
+            yield(p);
             g_trace = g_trace * 10 + 8;
         default:
             g_trace = g_trace * 10 + 9;
@@ -63,12 +90,31 @@ void main() {
     if (steps(t) != PK_YIELDED) ok = 0;      // 1231
     if (g_trace != 1231) ok = 0;
 
-    // Resume inside a for body
+    // Resume inside a while body
+    g_trace = 0;
+    Counter c;
+    if (in_loop(c) != PK_YIELDED) ok = 0;    // 5
+    if (in_loop(c) != PK_YIELDED) ok = 0;    // 565
+    if (in_loop(c) != PK_ENDED) ok = 0;      // 5656
+    if (g_trace != 5656 || c.lc != 0) ok = 0;
+
+    // 'return;' ends the task
+    g_trace = 0;
+    g_mode = 2;
+    pk_init(t);
+    if (early(t) != PK_YIELDED) ok = 0;      // 1
+    if (early(t) != PK_ENDED) ok = 0;        // returned
+    if (g_trace != 1 || t.lc != 0) ok = 0;
+
+    // A task held in a function value, with a parameter
     g_trace = 0;
     pk_init(t);
-    if (in_loop(t) != PK_YIELDED) ok = 0;    // 5
-    if (in_loop(t) != PK_ENDED) ok = 0;      // 56
-    if (g_trace != 56) ok = 0;
+    Task run = early;
+    if (run(t) != PK_YIELDED) ok = 0;
+    pk_init(t);
+    if (adder(t, 3) != PK_YIELDED) ok = 0;   // +3
+    if (adder(t, 5) != PK_ENDED) ok = 0;     // +50
+    if (g_trace != 1 + 3 + 50) ok = 0;
 
     // Resume inside a switch case
     g_trace = 0;

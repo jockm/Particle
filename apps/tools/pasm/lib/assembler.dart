@@ -125,7 +125,8 @@ class ParticleAssembler {
       if (line.startsWith('.')) {
         final parts = line.split(RegExp(r'\s+'));
         final d = parts[0].toLowerCase();
-        final arg = parts.length > 1 ? line.substring(parts[0].length).trim() : '';
+        final arg =
+            parts.length > 1 ? line.substring(parts[0].length).trim() : '';
 
         if (d == '.org') {
           pc = prep.parseExpr(arg, symbols);
@@ -191,7 +192,8 @@ class ParticleAssembler {
       if (line.startsWith('.')) {
         final parts = line.split(RegExp(r'\s+'));
         final d = parts[0].toLowerCase();
-        final arg = parts.length > 1 ? line.substring(parts[0].length).trim() : '';
+        final arg =
+            parts.length > 1 ? line.substring(parts[0].length).trim() : '';
 
         if (d == '.org') {
           pc = prep.parseExpr(arg, symbols);
@@ -317,16 +319,23 @@ class ParticleAssembler {
   int encodeInstruction(String line, int curPc, String fname, int lno) {
     final tokens = line.split(RegExp(r'\s+'));
     final mnem = tokens[0].toUpperCase();
-    final opStr = line.length > tokens[0].length ? line.substring(tokens[0].length).trim() : '';
-    final ops = opStr.isNotEmpty ? opStr.split(',').map((o) => o.trim()).toList() : <String>[];
+    final opStr = line.length > tokens[0].length
+        ? line.substring(tokens[0].length).trim()
+        : '';
+    final ops = opStr.isNotEmpty
+        ? opStr.split(',').map((o) => o.trim()).toList()
+        : <String>[];
 
     int getR(int idx) {
-      if (idx >= ops.length) throw AssemblerError('Missing register operand ${idx + 1}', fname, lno);
+      if (idx >= ops.length)
+        throw AssemblerError('Missing register operand ${idx + 1}', fname, lno);
       return parseReg(ops[idx], fname, lno);
     }
 
     int getV(int idx) {
-      if (idx >= ops.length) throw AssemblerError('Missing immediate or label operand ${idx + 1}', fname, lno);
+      if (idx >= ops.length)
+        throw AssemblerError(
+            'Missing immediate or label operand ${idx + 1}', fname, lno);
       return prep.parseExpr(ops[idx], symbols);
     }
 
@@ -334,12 +343,14 @@ class ParticleAssembler {
     // Control Flow: BRANCH & JTBL
     // -------------------------------------------------------------------------
     if (mnem == 'BRANCH') {
-      if (ops.length != 1) throw AssemblerError('BRANCH expects 1 operand: BRANCH Rr', fname, lno);
+      if (ops.length != 1)
+        throw AssemblerError('BRANCH expects 1 operand: BRANCH Rr', fname, lno);
       final rr = getR(0);
       return (0xA4 << 8) | (rr << 4);
     }
     if (mnem == 'JTBL') {
-      if (ops.length != 1) throw AssemblerError('JTBL expects 1 operand: JTBL Rr', fname, lno);
+      if (ops.length != 1)
+        throw AssemblerError('JTBL expects 1 operand: JTBL Rr', fname, lno);
       final rr = getR(0);
       return (0x81 << 8) | (rr << 4);
     }
@@ -356,12 +367,15 @@ class ParticleAssembler {
 
         // Unconditional branch: 8-bit unsigned displacement (0..255 halfwords)
         if (cond.isEmpty) {
-          if (ops.length != 1) throw AssemblerError('$mnem expects 1 operand: $mnem <label>', fname, lno);
+          if (ops.length != 1)
+            throw AssemblerError(
+                '$mnem expects 1 operand: $mnem <label>', fname, lno);
           final tgt = getV(0);
           final diff = isBackward ? (curPc - tgt) : (tgt - curPc);
           final offset = diff ~/ 2;
           if (offset < 0 || offset > 255) {
-            throw AssemblerError('Branch out of 8-bit unsigned range ($offset)', fname, lno);
+            throw AssemblerError(
+                'Branch out of 8-bit unsigned range ($offset)', fname, lno);
           }
           final baseOp = isBackward ? 0xC0 : 0xB0;
           return (baseOp << 8) | (offset & 0xFF);
@@ -372,7 +386,9 @@ class ParticleAssembler {
         }
 
         final condIdx = {'.Z': 1, '.N': 2, '.P': 3, '.NZ': 4}[cond]!;
-        if (ops.length != 2) throw AssemblerError('$mnem expects 2 operands: $mnem Rr, <label>', fname, lno);
+        if (ops.length != 2)
+          throw AssemblerError(
+              '$mnem expects 2 operands: $mnem Rr, <label>', fname, lno);
 
         final r = getR(0);
         final tgt = getV(1);
@@ -382,7 +398,8 @@ class ParticleAssembler {
         // Wide conditional branch via R14 with 8-bit immediate (offset > 15)
         if (r == 14 && (offset > 15)) {
           if (offset < 0 || offset > 255) {
-            throw AssemblerError('Branch out of 8-bit immediate range ($offset)', fname, lno);
+            throw AssemblerError(
+                'Branch out of 8-bit immediate range ($offset)', fname, lno);
           }
           final op = isBackward
               ? (cond == '.NZ' ? 0xCB : (0xC6 + condIdx))
@@ -392,7 +409,8 @@ class ParticleAssembler {
 
         // Standard conditional branch: 4-bit immediate field (0..15 halfwords)
         if (offset < 0 || offset > 15) {
-          throw AssemblerError('Branch out of 4-bit immediate range ($offset)', fname, lno);
+          throw AssemblerError(
+              'Branch out of 4-bit immediate range ($offset)', fname, lno);
         }
 
         final op = isBackward
@@ -415,27 +433,42 @@ class ParticleAssembler {
         final val = getV(1);
         if (rr == 14) {
           if (val >= 0 && val <= 255) return ((baseOp + 3) << 8) | (val & 0xFF);
-          if (val >= -255 && val < 0) return ((baseOp + 4) << 8) | ((-val) & 0xFF);
+          if (val >= -255 && val < 0)
+            return ((baseOp + 4) << 8) | ((-val) & 0xFF);
         }
-        if (val >= 0 && val <= 15) return ((baseOp + 1) << 8) | (rr << 4) | (val & 0x0F);
-        if (val >= -15 && val < 0) return ((baseOp + 2) << 8) | (rr << 4) | ((-val) & 0x0F);
-        throw AssemblerError('Immediate value $val out of range for $mnem', fname, lno);
+        if (val >= 0 && val <= 15)
+          return ((baseOp + 1) << 8) | (rr << 4) | (val & 0x0F);
+        if (val >= -15 && val < 0)
+          return ((baseOp + 2) << 8) | (rr << 4) | ((-val) & 0x0F);
+        throw AssemblerError(
+            'Immediate value $val out of range for $mnem', fname, lno);
       }
     }
 
     // -------------------------------------------------------------------------
     // Memory Operations: LD8, ST8, LD16, ST16, LD32, ST32
     // -------------------------------------------------------------------------
-    for (final entry in [('8', 0x10, 0x15), ('16', 0x20, 0x25), ('32', 0x30, 0x35)]) {
+    for (final entry in [
+      ('8', 0x10, 0x15),
+      ('16', 0x20, 0x25),
+      ('32', 0x30, 0x35)
+    ]) {
       final widthName = entry.$1;
       final baseLd = entry.$2;
       final baseSt = entry.$3;
 
       if (mnem == 'LD$widthName' || mnem == 'ST$widthName') {
-        if (ops.length != 2) throw AssemblerError('$mnem expects 2 operands', fname, lno);
+        if (ops.length != 2)
+          throw AssemblerError('$mnem expects 2 operands', fname, lno);
         final memLeft = parseMemOperand(ops[0], fname, lno);
         final memRight = parseMemOperand(ops[1], fname, lno);
-        final modeOffsets = {'standard': 0, 'pre_inc': 1, 'post_inc': 2, 'pre_dec': 3, 'post_dec': 4};
+        final modeOffsets = {
+          'standard': 0,
+          'pre_inc': 1,
+          'post_inc': 2,
+          'pre_dec': 3,
+          'post_dec': 4
+        };
 
         if (memRight != null) {
           final rr = parseReg(ops[0], fname, lno);
@@ -450,7 +483,8 @@ class ParticleAssembler {
           final op = baseSt + modeOffsets[mode]!;
           return (op << 8) | (rr << 4) | rl;
         } else {
-          throw AssemblerError('Memory access syntax requires parentheses: $line', fname, lno);
+          throw AssemblerError(
+              'Memory access syntax requires parentheses: $line', fname, lno);
         }
       }
     }
@@ -477,7 +511,8 @@ class ParticleAssembler {
           } else if (val >= -15 && val < 0) {
             return (0x03 << 8) | (rr << 4) | ((-val) & 0x0F);
           }
-          throw AssemblerError('Immediate value $val out of range for LD', fname, lno);
+          throw AssemblerError(
+              'Immediate value $val out of range for LD', fname, lno);
         }
       }
     }
@@ -499,14 +534,22 @@ class ParticleAssembler {
     // -------------------------------------------------------------------------
     if (['MULL', 'MULH', 'SMULH', 'MULHSU'].contains(mnem)) {
       final rr = getR(0);
-      final baseLut = {'MULL': 0x78, 'MULH': 0x79, 'SMULH': 0x7A, 'MULHSU': 0x7B};
+      final baseLut = {
+        'MULL': 0x78,
+        'MULH': 0x79,
+        'SMULH': 0x7A,
+        'MULHSU': 0x7B
+      };
       try {
         final rl = parseReg(ops[1], fname, lno);
         return (baseLut[mnem]! << 8) | (rr << 4) | rl;
       } catch (_) {
         final v = getV(1);
         if (v < 0 || v > 15) {
-          throw AssemblerError('Immediate multiplier $v out of 4-bit unsigned range (0-15)', fname, lno);
+          throw AssemblerError(
+              'Immediate multiplier $v out of 4-bit unsigned range (0-15)',
+              fname,
+              lno);
         }
         return ((baseLut[mnem]! + 4) << 8) | (rr << 4) | (v & 0x0F);
       }
@@ -531,7 +574,8 @@ class ParticleAssembler {
       } catch (_) {
         final v = getV(1);
         if (v < 0 || v > 15) {
-          throw AssemblerError('Bit index $v out of 4-bit immediate range (0-15)', fname, lno);
+          throw AssemblerError(
+              'Bit index $v out of 4-bit immediate range (0-15)', fname, lno);
         }
         return (immLut[mnem]! << 8) | (rr << 4) | (v & 0x0F);
       }
@@ -579,9 +623,12 @@ class ParticleAssembler {
     if (mnem == 'CLZ') return (0x82 << 8) | (getR(0) << 4);
 
     if (mnem == 'TAS') {
-      if (ops.length != 2) throw AssemblerError('TAS expects 2 operands: TAS (Rr), Rl', fname, lno);
+      if (ops.length != 2)
+        throw AssemblerError(
+            'TAS expects 2 operands: TAS (Rr), Rl', fname, lno);
       final memTarget = parseMemOperand(ops[0], fname, lno);
-      if (memTarget == null) throw AssemblerError('TAS operand 1 must be (Rr)', fname, lno);
+      if (memTarget == null)
+        throw AssemblerError('TAS operand 1 must be (Rr)', fname, lno);
       final rr = memTarget.$1;
       final rl = parseReg(ops[1], fname, lno);
       return (0x8B << 8) | (rr << 4) | rl;
@@ -649,7 +696,9 @@ class ParticleAssembler {
       int chan = 0;
       if (ops.length > 1) {
         final op1 = ops[1].trim().toLowerCase();
-        chan = regMap.containsKey(op1) ? regMap[op1]! : (int.tryParse(ops[1]) ?? 0);
+        chan = regMap.containsKey(op1)
+            ? regMap[op1]!
+            : (int.tryParse(ops[1]) ?? 0);
       }
       return (0xE1 << 8) | (rr << 4) | (chan & 0x0F);
     }
@@ -659,7 +708,9 @@ class ParticleAssembler {
       int chan = 0;
       if (ops.length > 1) {
         final op1 = ops[1].trim().toLowerCase();
-        chan = regMap.containsKey(op1) ? regMap[op1]! : (int.tryParse(ops[1]) ?? 0);
+        chan = regMap.containsKey(op1)
+            ? regMap[op1]!
+            : (int.tryParse(ops[1]) ?? 0);
       }
       return (0xE0 << 8) | (rr << 4) | (chan & 0x0F);
     }
@@ -688,11 +739,14 @@ class ParticleAssembler {
       int vec = 0;
       if (ops.length > 1) {
         final op1 = ops[1].trim().toLowerCase();
-        vec = regMap.containsKey(op1) ? parseReg(ops[1], fname, lno) : (int.tryParse(ops[1]) ?? 0);
+        vec = regMap.containsKey(op1)
+            ? parseReg(ops[1], fname, lno)
+            : (int.tryParse(ops[1]) ?? 0);
       }
       return (0xE5 << 8) | (rr << 4) | (vec & 0x0F);
     }
 
-    throw AssemblerError("Unimplemented instruction mnemonic '$mnem'", fname, lno);
+    throw AssemblerError(
+        "Unimplemented instruction mnemonic '$mnem'", fname, lno);
   }
 }

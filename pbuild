@@ -48,6 +48,10 @@ Options:
                          Enable array bounds checking (default)
       --no-bounds-check, -fno-bounds-check
                          Disable array bounds checking
+      --reference-check, -freference-check
+                         Enable null reference checking (default)
+      --no-reference-check, -fno-reference-check
+                         Disable null reference checking
       --sim              Run psim simulator after successful build
       --debug            Pass --debug to psim when running with --sim
       --base <addr>      Pass --base <addr> to psim when running with --sim
@@ -132,6 +136,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-bounds-check|-fno-bounds-check)
             ACT16_FLAGS+=("-fno-bounds-check")
+            shift
+            ;;
+        --reference-check|-freference-check)
+            ACT16_FLAGS+=("-freference-check")
+            shift
+            ;;
+        --no-reference-check|-fno-reference-check)
+            ACT16_FLAGS+=("-fno-reference-check")
             shift
             ;;
         --sim)

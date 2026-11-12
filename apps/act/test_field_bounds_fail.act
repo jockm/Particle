@@ -1,0 +1,15 @@
+// test_field_bounds_fail: an index past the end of a heap array held in a field stops at the bounds check
+// Passes when the simulator stops with trap 15 at that check; trap(0) at the end means the check is missing.
+
+type Buffer {
+    u32 count;
+    u8 bytes[];
+};
+
+void main() {
+    Buffer b = Buffer.create();
+    b.bytes = u8.createArray(4);
+    b.bytes[3] = 1;
+    b.bytes[4] = 1;
+    trap(0);
+}

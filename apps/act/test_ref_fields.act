@@ -1,0 +1,60 @@
+// test_ref_fields: 'ref T f' and 'T f[]' fields hold references: access, calls, .len, resize, destroy
+// Passes with trap(0); fails with trap(15).
+
+type Node {
+    u32 val;
+    ref Node next;
+    u32 data[];
+    string name[];
+};
+
+u32 sum(u32 a[]) {
+    u32 t = 0;
+    for (u32 i : 0..a.len) { t += a[i]; }
+    return t;
+}
+
+u32 getval(Node n) { return n.val; }
+
+void Node.bump() { this.val += 1; }
+
+void main() {
+    u32 ok = 1;
+    if (sizeof(Node) != 16) ok = 0;
+    Node a = Node.create();
+    if (a.next.exists()) ok = 0;
+    if (a.data.exists()) ok = 0;
+    Node b = Node.create();
+    b.val = 5;
+    a.next = b;                 // a.next now owns b
+    a.next.val = 6;
+    if (a.next.val != 6) ok = 0;
+    if (getval(a.next) != 6) ok = 0;
+    a.next.bump();
+    if (a.next.val != 7) ok = 0;
+    a.data = u32.createArray(3);
+    a.data[0] = 1;
+    a.data[1] = 2;
+    a.data[2] = 3;
+    if (a.data.len != 3) ok = 0;
+    if (sum(a.data) != 6) ok = 0;
+    a.data.resize(5);
+    if (a.data.len != 5 || a.data[2] != 3) ok = 0;
+    a.data[4] = 10;
+    if (sum(a.data) != 16) ok = 0;
+    a.name = string.create(8);
+    a.name[0] = 72;
+    a.name[1] = 105;
+    if (a.name.len != 2) ok = 0;
+    Node c = a.next;            // copies the reference
+    if (c.exists()) {
+        if (c.val != 7) ok = 0;
+    }
+    a.next.destroy();
+    if (a.next.exists()) ok = 0;
+    a.data.destroyArray();
+    if (a.data.exists()) ok = 0;
+    a.name.destroy();
+    a.destroy();
+    if (ok == 1) { trap(0); } else { trap(15); }
+}

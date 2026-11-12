@@ -8,11 +8,11 @@ type Seq {
     u32 stage;
 };
 
-u32 steps(Seq s) {
+task steps(Seq s) {
     s.stage = 1;
-    yield(s, 1);
+    yield(s);
     s.stage = 2;
-    yield(s, 2);
+    yield(s);
     s.stage = 3;
 }
 

@@ -5,8 +5,8 @@
 // Passes with trap(0); fails with trap(15).
 
 // Implemented in heap_after_asm_lib.asm
-u32 lib_table_sum();
-u32 lib_end_addr();
+asm u32 lib_table_sum();
+asm u32 lib_end_addr();
 
 // The array's address: it arrives in R1 and is returned unchanged.
 u32 addr_of(u32 a[]) {

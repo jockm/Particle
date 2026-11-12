@@ -21,6 +21,9 @@ part 'statements.dart';
 part 'expressions.dart';
 part 'references.dart';
 part 'coroutines.dart';
+part 'flow.dart';
+part 'constants.dart';
+part 'ownership.dart';
 
 /// Type information recorded for a variable or parameter:
 /// `(type name, is pointer, is reference)`.
@@ -41,7 +44,11 @@ class FieldInfo {
 
   /// `null`, an int dimension or a `List<int>` of dimensions.
   final Object? dim;
-  const FieldInfo(this.offset, this.type, this.isPtr, this.dim);
+
+  /// `T name[]`: a reference to a heap array. A field with [isPtr] alone is
+  /// `ref T name`.
+  final bool isArrayRef;
+  const FieldInfo(this.offset, this.type, this.isPtr, this.dim, {this.isArrayRef = false});
 }
 
 /// Layout of a record type: its fields (including promoted fields of
@@ -128,6 +135,9 @@ const _signedTypes = ['s8', 's16', 's32'];
 
 class CodeGen {
   final bool boundsCheck;
+
+  /// Run-time null checks on references held in globals, and on allocation.
+  final bool referenceCheck;
   final Backend backend;
 
   Map<String, String> affineState = {};
@@ -153,6 +163,14 @@ class CodeGen {
   /// Trap handlers (`trap(N) name() { ... }`): they run only as traps.
   final Set<String> _trapHandlerNames = {};
 
+  /// True while generating a task function.
+  bool currentFuncIsTask = false;
+
+  /// While lowering coroutine operations: the function being lowered, and
+  /// the next resume point number.
+  FuncDeclNode? _loweringFunc;
+  int _nextStep = 1;
+
   /// Functions declared without a body (prototypes).
   final Set<String> _prototypeNames = {};
 
@@ -165,6 +183,14 @@ class CodeGen {
   /// each other (and to `sizeof`) regardless of declaration order.
   final Map<String, AstNode> _pendingConsts = {};
   final Set<String> _constsInProgress = {};
+
+  /// Declared type of each `const` (absent for enum members and `-D`
+  /// values, which are untyped).
+  final Map<String, String?> _constTypes = {};
+
+  /// Exact value and type of each evaluated constant; [constants] holds
+  /// the same values as 32-bit patterns.
+  final Map<String, _ConstVal> _constExactValues = {};
 
   /// Constants defined on the command line with `-D`. They take precedence
   /// over a `const` of the same name in the source, which therefore acts as
@@ -183,10 +209,13 @@ class CodeGen {
 
   CodeGen(
       {this.boundsCheck = true,
+      this.referenceCheck = true,
       Backend? backend,
       Map<String, int> predefinedConstants = const {}})
       : backend = backend ?? ParticleAsmBackend(),
-        predefinedConstants = Map.of(predefinedConstants);
+        predefinedConstants = Map.of(predefinedConstants) {
+    this.backend.referenceCheck = referenceCheck;
+  }
 
   List<String> get asm => backend.asm;
 
@@ -278,10 +307,16 @@ class CodeGen {
       return;
     }
 
+    _emitStringScanAt14(arrName, targetReg);
+  }
+
+  /// `.len` of the string whose address is in R14: counts bytes up to the
+  /// terminator into [targetReg].
+  void _emitStringScanAt14(String? arrName, int targetReg) {
     final lblScan = newLabel('str_scan');
     final lblDone = newLabel('str_scan_done');
 
-    emit('LD      R$targetReg, 0', "Init .len scan counter for '$arrName'");
+    emit('LD      R$targetReg, 0', "Init .len scan counter for '${arrName ?? 'string'}'");
     emitLabel(lblScan);
     emit('LD8     R13, (R14)', 'Load byte from string buffer');
     emit('FBRA.Z  R13, $lblDone', 'Null terminator reached');
@@ -291,12 +326,6 @@ class CodeGen {
     emitLabel(lblDone);
   }
 
-  void _checkAffineAccess(String name) {
-    if (affineState[name] == 'MOVED') {
-      throw CompileError(
-          "use of moved or deallocated affine reference '$name'");
-    }
-  }
 
   /// Strips legacy `struct ` / `type ` prefixes from a type name. Tuple
   /// types (lists) are cleaned element by element.
@@ -400,8 +429,13 @@ class CodeGen {
           if (!canResolve) break;
           final fType = cleanName(f.type);
           _validateBackendType(fType, "field '${f.name}' of type '${d.name}'");
+          if (f.isPtr && !f.isArrayRef && !_declaredTypes.contains(fType)) {
+            throw CompileError(
+                    "field '${f.name}' of type '${d.name}': 'ref' needs a user-defined type, not '$fType'")
+                .at(f.loc);
+          }
           if (!f.isPtr &&
-              !['u8', 's8', 'u16', 's16', 'u32', 's32', 'string', 'void']
+              !['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'string', 'void']
                   .contains(fType)) {
             if (!structs.containsKey(fType)) {
               canResolve = false;
@@ -433,8 +467,10 @@ class CodeGen {
               for (final sub in structs[fType]!.fields.entries) {
                 if (sub.key.startsWith('__')) continue;
                 final sv = sub.value;
-                fields.putIfAbsent(sub.key,
-                    () => FieldInfo(embedBaseOff + sv.offset, sv.type, sv.isPtr, sv.dim));
+                fields.putIfAbsent(
+                    sub.key,
+                    () => FieldInfo(embedBaseOff + sv.offset, sv.type, sv.isPtr, sv.dim,
+                        isArrayRef: sv.isArrayRef));
               }
               offset += embedSz;
               continue;
@@ -448,7 +484,7 @@ class CodeGen {
               elemSz = 2;
             } else if (structs.containsKey(fType)) {
               elemSz = structs[fType]!.size;
-            } else if (['u8', 's8', 'string'].contains(fType)) {
+            } else if (['u8', 's8', 'bool', 'string'].contains(fType)) {
               elemSz = 1;
             } else {
               elemSz = 4;
@@ -470,7 +506,7 @@ class CodeGen {
                 : backend.alignOf(elemSz);
             if (fAlign > recordAlign) recordAlign = fAlign;
             offset = alignUp(offset, fAlign);
-            fields[fName] = FieldInfo(offset, fType, fPtr, fDim);
+            fields[fName] = FieldInfo(offset, fType, fPtr, fDim, isArrayRef: f.isArrayRef);
             offset += fSize;
           }
           structs[d.name] =
@@ -491,6 +527,40 @@ class CodeGen {
     }
   }
 
+  /// Every prototype must be either defined in the Action sources or marked
+  /// `asm` (a routine supplied by an .asm file), but not both. The coroutine
+  /// operations of protokernel.act are generated by the compiler.
+  void _checkPrototypes(List<FuncDeclNode> funcs) {
+    final defined = {for (final f in funcs) if (f.body != null) f.name};
+    final asmNames = {for (final f in funcs) if (f.isAsm) f.name};
+    for (final f in funcs) {
+      if (f.body != null || f.isInline) continue;
+      if (f.isAsm) {
+        if (defined.contains(f.name)) {
+          throw CompileError(
+              "'${_displayName(f)}' is declared 'asm' but is also defined in Action").at(f.loc);
+        }
+        continue;
+      }
+      if (_coroutineOps.containsKey(f.name)) continue;
+      if (!defined.contains(f.name) && !asmNames.contains(f.name)) {
+        throw CompileError(
+            "'${_displayName(f)}' is declared but never defined; if it is written in assembly, declare it 'asm'").at(f.loc);
+      }
+    }
+  }
+
+  /// A function's name as written in the source (`Type.method` for methods).
+  String _displayName(FuncDeclNode f) {
+    if (f.params.isNotEmpty && f.params.first.name == 'this') {
+      final t = '${f.params.first.type}';
+      if (f.name.startsWith('${t}_')) {
+        return '$t.${f.name.substring(t.length + 1)}';
+      }
+    }
+    return f.name;
+  }
+
   /// Checks the trap handlers (`trap(N) name() { ... }`) in [funcs] and returns the handler's
   /// name for each bound trap number.
   Map<int, String> _collectTrapHandlers(List<FuncDeclNode> funcs) {
@@ -502,19 +572,19 @@ class CodeGen {
       try {
         n = _evalConstExpr(e);
       } on NotConstantError {
-        throw CompileError("'${f.name}': the trap number must be a constant");
+        throw CompileError("'${f.name}': the trap number must be a constant").at(f.loc);
       }
       if (n < 0 || n >= backend.vectorCount) {
         throw CompileError(
-            "'${f.name}': trap $n is out of range (0-${backend.vectorCount - 1})");
+            "'${f.name}': trap $n is out of range (0-${backend.vectorCount - 1})").at(f.loc);
       }
       if (n == 0) {
         throw CompileError(
-            "'${f.name}': binding trap 0 (reset) is not supported yet; vector 0 runs the startup code");
+            "'${f.name}': binding trap 0 (reset) is not supported yet; vector 0 runs the startup code").at(f.loc);
       }
       final other = handlers[n];
       if (other != null) {
-        throw CompileError("trap $n is bound to both '$other' and '${f.name}'");
+        throw CompileError("trap $n is bound to both '$other' and '${f.name}'").at(f.loc);
       }
       handlers[n] = f.name;
       _trapHandlerNames.add(f.name);
@@ -550,6 +620,9 @@ class CodeGen {
         // Register global constants upfront (before verify evaluation)
         if (!predefinedConstants.containsKey(d.name)) {
           _pendingConsts[d.name] = d.initExpr ?? IntLitNode(0);
+          _constTypes[d.name] = cleanName(d.typeName);
+        } else {
+          _typePredefinedConst(d.name, cleanName(d.typeName));
         }
       }
     }
@@ -559,8 +632,12 @@ class CodeGen {
     _layoutStructs(typeDefs);
 
     for (final d in root.decls) {
-      if (d is FnTypeNode) {
-        fnTypes[d.name] = (d.paramTypes, d.retType);
+      try {
+        if (d is FnTypeNode) {
+          fnTypes[d.name] = (d.paramTypes, d.retType);
+        }
+      } on CompileError catch (e) {
+        throw e.at(d.loc);
       }
     }
     final dataDecls = root.decls.whereType<VarDeclNode>().toList();
@@ -631,25 +708,29 @@ class CodeGen {
 
     // Register global types and dims
     for (final d in dataDecls) {
-      if (d.isConst) continue;
-      _resolveVarDecl(d);
-      _validateBackendType(d.typeName, "global variable '${d.name}'");
-      if (d.isVolatile || d.boundAddr != null) {
-        volatiles.add(d.name);
-      }
-      types[d.name] = TypeInfo(d.typeName, d.isPtr, false);
-      var dims = d.arrayDims;
-      if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
-        dims = [d.arrayDim!];
-      }
-      if (dims != null && dims.isNotEmpty) {
-        arrayDims[d.name] = dims;
-        arrayLens[d.name] = dims[0];
-      }
-      if (d.boundAddr != null) {
-        boundAddrs[d.name] = d.boundAddr!;
-      } else {
-        globals.add(d.name);
+      try {
+        if (d.isConst) continue;
+        _resolveVarDecl(d);
+        _validateBackendType(d.typeName, "global variable '${d.name}'");
+        if (d.isVolatile || d.boundAddr != null) {
+          volatiles.add(d.name);
+        }
+        types[d.name] = TypeInfo(d.typeName, d.isPtr, false);
+        var dims = d.arrayDims;
+        if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
+          dims = [d.arrayDim!];
+        }
+        if (dims != null && dims.isNotEmpty) {
+          arrayDims[d.name] = dims;
+          arrayLens[d.name] = dims[0];
+        }
+        if (d.boundAddr != null) {
+          boundAddrs[d.name] = d.boundAddr!;
+        } else {
+          globals.add(d.name);
+        }
+      } on CompileError catch (e) {
+        throw e.at(d.loc);
       }
     }
 
@@ -658,11 +739,14 @@ class CodeGen {
       ..clear()
       ..addAll([for (final f in funcDecls) if (f.body == null && !f.isInline) f.name]);
     _lowerCoroutineOps(funcDecls);
+    _checkPrototypes(funcDecls);
 
     // Decide which record variables are references (see references.dart)
     final savedTypes = Map<String, TypeInfo>.of(types);
     _classifyReferences(funcDecls, dataDecls);
     types = savedTypes;
+    // Follow references through every path (see ownership.dart)
+    _checkReferenceFlow(funcDecls);
     for (final g in _globalRefs) {
       final t = types[g]!;
       types[g] = TypeInfo(t.name, t.isPtr, true);
@@ -689,52 +773,57 @@ class CodeGen {
           '; ------------------------------------------------------------------------------');
       emit('.align  4');
       for (final d in emitGlobals) {
-        var dims = d.arrayDims;
-        if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
-          dims = [d.arrayDim!];
-        }
-        emitLabel('_${d.name}');
-        if (dims != null && dims.isNotEmpty) {
-          if (d.initExpr != null) {
-            throw CompileError(
-                "Global array '${d.name}' cannot have an initializer; global arrays start zero-filled");
+        try {
+          var dims = d.arrayDims;
+          if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
+            dims = [d.arrayDim!];
           }
-          final gT = cleanName(d.typeName);
-          final elemSz = ['u8', 's8', 'string'].contains(gT)
-              ? 1
-              : (['u16', 's16'].contains(gT)
-                  ? 2
-                  : (structs.containsKey(gT) && !d.isPtr ? structs[gT]!.size : 4));
-          var totalElems = 1;
-          for (final dm in dims) {
-            totalElems *= dm;
-          }
-          final totalWords = (elemSz * totalElems + 3) ~/ 4;
-          for (var i = 0; i < totalWords; i++) {
-            emit('.word   0');
-          }
-        } else {
-          final init = d.initExpr;
-          final cleanT = cleanName(d.typeName);
-          if (structs.containsKey(cleanT) && !d.isPtr && !_globalRefs.contains(d.name)) {
-            // A record stored in place: reserve the whole record
-            if (init != null) {
+          emitLabel('_${d.name}');
+          if (dims != null && dims.isNotEmpty) {
+            if (d.initExpr != null) {
               throw CompileError(
-                  "Global record '${d.name}' cannot have an initializer unless it is a reference");
+                  "Global array '${d.name}' cannot have an initializer; global arrays start zero-filled");
             }
-            final words = (structs[cleanT]!.size + 3) ~/ 4;
-            for (var i = 0; i < words; i++) {
+            final gT = cleanName(d.typeName);
+            final elemSz = ['u8', 's8', 'bool', 'string'].contains(gT)
+                ? 1
+                : (['u16', 's16'].contains(gT)
+                    ? 2
+                    : (structs.containsKey(gT) && !d.isPtr ? structs[gT]!.size : 4));
+            var totalElems = 1;
+            for (final dm in dims) {
+              totalElems *= dm;
+            }
+            final totalWords = (elemSz * totalElems + 3) ~/ 4;
+            for (var i = 0; i < totalWords; i++) {
               emit('.word   0');
             }
-            continue;
-          }
-          if (init is IntLitNode) {
-            emit('.word   ${init.val}');
-          } else if (init != null) {
-            emit('.word   ${_globalInitValue(d)}');
           } else {
-            emit('.word   0');
+            final init = d.initExpr;
+            final cleanT = cleanName(d.typeName);
+            if (structs.containsKey(cleanT) && !d.isPtr && !_globalRefs.contains(d.name)) {
+              // A record stored in place: reserve the whole record
+              if (init != null) {
+                throw CompileError(
+                    "global '${d.name}' of type '$cleanT' cannot have an initializer unless it is a reference");
+              }
+              final words = (structs[cleanT]!.size + 3) ~/ 4;
+              for (var i = 0; i < words; i++) {
+                emit('.word   0');
+              }
+              continue;
+            }
+            if (init is IntLitNode) {
+              _checkConstFits(init, cleanT, d.isPtr, "global variable '${d.name}'");
+              emit('.word   ${init.val}');
+            } else if (init != null) {
+              emit('.word   ${_globalInitValue(d)}');
+            } else {
+              emit('.word   0');
+            }
           }
+        } on CompileError catch (e) {
+          throw e.at(d.loc);
         }
       }
       asm.add('');
@@ -792,7 +881,7 @@ class CodeGen {
           (d.arrayDims == null || d.arrayDims!.isEmpty);
       types[d.name] = TypeInfo(d.typeName, d.isPtr, isRecordRef);
       var elemSize = 4;
-      if (['u8', 's8', 'string'].contains(d.typeName)) {
+      if (['u8', 's8', 'bool', 'string'].contains(d.typeName)) {
         elemSize = 1;
       } else if (['u16', 's16'].contains(d.typeName)) {
         elemSize = 2;
@@ -858,6 +947,14 @@ class CodeGen {
   }
 
   void genFunc(FuncDeclNode func) {
+    try {
+      _genFunc(func);
+    } on CompileError catch (e) {
+      throw e.at(func.loc);
+    }
+  }
+
+  void _genFunc(FuncDeclNode func) {
     currentFuncName = func.name;
     currentFuncRet = (cleanType(func.retType), func.retPtr);
     asm.add(
@@ -924,9 +1021,14 @@ class CodeGen {
       _collectCoroutineSteps(func.body!, coroSteps);
     }
 
-    if (coroSteps.isNotEmpty) {
+    // A task dispatches on its state's continuation counter
+    currentFuncIsTask = func.isTask;
+    if (func.isTask) {
+      _checkTask(func);
+    }
+    if (func.isTask) {
       emit('; Coroutine entry continuation dispatch');
-      final taskRef = coroSteps[0].$2;
+      final taskRef = VarAccessNode(func.params.first.name);
       _emitLvalueAddr(taskRef, 14);
       emit('LD16     R1, (R14)', 'Read continuation counter');
       final lblEntry0 = '._step_${func.name}_0';
@@ -954,9 +1056,11 @@ class CodeGen {
 
     genBlock(func.body!);
 
-    if (coroSteps.isNotEmpty) {
+    if (func.isTask) {
+      // Falling off the end, or 'return;', ends the task
+      emitLabel('._task_end_${func.name}');
       emit('; Coroutine fallthrough completion (PK_ENDED)');
-      final taskRef = coroSteps[0].$2;
+      final taskRef = VarAccessNode(func.params.first.name);
       _emitLvalueAddr(taskRef, 14);
       emit('LD16     (R14), R0', 'Reset continuation counter (lc = 0)');
       final ended = _pkStatus('PK_ENDED');
@@ -1024,10 +1128,8 @@ class CodeGen {
 
   void _collectCoroutineSteps(AstNode node, List<(int, AstNode)> steps) {
     if (node is YieldNode) {
-      node.stepConst = _evalConstIn(node.stepExpr, 'yield step number');
       steps.add((node.stepConst, node.taskRef));
     } else if (node is WaitUntilNode) {
-      node.stepConst = _evalConstIn(node.stepExpr, 'wait_until step number');
       steps.add((node.stepConst, node.taskRef));
     } else if (node is BlockNode) {
       for (final s in node.stmts) {
@@ -1063,9 +1165,7 @@ class CodeGen {
     } else if (node is SwitchNode) {
       _preRegisterLocalConsts(node.body);
     } else if (node is VarDeclNode && node.isConst) {
-      if (!predefinedConstants.containsKey(node.name)) {
-        constants[node.name] = _evalConstExpr(node.initExpr);
-      }
+      _defineLocalConst(node);
     }
   }
 
@@ -1101,6 +1201,7 @@ class CodeGen {
 
   /// Value of a global scalar's initializer, which must be constant.
   int _globalInitValue(VarDeclNode d) {
+    _checkConstFits(d.initExpr, cleanName(d.typeName), d.isPtr, "global variable '${d.name}'");
     try {
       return _evalConstExpr(d.initExpr);
     } on NotConstantError catch (err) {
@@ -1109,24 +1210,13 @@ class CodeGen {
     }
   }
 
-  /// Value of the named constant, evaluating it now if it is still pending.
+  /// Value of the named constant (as a 32-bit pattern), evaluating it now
+  /// if it is still pending.
   int? _constValue(String name) {
-    final known = constants[name];
-    if (known != null) return known;
-    final expr = _pendingConsts[name];
-    if (expr == null) return null;
-    if (!_constsInProgress.add(name)) {
-      throw CompileError("Circular constant definition involving '$name'");
-    }
-    try {
-      final v = _evalConstExpr(expr);
-      constants[name] = v;
-      _pendingConsts.remove(name);
-      return v;
-    } finally {
-      _constsInProgress.remove(name);
-    }
+    final c = _constInfo(name);
+    return c == null ? null : constants[name];
   }
+
 
   void _collectSwitchLabels(AstNode node, List<(int, String)> cases,
       List<String?> defaultHolder, List<String> ordered) {

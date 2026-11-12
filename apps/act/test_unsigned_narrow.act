@@ -6,9 +6,11 @@ void main() {
     u8 b = 255;
     b = b + 1;
     if (b != 0) ok = 0;
-    u8 c = 0x1234;
+    u32 wide16 = 0x1234;  // a constant that does not fit is an error
+    u8 c = wide16;
     if (c != 0x34) ok = 0;
-    u16 w = 0x12345;
+    u32 wide17 = 0x12345;
+    u16 w = wide17;
     if (w != 0x2345) ok = 0;
     u16 m = 0xFFFF;
     u32 wide = m;

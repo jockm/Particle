@@ -1,0 +1,42 @@
+// test_alloc_zeroed: create(), createArray() and string.create() return zeroed memory, even when reusing freed memory
+// Passes with trap(0); fails with trap(15).
+
+type Item {
+    u32 a;
+    u16 b;
+    u32 c;
+};
+
+void main() {
+    u32 ok = 1;
+    u32 buf[] = u32.createArray(8);
+    for (u32 i : 0..8) {
+        buf[i] = 0xDEADBEEF;
+    }
+    buf.destroyArray();
+    u32 again[] = u32.createArray(8);
+    for (u32 j : 0..8) {
+        if (again[j] != 0) ok = 0;
+    }
+    again.destroyArray();
+
+    Item it = Item.create();
+    if (it.a != 0 || it.b != 0 || it.c != 0) ok = 0;
+    it.a = 1;
+    it.c = 2;
+    it.destroy();
+    Item it2 = Item.create();
+    if (it2.a != 0 || it2.c != 0) ok = 0;
+    it2.destroy();
+
+    string s = string.create(6);
+    if (s.len != 0) ok = 0;
+    if (s[5] != 0) ok = 0;
+    s.destroy();
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

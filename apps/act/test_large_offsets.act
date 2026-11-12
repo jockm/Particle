@@ -24,9 +24,11 @@ u32 sum_open(u32 xs[]) {
     return s;
 }
 
-u16 stepper(type pt p) {
-    yield(p, 17);
-    yield(p, 300);
+// 17 pauses: resume points 16 and 17 need a LOAD macro
+task stepper(type pt p) {
+    yield(p); yield(p); yield(p); yield(p); yield(p); yield(p);
+    yield(p); yield(p); yield(p); yield(p); yield(p); yield(p);
+    yield(p); yield(p); yield(p); yield(p); yield(p);
 }
 
 void main() {
@@ -61,11 +63,17 @@ void main() {
     u32 k = 9;
     if (sum_open(vals[k * 2..k * 2 + 3]) != 18 + 19 + 20) ok = 0;
 
-    // Coroutine steps above 15
+    // Coroutine resume points above 15
     type pt t;
     pk_init(t);
+    u32 calls = 0;
+    while (calls < 15) {
+        stepper(t);
+        calls += 1;
+    }
+    if (t.lc != 15) ok = 0;
+    if (stepper(t) != PK_YIELDED || t.lc != 16) ok = 0;
     if (stepper(t) != PK_YIELDED || t.lc != 17) ok = 0;
-    if (stepper(t) != PK_YIELDED || t.lc != 300) ok = 0;
     if (stepper(t) != PK_ENDED || t.lc != 0) ok = 0;
 
     if (ok == 1) {

@@ -9,6 +9,10 @@ import 'lexer.dart';
 
 /// Base class of every syntax tree node.
 abstract class AstNode {
+  /// Where the node starts in the source (`file:line:col`), for error
+  /// messages. Null for nodes the compiler makes itself.
+  String? loc;
+
   /// The node's `expr` child, for the node kinds that have one. The Python
   /// type inference walked through such wrappers with `hasattr(e, 'expr')`.
   AstNode? get innerExpr => null;
@@ -46,30 +50,37 @@ class CompoundAssignNode extends AstNode {
 class YieldNode extends AstNode {
   AstNode taskRef;
 
-  /// The step number as written; any constant expression.
-  AstNode stepExpr;
-
-  /// [stepExpr] evaluated by the code generator.
+  /// Resume point number, assigned by the compiler (1, 2, ... in order).
   int stepConst = 0;
-  YieldNode(this.taskRef, this.stepExpr);
+  YieldNode(this.taskRef);
 }
 
 class WaitUntilNode extends AstNode {
   AstNode taskRef;
-
-  /// The step number as written; any constant expression.
-  AstNode stepExpr;
-
-  /// [stepExpr] evaluated by the code generator.
-  int stepConst = 0;
   AstNode cond;
-  WaitUntilNode(this.taskRef, this.stepExpr, this.cond);
+
+  /// Resume point number, assigned by the compiler (1, 2, ... in order).
+  int stepConst = 0;
+  WaitUntilNode(this.taskRef, this.cond);
 }
 
 /// `pk_exit(task)`: resets the task's continuation and returns PK_EXITED.
 class PkExitNode extends AstNode {
   AstNode taskRef;
   PkExitNode(this.taskRef);
+}
+
+/// `type Name = Target;`: another name for an existing type. The parser
+/// replaces uses of [name] with the resolved target (see Parser.aliases).
+class TypeAliasNode extends AstNode {
+  final String name;
+  final String target;
+
+  /// Source location, for error messages.
+  final String loc;
+  TypeAliasNode(this.name, this.target, this.loc);
+  @override
+  String? get nodeName => name;
 }
 
 class FnTypeNode extends AstNode {
@@ -122,7 +133,15 @@ class FieldDecl {
   /// evaluated from [dimExprs] during layout.
   Object? dim;
   bool isEmbedded;
-  FieldDecl(this.type, this.isPtr, this.name, this.dimExprs, this.isEmbedded);
+
+  /// `T name[]`: a reference to a heap array ([isPtr] is also true). A
+  /// field with [isPtr] alone is `ref T name`, a reference to one `T`.
+  bool isArrayRef;
+
+  /// Where the field is declared (`file:line:col`).
+  String? loc;
+  FieldDecl(this.type, this.isPtr, this.name, this.dimExprs, this.isEmbedded,
+      {this.isArrayRef = false});
 }
 
 class TypeDefNode extends AstNode {
@@ -182,6 +201,14 @@ class FuncDeclNode extends AstNode {
   /// `trap(N) name() { ... }`: the trap number expression, when the function
   /// is a trap handler.
   AstNode? trapExpr;
+
+  /// `asm ReturnType name(params);`: a prototype for a routine written in
+  /// assembly, supplied by an .asm file.
+  bool isAsm = false;
+
+  /// `task name(State t, ...) { ... }`: a coroutine. It returns its status
+  /// (a u16) and may pause with yield, wait_until and pk_exit.
+  bool isTask = false;
   FuncDeclNode(this.retType, this.retPtr, this.name, this.params, this.body,
       {this.isInline = false, this.trapExpr});
   @override

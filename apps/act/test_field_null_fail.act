@@ -1,0 +1,14 @@
+// test_field_null_fail: using a null 'ref' field stops at the run-time reference check
+// Must stop at: Null reference trap
+// Passes when the simulator stops with trap 15 at that check; trap(0) at the end means the check is missing.
+
+type Node {
+    u32 val;
+    ref Node next;
+};
+
+void main() {
+    Node head = Node.create();
+    head.next.val = 1;
+    trap(0);
+}

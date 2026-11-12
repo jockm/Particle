@@ -25,15 +25,68 @@ class CompileOptions {
   /// Emit runtime array bounds checks.
   final bool boundsCheck;
 
+  /// Emit runtime reference checks: a null reference the compiler cannot
+  /// follow (one held in a global) traps when it is used, and so does a
+  /// failed allocation.
+  final bool referenceCheck;
+
   const CompileOptions(
       {this.includeDirs = const [],
       this.defines = const [],
-      this.boundsCheck = true});
+      this.boundsCheck = true,
+      this.referenceCheck = true});
 }
 
 /// Loads [sources] (and everything they import) and returns the merged
 /// program. Each file is read once, however many times it is imported.
 ProgramNode loadProgram(List<String> sources, CompileOptions options) {
+  // Aliases may be declared after their use, or in another file, so a
+  // program that declares any is loaded a second time with them resolved
+  final first = _loadOnce(sources, options, const {});
+  final aliasDecls = first.decls.whereType<TypeAliasNode>().toList();
+  if (aliasDecls.isEmpty) return first;
+  return _loadOnce(sources, options, _resolveAliases(aliasDecls, first.decls));
+}
+
+/// Resolves each alias to a type that is not an alias, checking that every
+/// target exists and that there are no cycles or clashing names.
+Map<String, String> _resolveAliases(
+    List<TypeAliasNode> aliasDecls, List<AstNode> decls) {
+  const builtin = {'u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'string'};
+  final declared = <String>{
+    for (final d in decls)
+      if (d is TypeDefNode) d.name else if (d is FnTypeNode) d.name
+  };
+  final raw = <String, TypeAliasNode>{};
+  for (final a in aliasDecls) {
+    if (builtin.contains(a.name) || declared.contains(a.name)) {
+      throw CompileError("${a.loc}: type '${a.name}' is already defined");
+    }
+    if (raw.containsKey(a.name)) {
+      throw CompileError("${a.loc}: type alias '${a.name}' is already defined");
+    }
+    raw[a.name] = a;
+  }
+  final resolved = <String, String>{};
+  for (final a in aliasDecls) {
+    final seen = <String>{a.name};
+    var target = a.target;
+    while (raw.containsKey(target)) {
+      if (!seen.add(target)) {
+        throw CompileError("${a.loc}: type alias '${a.name}' refers to itself");
+      }
+      target = raw[target]!.target;
+    }
+    if (!builtin.contains(target) && !declared.contains(target)) {
+      throw CompileError("${a.loc}: type alias '${a.name}' names unknown type '$target'");
+    }
+    resolved[a.name] = target;
+  }
+  return resolved;
+}
+
+ProgramNode _loadOnce(
+    List<String> sources, CompileOptions options, Map<String, String> aliases) {
   final allDecls = <AstNode>[];
   final seenFuncs = <String, String>{};
   final seenTypes = <String, String>{};
@@ -80,7 +133,7 @@ ProgramNode loadProgram(List<String> sources, CompileOptions options) {
     }
 
     final fileTokens = tokenize(content, fname: realP);
-    final parserInst = Parser(fileTokens);
+    final parserInst = Parser(fileTokens, aliases: aliases);
     final parsedAst = parserInst.parseProgram();
 
     for (final decl in parsedAst.decls) {
@@ -125,6 +178,9 @@ Map<String, int> parseDefines(List<String> defines) {
     if (!RegExp(r'^[a-zA-Z_]\w*$').hasMatch(name)) {
       throw CompileError("-D $d: '$name' is not a valid identifier");
     }
+    if (name == 'true' || name == 'false') {
+      throw CompileError("-D $d: '$name' is built in and cannot be redefined");
+    }
     if (eq < 0) {
       defs[name] = 1;
       continue;
@@ -146,6 +202,7 @@ String compile(List<String> sources,
   final mergedAst = loadProgram(sources, options);
   final cg = CodeGen(
       boundsCheck: options.boundsCheck,
+      referenceCheck: options.referenceCheck,
       backend: backend ?? ParticleAsmBackend(),
       predefinedConstants: predefined);
   return cg.generate(mergedAst);

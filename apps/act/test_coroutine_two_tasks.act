@@ -8,10 +8,10 @@ type Task {
     u32 count;
 };
 
-u32 ticker(Task t) {
+task ticker(Task t) {
     while (1) {
         t.count += 1;
-        yield(t, 1);
+        yield(t);
     }
 }
 

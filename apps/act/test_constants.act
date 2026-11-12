@@ -1,0 +1,46 @@
+// test_constants: constant expressions are exact, and an untyped constant takes the type it is used with
+// Passes with trap(0); fails with trap(15).
+
+const u16 ALL16 = 0xFFFF;
+const s32 MINUS_FIVE = -5;
+enum Level { LOW, MID, HIGH };
+
+void main() {
+    u32 ok = 1;
+
+    // Constant comparisons use exact values, not 32-bit patterns
+    if (!(-1 < 0)) ok = 0;
+    if (0xFFFFFFFF < 1) ok = 0;
+
+    // Division truncates toward zero; the remainder has the dividend's sign
+    if (-7 / 2 != -3) ok = 0;
+    if (-7 % 2 != -1) ok = 0;
+    s32 seven = -7;
+    if (seven / 2 != -3) ok = 0;
+    if (seven % 2 != -1) ok = 0;
+
+    // A negative constant against a signed variable compares signed
+    s32 x = 1;
+    if (x < -1) ok = 0;
+    if (MINUS_FIVE * 2 != -10) ok = 0;
+
+    // Intermediate values may exceed 32 bits as long as the result fits
+    u32 big = (1 << 40) >> 20;
+    if (big != 0x100000) ok = 0;
+
+    // A typed unsigned constant complements within its width
+    u32 none = ~ALL16;
+    if (none != 0) ok = 0;
+
+    // Enum members and sizeof are untyped
+    u8 mid = MID;
+    if (mid != 1) ok = 0;
+    u8 s = sizeof(u32) + HIGH;
+    if (s != 6) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

@@ -23,7 +23,8 @@ void main() {
     }
     if (b[9] != 209) ok = 0;
     if (b[0] != 200) ok = 0;
-    b[3] = 0x1FF;
+    u32 wide9 = 0x1FF;  // a constant that does not fit u8 is an error
+    b[3] = wide9;
     if (b[3] != 0xFF) ok = 0;
     if (b[4] != 204) ok = 0;
     if (ok == 1) {

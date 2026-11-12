@@ -9,20 +9,23 @@ type Mixed {
 
 void main() {
     u32 ok = 1;
+    // Wide values in u32 variables: a constant that does not fit is an error
+    u32 wide9 = 0x1FF;
+    u32 wide17 = 0x12345;
     u8 bytes[2];
-    bytes[0] = 0x1FF;
+    bytes[0] = wide9;
     if (bytes[0] != 0xFF) ok = 0;
     if (bytes[1] != 0) ok = 0;
     u16 halves[2];
-    halves[0] = 0x12345;
+    halves[0] = wide17;
     if (halves[0] != 0x2345) ok = 0;
     if (halves[1] != 0) ok = 0;
     u32 rb = bytes[0];
     if (rb != 0xFF) ok = 0;
     Mixed m;
     m.guard = 0xAABBCCDD;
-    m.b = 0x1FF;
-    m.w = 0x12345;
+    m.b = wide9;
+    m.w = wide17;
     if (m.b != 0xFF) ok = 0;
     if (m.w != 0x2345) ok = 0;
     if (m.guard != 0xAABBCCDD) ok = 0;

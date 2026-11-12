@@ -10,8 +10,8 @@ type Waiter {
 
 u32 ready = 0;
 
-u32 waiter(Waiter w) {
-    wait_until(w, 1, ready == 1);
+task waiter(Waiter w) {
+    wait_until(w, ready == 1);
     w.done = 1;
 }
 

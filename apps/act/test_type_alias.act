@@ -1,0 +1,65 @@
+// test_type_alias: 'type Name = Type;' gives another name to a scalar,
+// string, user-defined or function type; the names are interchangeable.
+// Passes with trap(0); fails with trap(15).
+
+type size_t = u32;
+type delta_t = s16;
+type Pos = Point;           // declared before Point: order does not matter
+type Point {
+    s32 x;
+    s32 y;
+};
+type Op = fn(u32, u32) -> u32;
+type BinOp = Op;            // an alias of an alias
+type text = string;
+
+u32 add(u32 a, u32 b) {
+    return a + b;
+}
+
+size_t twice(size_t v) {
+    return v * 2;
+}
+
+void Pos.shift(delta_t d) {
+    this.x += d;
+}
+
+void main() {
+    u32 ok = 1;
+
+    size_t n = twice(21);
+    u32 plain = n;              // interchangeable with u32
+    if (plain != 42) ok = 0;
+
+    delta_t d = -3;             // signed, like s16
+    if (d >= 0) ok = 0;
+    if (d / 2 != -1) ok = 0;
+
+    Pos p;
+    p.x = 10;
+    p.shift(d);
+    Point same = Pos.create();  // a Pos is a Point
+    same.x = p.x;
+    if (same.x != 7) ok = 0;
+    same.destroy();
+
+    BinOp f = add;
+    if (f(2, 3) != 5) ok = 0;
+
+    size_t arr[] = size_t.createArray(3);
+    arr[2] = 5;
+    if (arr[2] != 5 || arr.len != 3) ok = 0;
+    arr.destroyArray();
+
+    text name[8] = "abc";
+    if (name.len != 3) ok = 0;
+
+    if (sizeof(size_t) != 4 || sizeof(delta_t) != 2 || sizeof(Pos) != 8) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

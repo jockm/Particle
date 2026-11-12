@@ -10,7 +10,8 @@ import 'package:action/action.dart';
 String compileSource(String source,
     {List<String> defines = const [],
     Map<String, String> extraFiles = const {},
-    bool boundsCheck = true}) {
+    bool boundsCheck = true,
+    bool referenceCheck = true}) {
   final dir = Directory.systemTemp.createTempSync('action_test_');
   try {
     final main = File('${dir.path}/main.act')..writeAsStringSync(source);
@@ -21,7 +22,10 @@ String compileSource(String source,
     }
     return compile([main.path],
         options: CompileOptions(
-            includeDirs: [dir.path], defines: defines, boundsCheck: boundsCheck));
+            includeDirs: [dir.path],
+            defines: defines,
+            boundsCheck: boundsCheck,
+            referenceCheck: referenceCheck));
   } finally {
     dir.deleteSync(recursive: true);
   }
