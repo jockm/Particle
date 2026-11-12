@@ -27,6 +27,14 @@ ACTION_BIN   := $(TOOL_BIN_DIR)/action
 ACTION_LSP_BIN := $(TOOL_BIN_DIR)/action_lsp
 VSCODE_DIR   := apps/tools/vscode
 VSCODE_EXTS  := action particle
+
+# macOS writes ._ metadata files on non-Apple file systems (such as exFAT).
+# Where dot_clean exists, the targets that write files run it over the
+# project afterwards; elsewhere this does nothing. It runs only for the
+# targets named on the command line (or 'all'), so a target such as 'tools'
+# cleans once at the end rather than once for each tool it builds.
+DOT_CLEAN    := $(shell command -v dot_clean 2>/dev/null)
+DOT_CLEAN_CMD = $(if $(and $(DOT_CLEAN),$(filter $@,$(or $(MAKECMDGOALS),all))),$(DOT_CLEAN) "$(CURDIR)" > /dev/null 2>&1 || true,true)
 # The VS Code command line: 'code' on PATH, or inside the macOS app bundle
 VSCODE_CLI   := $(shell command -v code 2>/dev/null || { p="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"; [ -x "$$p" ] && echo "$$p"; })
 PARCORE_BLD  := $(BUILD_DIR)/parcore
@@ -51,6 +59,7 @@ APP_ACT_BINS  := $(patsubst apps/act/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 # ------------------------------------------------------------------------------
 
 all: build test
+	@$(DOT_CLEAN_CMD)
 
 help:
 	@echo "Particle & Parcore Build Automation"
@@ -72,6 +81,7 @@ help:
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
+	@echo "  make dot-clean        - Remove macOS ._ metadata files (where dot_clean exists)"
 
 setup:
 	@echo "==> Fetching dependencies for Particle ROHD..."
@@ -90,12 +100,14 @@ lint-asm: $(PASM_LINT_BIN)
 	@for f in $(FIRMWARE_SRCS); do $(PASM_LINT_BIN) "$$f" || exit 1; done
 	@echo "==> Linting ASM application sources..."
 	@for f in $(APP_ASM_SRCS); do $(PASM_LINT_BIN) "$$f" || exit 1; done
+	@$(DOT_CLEAN_CMD)
 
 # ------------------------------------------------------------------------------
 # Generation Targets (SystemVerilog)
 # ------------------------------------------------------------------------------
 
 generate: generate-particle generate-parcore
+	@$(DOT_CLEAN_CMD)
 
 generate-particle: setup
 	@echo "==> Generating Particle SystemVerilog (particle_top.sv)..."
@@ -110,6 +122,7 @@ generate-parcore: setup
 # ------------------------------------------------------------------------------
 
 test: test-particle test-parcore test-sim
+	@$(DOT_CLEAN_CMD)
 
 test-particle: setup
 	@echo "==> Running Particle single-core ROHD tests..."
@@ -126,6 +139,7 @@ test-sim: $(BUILD_DIR)/branch_suite.bin
 
 	@echo "==> Running instruction-level simulation tests (build/tools/psim)..."
 	build/tools/psim $(BUILD_DIR)/branch_suite.bin
+	@$(DOT_CLEAN_CMD)
 
 # Tests that must end in a trap other than trap 0. For now each must stop
 # with trap 15 at one of the compiler's checks: by default a bounds check;
@@ -203,6 +217,7 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 		$(PYTHON) apps/tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
 		echo "==> [PASS] All Action compiler tests passed successfully."; \
 	fi
+	@$(DOT_CLEAN_CMD)
 
 # ------------------------------------------------------------------------------
 # Linter Test Suite (pasm_lint)
@@ -223,6 +238,7 @@ test-lint: pasm-lint
 		fi; \
 	done
 	@echo "==> [PASS] All positive and negative pasm_lint tests passed successfully."
+	@$(DOT_CLEAN_CMD)
 
 # ------------------------------------------------------------------------------
 # Firmware & Application Targets (via pbuild)
@@ -231,12 +247,14 @@ test-lint: pasm-lint
 build: firmware apps
 
 firmware: $(FIRMWARE_BINS)
+	@$(DOT_CLEAN_CMD)
 
 $(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
 	@mkdir -p $(dir $@)
 	@$(PBUILD) "$<" -o "$@"
 
 apps: $(APP_ASM_BINS) $(APP_ACT_BINS)
+	@$(DOT_CLEAN_CMD)
 
 $(BUILD_DIR)/branch_suite.bin: apps/asm/branch_suite.asm
 	@mkdir -p $(BUILD_DIR)
@@ -249,8 +267,10 @@ $(BUILD_DIR)/%.bin: apps/asm/%.asm
 $(BUILD_DIR)/%.bin: apps/act/%.act $(ACTION_BIN)
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@" 
+# Also the recipe of 'build' above (BUILD_DIR is build)
 $(BUILD_DIR):
 	@mkdir -p $@
+	@$(DOT_CLEAN_CMD)
 
 # ------------------------------------------------------------------------------
 # Cleanup
@@ -263,12 +283,14 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp vscode-ext vscode-install vscode-remove-old-pasm lint-tool
+.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean
 
 tools: pasm-lint pasm-lsp pasm psim action action-lsp
+	@$(DOT_CLEAN_CMD)
 
 lint-tool: pasm-lint
 pasm-lint: $(PASM_LINT_BIN)
+	@$(DOT_CLEAN_CMD)
 
 $(PASM_LINT_BIN): $(shell find apps/tools/pasm_lint -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
 	@echo "==> Compiling pasm_lint..."
@@ -276,6 +298,7 @@ $(PASM_LINT_BIN): $(shell find apps/tools/pasm_lint -name "*.dart" 2>/dev/null) 
 	@$(DART) compile exe apps/tools/pasm_lint/bin/main.dart -o $@
 
 pasm-lsp: $(PASM_LSP_BIN)
+	@$(DOT_CLEAN_CMD)
 
 $(PASM_LSP_BIN): $(shell find apps/tools/pasm_lsp -name "*.dart" 2>/dev/null) $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) $(shell find apps/tools/pasm_lint -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
 	@echo "==> Compiling pasm_lsp..."
@@ -283,6 +306,7 @@ $(PASM_LSP_BIN): $(shell find apps/tools/pasm_lsp -name "*.dart" 2>/dev/null) $(
 	@$(DART) compile exe apps/tools/pasm_lsp/bin/main.dart -o $@
 
 pasm: $(PASM_BIN)
+	@$(DOT_CLEAN_CMD)
 
 $(PASM_BIN): $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
 	@echo "==> Compiling pasm..."
@@ -290,6 +314,7 @@ $(PASM_BIN): $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) | $(TOOL_B
 	@$(DART) compile exe apps/tools/pasm/bin/main.dart -o $@
 
 action: $(ACTION_BIN)
+	@$(DOT_CLEAN_CMD)
 
 $(ACTION_BIN): $(shell find apps/tools/action -name "*.dart" 2>/dev/null) apps/tools/action/pubspec.yaml | $(TOOL_BIN_DIR)
 	@echo "==> Compiling action..."
@@ -297,6 +322,7 @@ $(ACTION_BIN): $(shell find apps/tools/action -name "*.dart" 2>/dev/null) apps/t
 	@$(DART) compile exe apps/tools/action/bin/main.dart -o $@
 
 action-lsp: $(ACTION_LSP_BIN)
+	@$(DOT_CLEAN_CMD)
 
 $(ACTION_LSP_BIN): $(shell find apps/tools/action_lsp apps/tools/action -name "*.dart" 2>/dev/null) apps/tools/action_lsp/pubspec.yaml | $(TOOL_BIN_DIR)
 	@echo "==> Compiling action_lsp..."
@@ -314,6 +340,7 @@ vscode-ext:
 		( cd $(VSCODE_DIR)/$$e && npm install --no-audit --no-fund && npm run compile && \
 		  npx vsce package --skip-license --allow-missing-repository -o $(CURDIR)/$(BUILD_DIR)/$$e.vsix ) || exit 1; \
 	done
+	@$(DOT_CLEAN_CMD)
 
 # Builds the servers the extensions start, packages the extensions and
 # installs them in VS Code (replacing older versions).
@@ -333,6 +360,7 @@ vscode-install: $(ACTION_LSP_BIN) $(PASM_LSP_BIN) vscode-ext
 		echo "       It also handles particle-asm files; remove it with 'make vscode-remove-old-pasm'."; \
 	fi
 	@echo "==> Done. Reload open VS Code windows (command palette: 'Developer: Reload Window')."
+	@$(DOT_CLEAN_CMD)
 
 # Removes the old, hand-installed pasm extension, which the Particle
 # extension replaces.
@@ -346,13 +374,19 @@ vscode-remove-old-pasm:
 $(TOOL_BIN_DIR):
 	@mkdir -p $@
 
+# Removes macOS ._ metadata files from the project (when dot_clean exists).
+dot-clean:
+	@$(DOT_CLEAN_CMD)
+
 clean:
 	@echo "==> Cleaning build artifacts and generated SV files..."
 	@rm -rf $(BUILD_DIR)
 	@rm -rf $(ROHD_DIR)/.dart_tool $(ROHD_DIR)/particle_top.sv $(ROHD_DIR)/*.synth.json $(ROHD_DIR)/*.bit
 	@rm -rf $(PARCORE_DIR)/.dart_tool $(PARCORE_DIR)/parcore_top.sv $(PARCORE_DIR)/*.synth.json $(PARCORE_DIR)/*.bit
+	@$(DOT_CLEAN_CMD)
 
 psim: $(BUILD_DIR)/tools/psim
+	@$(DOT_CLEAN_CMD)
 
 $(BUILD_DIR)/tools/psim: apps/tools/psim/bin/main.dart apps/tools/psim/lib/core.dart apps/tools/psim/lib/line_reader.dart
 	@mkdir -p $(BUILD_DIR)/tools

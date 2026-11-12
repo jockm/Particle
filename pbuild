@@ -12,6 +12,14 @@ while [ -h "$SELF_SOURCE" ]; do
 done
 PROJECT_ROOT="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
 
+# macOS writes ._ metadata files on non-Apple file systems (such as exFAT).
+# When pbuild is run directly (not from make, which cleans once at the end of
+# its own targets) and dot_clean exists, remove them on the way out. The exit
+# status is not changed.
+if [ -z "${MAKELEVEL:-}" ] && command -v dot_clean > /dev/null 2>&1; then
+    trap 'dot_clean "$PROJECT_ROOT" > /dev/null 2>&1 || true' EXIT
+fi
+
 # Toolchain paths: the compiled Dart tools in build/tools
 TOOL_DIR="${PROJECT_ROOT}/build/tools"
 ACTION="${TOOL_DIR}/action"
