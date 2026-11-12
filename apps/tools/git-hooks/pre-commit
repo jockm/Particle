@@ -1,0 +1,18 @@
+#!/bin/sh
+# pre-commit: removes macOS ._ metadata files (written on non-Apple file
+# systems such as exFAT) before each commit. Installed by 'make install-hooks'.
+# Does nothing where the dot_clean command does not exist.
+
+command -v dot_clean > /dev/null 2>&1 || exit 0
+
+# Get the root directory of the current Git repository
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+if [ -d "$REPO_ROOT" ]; then
+    # Run the native macOS dot_clean command on the repository root
+    dot_clean "$REPO_ROOT"
+
+    # Re-stage any files that might have been modified or cleaned
+    # to make sure the hook doesn't leave unstaged metadata changes
+    git add -u
+fi

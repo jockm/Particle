@@ -82,6 +82,7 @@ help:
 	@echo "  make apps             - Build Action and ASM application binaries"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
 	@echo "  make dot-clean        - Remove macOS ._ metadata files (where dot_clean exists)"
+	@echo "  make hooks    - Install the project's git hooks (apps/tools/git-hooks) into this clone"
 
 setup:
 	@echo "==> Fetching dependencies for Particle ROHD..."
@@ -283,7 +284,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean
+.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean install-hooks
 
 tools: pasm-lint pasm-lsp pasm psim action action-lsp
 	@$(DOT_CLEAN_CMD)
@@ -377,6 +378,22 @@ $(TOOL_BIN_DIR):
 # Removes macOS ._ metadata files from the project (when dot_clean exists).
 dot-clean:
 	@$(DOT_CLEAN_CMD)
+
+# Installs the git hooks in apps/tools/git-hooks into this clone's hooks
+# directory. A different hook already there is kept as <name>.bak.
+GIT_HOOKS_DIR := apps/tools/git-hooks
+GIT_HOOKS     := pre-commit
+
+install-hooks:
+	@git rev-parse --git-dir > /dev/null 2>&1 || { echo "[FAIL] Not inside a git repository."; exit 1; }
+	@hooks="$$(git rev-parse --git-path hooks)"; mkdir -p "$$hooks"; \
+	for h in $(GIT_HOOKS); do \
+		src="$(GIT_HOOKS_DIR)/$$h"; dst="$$hooks/$$h"; \
+		if [ -f "$$dst" ] && ! cmp -s "$$src" "$$dst"; then \
+			cp "$$dst" "$$dst.bak" && echo "==> Kept the existing $$h hook as $$dst.bak"; \
+		fi; \
+		cp "$$src" "$$dst" && chmod +x "$$dst" && echo "==> Installed the $$h hook ($$dst)"; \
+	done
 
 clean:
 	@echo "==> Cleaning build artifacts and generated SV files..."
