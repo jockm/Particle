@@ -1,0 +1,20 @@
+name: action_lsp
+description: >-
+  Language server (LSP) for the Action systems language. Uses the Action
+  compiler as a library, so the editor reports exactly what the compiler
+  would.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+executables:
+  action_lsp: action_lsp
+
+dependencies:
+  action:
+    path: ../action
+
+dev_dependencies:
+  test: ^1.25.0

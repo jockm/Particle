@@ -24,6 +24,11 @@ PASM_LINT_BIN:= $(TOOL_BIN_DIR)/pasm_lint
 PASM_LSP_BIN := $(TOOL_BIN_DIR)/pasm_lsp
 PASM_BIN     := $(TOOL_BIN_DIR)/pasm
 ACTION_BIN   := $(TOOL_BIN_DIR)/action
+ACTION_LSP_BIN := $(TOOL_BIN_DIR)/action_lsp
+VSCODE_DIR   := apps/tools/vscode
+VSCODE_EXTS  := action particle
+# The VS Code command line: 'code' on PATH, or inside the macOS app bundle
+VSCODE_CLI   := $(shell command -v code 2>/dev/null || { p="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"; [ -x "$$p" ] && echo "$$p"; })
 PARCORE_BLD  := $(BUILD_DIR)/parcore
 
 # Recursive wildcard across firmware/parcore
@@ -59,6 +64,10 @@ help:
 	@echo "  make test-sim         - Run instruction simulator verification"
 	@echo "  make compiler-tests   - Run Action compiler unit tests and all test suites in psim"
 	@echo "  make action           - Build the Action compiler (build/tools/action)"
+	@echo "  make action-lsp       - Build the Action language server (build/tools/action_lsp)"
+	@echo "  make vscode-ext       - Package the VS Code extensions (build/action.vsix, build/particle.vsix; needs npm)"
+	@echo "  make vscode-install   - Build the language servers and extensions, and install the extensions in VS Code"
+	@echo "  make vscode-remove-old-pasm - Remove the old hand-installed pasm extension"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries"
@@ -135,6 +144,8 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 	@mkdir -p $(BUILD_DIR)
 	@echo "==> Running Action compiler unit tests..."
 	@cd apps/tools/action && $(DART) test
+	@echo "==> Running Action language server tests..."
+	@cd apps/tools/action_lsp && $(DART) pub get > /dev/null && $(DART) test
 	@echo "==> Building and running Action compiler test suites..."
 	@failed=0; \
 	sim_result() { \
@@ -252,9 +263,9 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint pasm-lsp psim pasm action lint-tool
+.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp vscode-ext vscode-install vscode-remove-old-pasm lint-tool
 
-tools: pasm-lint pasm-lsp pasm psim action
+tools: pasm-lint pasm-lsp pasm psim action action-lsp
 
 lint-tool: pasm-lint
 pasm-lint: $(PASM_LINT_BIN)
@@ -284,6 +295,53 @@ $(ACTION_BIN): $(shell find apps/tools/action -name "*.dart" 2>/dev/null) apps/t
 	@echo "==> Compiling action..."
 	@cd apps/tools/action && $(DART) pub get > /dev/null
 	@$(DART) compile exe apps/tools/action/bin/main.dart -o $@
+
+action-lsp: $(ACTION_LSP_BIN)
+
+$(ACTION_LSP_BIN): $(shell find apps/tools/action_lsp apps/tools/action -name "*.dart" 2>/dev/null) apps/tools/action_lsp/pubspec.yaml | $(TOOL_BIN_DIR)
+	@echo "==> Compiling action_lsp..."
+	@cd apps/tools/action_lsp && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/action_lsp/bin/action_lsp.dart -o $@
+
+# VS Code extensions: Action (the language, for any target) and Particle
+# (Particle assembly). Need Node.js 20 or later and npm; not part of
+# 'make tools'.
+vscode-ext:
+	@command -v npm > /dev/null || { echo "[FAIL] npm not found: install Node.js 20 or later (it includes npm)"; exit 1; }
+	@mkdir -p $(BUILD_DIR)
+	@for e in $(VSCODE_EXTS); do \
+		echo "==> Packaging the $$e VS Code extension..."; \
+		( cd $(VSCODE_DIR)/$$e && npm install --no-audit --no-fund && npm run compile && \
+		  npx vsce package --skip-license --allow-missing-repository -o $(CURDIR)/$(BUILD_DIR)/$$e.vsix ) || exit 1; \
+	done
+
+# Builds the servers the extensions start, packages the extensions and
+# installs them in VS Code (replacing older versions).
+vscode-install: $(ACTION_LSP_BIN) $(PASM_LSP_BIN) vscode-ext
+	@if [ -z "$(VSCODE_CLI)" ]; then \
+		echo "[FAIL] The VS Code command line ('code') was not found."; \
+		echo "       In VS Code run 'Shell Command: Install 'code' command in PATH' from the command palette,"; \
+		echo "       or install $(BUILD_DIR)/action.vsix and $(BUILD_DIR)/particle.vsix with 'Install from VSIX...' in the Extensions view."; \
+		exit 1; \
+	fi
+	@for e in $(VSCODE_EXTS); do \
+		echo "==> Installing $(BUILD_DIR)/$$e.vsix..."; \
+		"$(VSCODE_CLI)" --install-extension $(BUILD_DIR)/$$e.vsix --force || exit 1; \
+	done
+	@if [ -d "$(HOME)/.vscode/extensions/particle-pasm" ]; then \
+		echo "[NOTE] The old pasm extension is still installed ($(HOME)/.vscode/extensions/particle-pasm)."; \
+		echo "       It also handles particle-asm files; remove it with 'make vscode-remove-old-pasm'."; \
+	fi
+	@echo "==> Done. Reload open VS Code windows (command palette: 'Developer: Reload Window')."
+
+# Removes the old, hand-installed pasm extension, which the Particle
+# extension replaces.
+vscode-remove-old-pasm:
+	@if [ -d "$(HOME)/.vscode/extensions/particle-pasm" ]; then \
+		rm -rf "$(HOME)/.vscode/extensions/particle-pasm" && echo "==> Removed $(HOME)/.vscode/extensions/particle-pasm. Reload open VS Code windows."; \
+	else \
+		echo "==> The old pasm extension is not installed; nothing to do."; \
+	fi
 
 $(TOOL_BIN_DIR):
 	@mkdir -p $@

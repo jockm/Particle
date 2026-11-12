@@ -16,16 +16,20 @@ class PasmLanguageServer {
   final BytesBuilder _buffer = BytesBuilder(copy: false);
   int? _expectedLength;
   bool _shutdownRequested = false;
+  bool _exitRequested = false;
 
   Future<void> start() async {
     await for (final chunk in stdin) {
       _buffer.add(chunk);
       _processBuffer();
+      // Leaving the loop cancels the stdin subscription; the process then
+      // ends with exitCode once stdout is flushed
+      if (_exitRequested) break;
     }
   }
 
   void _processBuffer() {
-    while (true) {
+    while (!_exitRequested) {
       final bytes = _buffer.toBytes();
       if (_expectedLength == null) {
         final headerEnd = _findHeaderEnd(bytes);
@@ -169,7 +173,7 @@ class PasmLanguageServer {
 
         case "exit":
           exitCode = _shutdownRequested ? 0 : 1;
-          stdin.listen(null).cancel();
+          _exitRequested = true;
           break;
 
         case "textDocument/didOpen":

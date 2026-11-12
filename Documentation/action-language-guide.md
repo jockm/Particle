@@ -714,6 +714,7 @@ There is no linker, so a program is built from **all of its source files at once
 - A function may have **only one definition** across all files. Defining it twice is an error that names both files.
 - **Prototypes** (`u32 f(u32 x);`) can appear anywhere. Every prototype must have a definition in some Action file, or the compiler reports it.
 - **Routines written in assembly** are declared with `asm` in front of the prototype: `asm u32 checksum(u32 data[]);`. Calls to them become `RCALL _checksum`, and the `.asm` file given to `pbuild` must provide the label.
+- **Every function called must be declared** somewhere in the program: defined in an Action file, or promised by a prototype. Calling a name that nothing declares is an error. A file of `asm` prototypes, imported where needed, is a convenient way to list the routines an assembly library provides.
 - **Assembly libraries** (`.asm` files given to `pbuild`) are assembled after the compiled program. The heap starts after everything assembled, so they are safe from it.
 
 A typical layout:
@@ -855,7 +856,7 @@ void main() {
 
 ## 2.8 Error messages
 
-Every message is printed as `action: error: …`. A message about the program starts with the `file:line:column` it refers to, such as `main.act:12:8:`. Common ones:
+Every error is printed as `action: error: …`. A message about the program starts with the `file:line:column` it refers to, such as `main.act:12:8:`. The compiler can also print warnings and information, as `action: warning: …` and `action: info: …`; they do not stop compilation or change the exit status, and `pbuild` shows them. (None are reported yet; the mechanism is in place for when they are.) Common errors:
 
 | Message (abridged) | Cause |
 |--------------------|-------|
@@ -902,6 +903,7 @@ Every message is printed as `action: error: …`. A message about the program st
 | `task '…': '…' is read after a pause but was set before it` | A local's value was expected to survive a pause. Keep it in the task's state. |
 | `task '…': the 'for' loop over '…' pauses` | A `for` loop's counter does not survive a pause. Use a `while` loop with the counter in the state. |
 | `task '…' cannot return a value` | A task returns its status; `return;` ends it. |
+| `'…' is not declared; import the file that defines it, or declare it with a prototype` | A call to a function that no Action file in the program defines and no prototype declares. |
 | `'…' is declared but never defined` | A prototype has no definition. If the routine is written in assembly, declare it with `asm`. |
 | `trap number N is out of range (0-15)` | `trap(N)` with a number outside 0–15. |
 | `type alias '…' names unknown type '…'` | The alias's target is not a type. |
@@ -920,17 +922,19 @@ It provides:
 
 While the text does not parse, hover, definition, completion and the outline use the last version that did.
 
+When a file is checked on its own, outside any program listed in `action.json`, the editor cannot see the other files it may be compiled with. The errors "is not declared" and "is declared but never defined" are then shown as information instead, since the definition may be in one of those files. In a listed program they are errors, as in the compiler. Warnings and information from the compiler are shown with those severities.
+
 ### VS Code
 
-`editors/vscode` holds the Particle extension. It adds syntax highlighting for `.act` files, starts the language server, and checks `action.json`. To build and install it (this needs Node.js and npm):
+The Action extension, in `apps/tools/vscode/action`, adds syntax highlighting for `.act` files, starts the language server, and checks `action.json`. The Particle extension beside it does the same for Particle assembly. To build the language servers and both extensions and install them (this needs Node.js 20 or later and npm):
 
 ```sh
-make tools
-make vscode-ext
-code --install-extension build/particle.vsix
+make vscode-install
 ```
 
-The extension expects the server at `build/tools/action_lsp` in the workspace. The setting `particle.action.serverPath` changes that. After rebuilding the server, run **Particle: Restart Action Language Server** from the command palette.
+Then reload any open VS Code windows. If VS Code's `code` command is not available, `make vscode-install` says so; either add it from VS Code (command palette: **Shell Command: Install 'code' command in PATH**), or install `build/action.vsix` with **Install from VSIX…** in the Extensions view. `make vscode-ext` only builds the `.vsix` files.
+
+The extension looks for the server in the setting `action.serverPath`, then at `build/tools/action_lsp` in the workspace, then as `action_lsp` on your `PATH`. After rebuilding the server, run **Action: Restart Language Server** from the command palette.
 
 ### The project file: `action.json`
 
@@ -1241,7 +1245,7 @@ Slots 1–4 travel in R1–R4 and later slots on the stack (see [2.6](#26-callin
 
 **Inline functions** are expanded at each call site. They have no address and cannot be recursive. They may declare locals, which live in their own frame for the duration of the expansion.
 
-**Prototypes:** every prototype must be matched by a definition in the Action sources, which may come later or in another file. A routine written in assembly is declared with `asm` in front of its prototype instead; it must not also be defined in Action. Its label is `_name`, and it follows the calling convention in [2.6](#26-calling-convention-and-inline-assembly).
+**Prototypes:** a function must be declared before the program can call it: by its definition (anywhere in the program) or by a prototype. Calling an undeclared name is an error. Every prototype must be matched by a definition in the Action sources, which may come later or in another file. A routine written in assembly is declared with `asm` in front of its prototype instead; it must not also be defined in Action. Its label is `_name`, and it follows the calling convention in [2.6](#26-calling-convention-and-inline-assembly).
 
 **`main`** is special. It sets up the stack and runs, and when it returns the processor enters a halt loop. `main` may be declared `void` or `u32`.
 

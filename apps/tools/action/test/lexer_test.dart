@@ -43,4 +43,11 @@ void main() {
       expect(values('a // line\n/* block\n */ b'), ['a', 'b']);
     });
   });
+
+  test('columns after a comment spanning lines count from that line', () {
+    final toks = tokenize('/* one\n two */ x');
+    expect(toks.first.val, equals('x'));
+    expect(toks.first.lineno, equals(2));
+    expect(toks.first.col, equals(8));
+  });
 }

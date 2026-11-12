@@ -175,8 +175,10 @@ int runCli(List<String> argv) {
     Directory(outDir).createSync(recursive: true);
   }
 
+  final notes = <CompileNote>[];
   try {
     final asmCode = compile(args.sources,
+        notes: notes,
         options: CompileOptions(
             includeDirs: args.includeDirs,
             defines: args.defines,
@@ -184,8 +186,18 @@ int runCli(List<String> argv) {
             referenceCheck: args.referenceCheck));
     File(output).writeAsStringSync(asmCode);
   } on CompileError catch (e) {
+    _printNotes(notes);
     stderr.writeln('$toolName: error: ${e.message}');
     return 1;
   }
+  _printNotes(notes);
   return 0;
+}
+
+/// Warnings and information go to stderr; they do not change the exit
+/// status.
+void _printNotes(List<CompileNote> notes) {
+  for (final n in notes) {
+    stderr.writeln(n.format(toolName));
+  }
 }

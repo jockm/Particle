@@ -245,8 +245,8 @@ run_step() {
             # Pass the tool's exit code along
             exit "$status"
         fi
-        # If output contains warnings, show them
-        if grep -qi "warning" "$tmp"; then
+        # If output contains warnings or information, show them
+        if grep -qiE "warning|info:" "$tmp"; then
             cat "$tmp"
         fi
         rm -f "$tmp"

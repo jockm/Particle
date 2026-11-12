@@ -113,7 +113,9 @@ class Parser {
     final name = consume('IDENT').val;
     consume('PUNCT', '{');
     final members = <(String, AstNode?)>[];
+    final memberLocs = <String?>[];
     while (peek().val != '}' && peek().type != 'EOF') {
+      memberLocs.add(peek().loc);
       final mName = consume('IDENT').val;
       if (peek().val == '=') {
         consume('OP', '=');
@@ -130,7 +132,7 @@ class Parser {
     if (peek().val == ';') {
       consume('PUNCT', ';');
     }
-    return EnumDeclNode(name, members);
+    return EnumDeclNode(name, members)..memberLocs.addAll(memberLocs);
   }
 
   VerifyNode parseVerify() {
@@ -433,6 +435,7 @@ class Parser {
           final pType = parseType();
           var pPtr = false;
           _rejectPointerType(pType);
+          final pTok = peek();
           final pName = consume('IDENT').val;
           var isOpenArr = false;
           if (peek().val == '[') {
@@ -441,7 +444,7 @@ class Parser {
             isOpenArr = true;
             pPtr = true;
           }
-          params.add(Param(pType, pPtr, pName, isOpenArr));
+          params.add(Param(pType, pPtr, pName, isOpenArr)..loc = pTok.loc);
           if (peek().val == ',') {
             consume();
           } else {

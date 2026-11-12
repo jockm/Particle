@@ -97,6 +97,9 @@ class EnumDeclNode extends AstNode {
 
   /// Member name and its explicit value expression (null when implicit).
   final List<(String, AstNode?)> members;
+
+  /// Where each member's name is (`file:line:col`), in member order.
+  final List<String?> memberLocs = [];
   EnumDeclNode(this.name, this.members);
   @override
   String? get nodeName => name;
@@ -186,6 +189,9 @@ class Param {
   bool isPtr;
   String name;
   bool isOpenArr;
+
+  /// Where the parameter's name is (`file:line:col`); null for `this`.
+  String? loc;
   Param(this.type, this.isPtr, this.name, [this.isOpenArr = false]);
 }
 

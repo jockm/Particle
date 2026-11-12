@@ -2,6 +2,7 @@
 // tested end to end by the apps/act/*_test.act programs; these tests pin
 // the generated instructions and the compile-time errors.
 
+import 'package:action/action.dart';
 import 'package:test/test.dart';
 
 import 'support.dart';
@@ -747,6 +748,29 @@ void main() {
     test('allocations are zeroed', () {
       final asm = compileSource(wrapMain('u32 a[] = u32.createArray(4); a.destroyArray();'));
       expect(asm, contains('_rt_alloc_zero'));
+    });
+  });
+
+  group('undeclared functions', () {
+    test('a call to a function nothing declares is an error', () {
+      expect(compileErrorOf(wrapMain('u32 x = add(1, 2);')),
+          contains("'add' is not declared; import the file that defines it"));
+    });
+
+    test('an asm prototype promises the routine', () {
+      expect(compileErrorOf('asm u32 add(u32 a, u32 b);\n${wrapMain('u32 x = add(1, 2);')}'), isNull);
+    });
+  });
+
+  group('warnings and information', () {
+    test('notes carry their location and severity', () {
+      final cg = CodeGen();
+      cg.note(NoteSeverity.info, 'just so you know', VarAccessNode('x')..loc = 'a.act:3:4');
+      expect(cg.notes.single.format('action'), equals('action: info: a.act:3:4: just so you know'));
+      final d = Diagnostic.fromNote(cg.notes.single);
+      expect(d.severity, equals(DiagnosticSeverity.info));
+      expect(d.line, equals(3));
+      expect(d.message, equals('just so you know'));
     });
   });
 }

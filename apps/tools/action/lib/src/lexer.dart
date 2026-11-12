@@ -94,6 +94,9 @@ List<Token> tokenize(String sourceText, {String fname = '<stdin>'}) {
       continue;
     } else if (kind == 'COMMENT') {
       lineno += '\n'.allMatches(val).length;
+      if (val.contains('\n')) {
+        lineStart = mo.start + val.lastIndexOf('\n') + 1;
+      }
       continue;
     }
     tokens.add(Token(kind!, val, lineno, col, fname));

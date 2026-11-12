@@ -178,6 +178,20 @@ class CodeGen {
   final List<_FlowContext> flowStack = [];
   final Map<String, int> constants = {};
 
+  /// Warnings and information found while generating code, in order.
+  final List<CompileNote> notes = [];
+
+  /// Records a warning or information about the program, located at [at]
+  /// when it has a location.
+  void note(NoteSeverity severity, String message, [AstNode? at]) {
+    final located = CompileError(message).at(at?.loc).message;
+    notes.add(CompileNote(severity, located));
+  }
+
+  /// Declared type of constant [name], or null when it is untyped (an enum
+  /// member, a `-D` value) or not a constant.
+  String? constTypeOf(String name) => _constTypes[name];
+
   /// Global `const` declarations and enum members not evaluated yet, keyed
   /// by name. They are evaluated on first use, so constants may refer to
   /// each other (and to `sizeof`) regardless of declaration order.

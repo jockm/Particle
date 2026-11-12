@@ -30,11 +30,17 @@ class CompileOptions {
   /// failed allocation.
   final bool referenceCheck;
 
+  /// Source text to use instead of a file's contents on disk, keyed by the
+  /// file's absolute path with symbolic links resolved. An editor passes
+  /// its unsaved text this way.
+  final Map<String, String> overlays;
+
   const CompileOptions(
       {this.includeDirs = const [],
       this.defines = const [],
       this.boundsCheck = true,
-      this.referenceCheck = true});
+      this.referenceCheck = true,
+      this.overlays = const {}});
 }
 
 /// Loads [sources] (and everything they import) and returns the merged
@@ -127,7 +133,7 @@ ProgramNode _loadOnce(
 
     final String content;
     try {
-      content = File(realP).readAsStringSync();
+      content = options.overlays[realP] ?? File(realP).readAsStringSync();
     } on FileSystemException {
       throw CompileError("[Errno 2] No such file or directory: '$filePath'");
     }
@@ -141,7 +147,8 @@ ProgramNode _loadOnce(
         final res = resolvePath(decl.path, realP);
         if (res == null) {
           throw CompileError(
-              "Imported file '${decl.path}' not found (referenced from $realP)");
+                  "Imported file '${decl.path}' not found (referenced from $realP)")
+              .at(decl.loc);
         }
         ingestFile(res);
       } else {
@@ -150,7 +157,8 @@ ProgramNode _loadOnce(
             if (seenFuncs.containsKey(decl.name)) {
               final prevF = seenFuncs[decl.name];
               throw CompileError(
-                  "Redefinition of function '${decl.name}' in $realP (previously defined in $prevF)");
+                      "Redefinition of function '${decl.name}' in $realP (previously defined in $prevF)")
+                  .at(decl.loc);
             }
             seenFuncs[decl.name] = realP;
           }
@@ -196,8 +204,13 @@ Map<String, int> parseDefines(List<String> defines) {
 }
 
 /// Compiles [sources] to assembly text for [backend] (Particle by default).
+///
+/// Warnings and information are added to [notes] when it is given, also
+/// when compilation then fails.
 String compile(List<String> sources,
-    {CompileOptions options = const CompileOptions(), Backend? backend}) {
+    {CompileOptions options = const CompileOptions(),
+    Backend? backend,
+    List<CompileNote>? notes}) {
   final predefined = parseDefines(options.defines);
   final mergedAst = loadProgram(sources, options);
   final cg = CodeGen(
@@ -205,5 +218,9 @@ String compile(List<String> sources,
       referenceCheck: options.referenceCheck,
       backend: backend ?? ParticleAsmBackend(),
       predefinedConstants: predefined);
-  return cg.generate(mergedAst);
+  try {
+    return cg.generate(mergedAst);
+  } finally {
+    notes?.addAll(cg.notes);
+  }
 }

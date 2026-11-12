@@ -1,0 +1,120 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Particle Assembly",
+  "scopeName": "source.pasm",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#directives"
+    },
+    {
+      "include": "#labels"
+    },
+    {
+      "include": "#mnemonics"
+    },
+    {
+      "include": "#registers"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#macro_params"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.pasm",
+          "match": ";.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.pasm",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.pasm",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "name": "keyword.control.directive.pasm",
+          "match": "(?i)^\\s*\\.(include|macro|endmacro|endm|define|equ|ifdef|ifndef|if|else|endif|org|align|balign|p2align|byte|half|word|ascii|asciz|string|space|skip|zero)\\b"
+        }
+      ]
+    },
+    "labels": {
+      "patterns": [
+        {
+          "name": "entity.name.function.label.pasm",
+          "match": "^\\s*[A-Za-z0-9_\\.]+:"
+        }
+      ]
+    },
+    "mnemonics": {
+      "patterns": [
+        {
+          "name": "keyword.control.branch.pasm",
+          "match": "(?i)\\b(FBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BRANCH|JMP|JUMP|RJUMP|JTBL|RCALL|CALL|RRET|RET|RETI|TRAP|FAST_ENTER_TRAP|FAST_EXIT_TRAP|HALT|RESET|WAIT|INTR)\\b"
+        },
+        {
+          "name": "support.function.macro.pasm",
+          "match": "(?i)\\b(LOAD16|LOAD24|LOAD32|PUSH32|POP32|PUSH16|POP16|POP8)\\b"
+        },
+        {
+          "name": "keyword.operator.mnemonic.pasm",
+          "match": "(?i)\\b(NOP|LD|LD8|LD16|LD32|ST8|ST16|ST32|PUSH4|PUSH8|TAS|ADD|SUB|DIV|MOD|SADD|SSUB|SDIV|SMOD|NEG|AND|OR|XOR|NOT|NEZ|SHIFTL|SHIFTR|ASHIFTR|ROTL|ROTR|SEXT8|SEXT16|MULL|MULH|SMULH|MULHU|MULHSU|BEXTR|CLZ|BSET|BCLR|BINV|BGET|REV32|SLT|SSLT|SEQ|SNE|SLE|SSLE|XCHG|XCHGALL|XCHGMOST|RBASE|FIFO\\.W|FIFO\\.R|FIFO\\.STAT|FIFO\\.TRYW|FIFO\\.TRYR|MBOX)\\b"
+        }
+      ]
+    },
+    "registers": {
+      "patterns": [
+        {
+          "name": "variable.language.register.pasm",
+          "match": "(?i)\\b(R(?:1[0-5]|[0-9])|SP)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.pasm",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.pasm",
+          "match": "\\b0[bB][01]+\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.pasm",
+          "match": "(?<![A-Za-z0-9_\\.])-?\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "macro_params": {
+      "patterns": [
+        {
+          "name": "variable.parameter.macro.pasm",
+          "match": "%[A-Za-z0-9_]+|\\.%"
+        }
+      ]
+    }
+  }
+}

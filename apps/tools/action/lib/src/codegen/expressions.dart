@@ -1141,7 +1141,14 @@ extension _Expressions on CodeGen {
       }
     } else {
       final sigInfo = funcSignatures[expr.name];
-      final paramSigs = sigInfo?.params ?? <ParamSig>[];
+      if (sigInfo == null) {
+        // Every Action file of the program is here; anything else must be
+        // promised by a prototype ('asm' for an assembly routine)
+        throw CompileError(
+            "'${expr.name}' is not declared; import the file that defines it, or declare it "
+            "with a prototype ('asm u32 ${expr.name}(...);' if it is written in assembly)");
+      }
+      final paramSigs = sigInfo.params;
       final area = _beginStackArgs(expr.args, paramSigs, 1);
       _genCallArgList(expr.args, paramSigs, 1, area);
       emit('RCALL   _${expr.name}');

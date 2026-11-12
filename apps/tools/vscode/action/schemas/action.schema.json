@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Action project file",
+  "description": "Settings for checking Action sources in the editor. Paths are relative to this file.",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "includeDirs": {
+          "description": "Directories searched by 'import', like the compiler's -I. The workspace root and its lib directory are always searched.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "defines": {
+          "description": "Constants defined as with the compiler's -D NAME=VALUE.",
+          "type": "object",
+          "additionalProperties": { "type": ["integer", "boolean", "string"] }
+        },
+        "programs": {
+          "description": "Groups of files compiled together (as on the compiler's command line). A file listed here is checked with the rest of its group; any other file is checked on its own, with its imports.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["files"],
+            "properties": {
+              "files": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

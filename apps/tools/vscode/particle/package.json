@@ -1,0 +1,91 @@
+{
+  "name": "particle",
+  "displayName": "Particle",
+  "description": "Language support for Particle RISC assembly (pasm): syntax highlighting, errors as you type, hover, go to definition, references, rename, completion and an outline.",
+  "version": "0.2.0",
+  "publisher": "stufflabs",
+  "private": true,
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "particle-asm",
+        "aliases": [
+          "Particle Assembly",
+          "pasm"
+        ],
+        "extensions": [
+          ".pasm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "particle-asm",
+        "scopeName": "source.pasm",
+        "path": "./syntaxes/pasm.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "particle.pasm.restartServer",
+        "title": "Restart Assembly Language Server",
+        "category": "Particle"
+      }
+    ],
+    "configuration": {
+      "title": "Particle",
+      "properties": {
+        "particle.pasm.serverPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the Particle assembly language server, `pasm_lsp`. Empty means: `build/tools/pasm_lsp` in the workspace folder if it is there (built by `make pasm-lsp`), otherwise `pasm_lsp` found on your `PATH`. A relative path is taken from the workspace folder."
+        },
+        "particle.pasm.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log the messages between VS Code and the assembly language server (in the Output panel)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.82.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.4.0"
+  },
+  "overrides": {
+    "@azure/abort-controller": "2.1.2",
+    "@azure/core-auth": "1.10.1",
+    "@azure/core-client": "1.10.2",
+    "@azure/core-rest-pipeline": "1.24.0",
+    "@azure/core-tracing": "1.3.1",
+    "@azure/core-util": "1.13.1",
+    "@azure/identity": "4.13.1",
+    "@azure/logger": "1.3.0",
+    "@typespec/ts-http-runtime": "0.3.6",
+    "@textlint/linter-formatter": "15.7.1",
+    "cheerio": "1.1.0",
+    "undici": "6.29.1"
+  }
+}
