@@ -37,6 +37,7 @@ This document has three parts:
   - [2.6 Calling convention and inline assembly](#26-calling-convention-and-inline-assembly)
   - [2.7 Running in the simulator](#27-running-in-the-simulator)
   - [2.8 Error messages](#28-error-messages)
+  - [2.9 Editor support](#29-editor-support)
 - [Part 3: Reference](#part-3-reference)
   - [3.1 Lexical structure](#31-lexical-structure)
   - [3.2 Modules and imports](#32-modules-and-imports)
@@ -904,6 +905,56 @@ Every message is printed as `action: error: …`. A message about the program st
 | `'…' is declared but never defined` | A prototype has no definition. If the routine is written in assembly, declare it with `asm`. |
 | `trap number N is out of range (0-15)` | `trap(N)` with a number outside 0–15. |
 | `type alias '…' names unknown type '…'` | The alias's target is not a type. |
+
+## 2.9 Editor support
+
+`build/tools/action_lsp` is a language server for Action: an editor starts it and talks to it over the Language Server Protocol. It uses the compiler itself, so the editor shows the same errors the compiler would. `make tools` builds it (or `make action-lsp` on its own).
+
+It provides:
+
+- **Errors as you type:** the compiler's first error, shown after typing pauses, on open and on save. Unsaved changes are checked.
+- **Hover:** the type of a variable, parameter or field; a function's signature; a constant's value; a type's layout, with each field's offset and size; and the `//` comment lines written just above a declaration.
+- **Go to definition:** for local variables, parameters, globals, functions and methods, types, fields, constants and enum members, across imported files. On an `import` line, it opens the imported file.
+- **Completion:** after `.`, the fields, methods and built-in members (`len`, `exists()`, …) of what is before it; elsewhere, the names in scope, keywords, types and built-in functions.
+- **Outline:** the functions, methods, tasks, trap handlers, types, enums, globals and constants of the file.
+
+While the text does not parse, hover, definition, completion and the outline use the last version that did.
+
+### VS Code
+
+`editors/vscode` holds the Particle extension. It adds syntax highlighting for `.act` files, starts the language server, and checks `action.json`. To build and install it (this needs Node.js and npm):
+
+```sh
+make tools
+make vscode-ext
+code --install-extension build/particle.vsix
+```
+
+The extension expects the server at `build/tools/action_lsp` in the workspace. The setting `particle.action.serverPath` changes that. After rebuilding the server, run **Particle: Restart Action Language Server** from the command palette.
+
+### The project file: `action.json`
+
+A file is checked the way the compiler would check it. By default, that means the file and everything it imports, with imports searched for in the file's own directory, the workspace root and `lib`. Since there is no linker, a program built from several files named on the command line needs to be described, along with any `-I` directories and `-D` values. That goes in `action.json` at the workspace root:
+
+```json
+{
+  "action": {
+    "includeDirs": ["lib", "apps/act"],
+    "defines": { "DEBUG": 1, "BAUD": 115200 },
+    "programs": [
+      { "files": ["apps/act/multi_file_main.act", "apps/act/multi_file_math.act"] }
+    ]
+  }
+}
+```
+
+| Key | Meaning |
+|-----|---------|
+| `includeDirs` | Directories searched by `import`, like `-I`. The workspace root and `lib` are always searched. |
+| `defines` | Constants, like `-D NAME=VALUE`. |
+| `programs` | Groups of files compiled together. A file in a group is checked with the rest of it; any other file is checked on its own. |
+
+Paths are relative to `action.json`. A mistake in the file is shown as an error on it, and the defaults are used until it is fixed.
 
 ---
 

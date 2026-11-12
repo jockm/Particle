@@ -774,4 +774,244 @@ class ParticleAnalyzer {
 
     return items;
   }
+
+  /// Checks whether [token] is a built-in instruction, register, or directive
+  /// that should not be renamed as a user symbol.
+  bool isBuiltInToken(String token) {
+    final upper = token.toUpperCase();
+    if (allValidMnemonics.contains(upper)) return true;
+    if (registerDocs.containsKey(upper)) return true;
+    if (token.startsWith(".") &&
+        const {
+          ".include",
+          ".macro",
+          ".endmacro",
+          ".endm",
+          ".define",
+          ".equ",
+          ".ifdef",
+          ".ifndef",
+          ".if",
+          ".else",
+          ".endif",
+          ".org",
+          ".align",
+          ".balign",
+          ".p2align",
+          ".byte",
+          ".half",
+          ".word",
+          ".ascii",
+          ".asciz",
+          ".string",
+          ".space",
+          ".skip",
+          ".zero",
+        }.contains(token.toLowerCase())) {
+      return true;
+    }
+    if (RegExp(r"^(0[xX][0-9a-fA-F]+|0[bB][01]+|-?[0-9]+)$").hasMatch(token)) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Collects all candidate assembly/include files in the workspace, starting with
+  /// [rootFilePath] and its includes, followed by workspace `.asm`, `.pasm`, and `.inc` files.
+  StringList _collectWorkspaceAsmFiles(String rootFilePath) {
+    final result = <String>{};
+    final canonRoot = canonicalize(rootFilePath);
+    result.add(canonRoot);
+
+    for (final k in openOverlays.keys) {
+      result.add(k);
+    }
+
+    final rootDir = Directory(workspaceRoot);
+    if (rootDir.existsSync()) {
+      try {
+        for (final entity in rootDir.listSync(recursive: true, followLinks: false)) {
+          if (entity is! File) continue;
+          final p = entity.path;
+          if (p.contains("/build/") || p.contains("/.") || p.contains("/node_modules/")) {
+            continue;
+          }
+          if (p.endsWith(".asm") || p.endsWith(".pasm") || p.endsWith(".inc")) {
+            result.add(canonicalize(p));
+          }
+        }
+      } catch (_) {}
+    }
+    return result.toList();
+  }
+
+  /// Replaces characters inside double/single quoted string literals and `;` comments
+  /// with spaces so token scanning preserves exact column offsets without false matches.
+  String _maskCommentsAndStrings(String line) {
+    final units = List<int>.from(line.codeUnits);
+    var inQuote = false;
+    int? quoteChar;
+
+    for (var i = 0; i < units.length; i++) {
+      final c = units[i];
+      if (!inQuote && c == 0x3B) {
+        // ';' comment to end of line
+        for (var j = i; j < units.length; j++) {
+          units[j] = 0x20;
+        }
+        break;
+      }
+      if (c == 0x22 || c == 0x27) {
+        if (!inQuote) {
+          inQuote = true;
+          quoteChar = c;
+          units[i] = 0x20;
+        } else if (c == quoteChar && (i == 0 || line.codeUnitAt(i - 1) != 0x5C)) {
+          inQuote = false;
+          units[i] = 0x20;
+        } else {
+          units[i] = 0x20;
+        }
+      } else if (inQuote) {
+        units[i] = 0x20;
+      }
+    }
+    return String.fromCharCodes(units);
+  }
+
+  /// Finds all occurrences of [symbol] across workspace assembly files.
+  List<SourceLocation> _findSymbolOccurrences(
+    String filePath,
+    String symbol, {
+    required bool includeDeclaration,
+  }) {
+    final canon = canonicalize(filePath);
+    final analysis = cache[canon] ?? analyzeDocument(canon);
+    final isMacro = analysis.macros.containsKey(symbol) ||
+        analysis.macros.containsKey(symbol.toUpperCase());
+
+    final files = _collectWorkspaceAsmFiles(canon);
+    final locations = <SourceLocation>[];
+    final tokenRe = RegExp(r"[A-Za-z0-9_\.]+");
+
+    for (final fPath in files) {
+      final lines = openOverlays[fPath] ??
+          (File(fPath).existsSync() ? File(fPath).readAsLinesSync() : const <String>[]);
+
+      for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        final raw = lines[lineIdx];
+        final masked = _maskCommentsAndStrings(raw);
+        if (masked.trim().isEmpty) continue;
+
+        for (final m in tokenRe.allMatches(masked)) {
+          final tok = m.group(0)!;
+          final matches = isMacro
+              ? tok.toUpperCase() == symbol.toUpperCase()
+              : tok == symbol;
+          if (!matches) continue;
+
+          // Check if this occurrence is a declaration:
+          //   1. Label declaration: followed immediately by ':'
+          //   2. .define / .equ / .macro declaration
+          final isLabelDecl = m.end < masked.length && masked.codeUnitAt(m.end) == 0x3A;
+          final prefix = masked.substring(0, m.start).trim().toLowerCase();
+          final isDirectiveDecl = prefix == ".define" ||
+              prefix == ".equ" ||
+              prefix == ".macro";
+
+          if (!includeDeclaration && (isLabelDecl || isDirectiveDecl)) {
+            continue;
+          }
+
+          locations.add(SourceLocation(
+            filePath: fPath,
+            line: lineIdx,
+            startCol: m.start,
+            endCol: m.end,
+          ));
+        }
+      }
+    }
+
+    return locations;
+  }
+
+  /// Resolves `textDocument/references` for labels, defines, and macros.
+  List<JsonMap> findReferences(
+    String filePath,
+    int line,
+    int character, {
+    bool includeDeclaration = true,
+  }) {
+    final canon = canonicalize(filePath);
+    final analysis = cache[canon] ?? analyzeDocument(canon);
+    final wordInfo = wordAt(analysis.lines, line, character);
+    if (wordInfo == null) return const <JsonMap>[];
+
+    final token = wordInfo.$1;
+    if (isBuiltInToken(token)) return const <JsonMap>[];
+
+    final locs = _findSymbolOccurrences(
+      canon,
+      token,
+      includeDeclaration: includeDeclaration,
+    );
+    return locs.map((l) => l.toLspLocation()).toList();
+  }
+
+  /// Validates `textDocument/prepareRename` and returns the token range and placeholder.
+  JsonMap? prepareRename(String filePath, int line, int character) {
+    final canon = canonicalize(filePath);
+    final analysis = cache[canon] ?? analyzeDocument(canon);
+    final wordInfo = wordAt(analysis.lines, line, character);
+    if (wordInfo == null) return null;
+
+    final (token, startCol, endCol) = wordInfo;
+    if (isBuiltInToken(token)) return null;
+
+    return {
+      "range": {
+        "start": {"line": line, "character": startCol},
+        "end": {"line": line, "character": endCol},
+      },
+      "placeholder": token,
+    };
+  }
+
+  /// Computes a workspace-wide `WorkspaceEdit` for `textDocument/rename`.
+  JsonMap? renameSymbol(String filePath, int line, int character, String newName) {
+    final cleanNew = newName.trim();
+    if (cleanNew.isEmpty || !RegExp(r"^[A-Za-z_\.][A-Za-z0-9_\.]*$").hasMatch(cleanNew)) {
+      return null;
+    }
+
+    final canon = canonicalize(filePath);
+    final analysis = cache[canon] ?? analyzeDocument(canon);
+    final wordInfo = wordAt(analysis.lines, line, character);
+    if (wordInfo == null) return null;
+
+    final token = wordInfo.$1;
+    if (isBuiltInToken(token)) return null;
+
+    final locs = _findSymbolOccurrences(
+      canon,
+      token,
+      includeDeclaration: true,
+    );
+    if (locs.isEmpty) return null;
+
+    final changes = <String, List<JsonMap>>{};
+    for (final loc in locs) {
+      final uri = Uri.file(loc.filePath).toString();
+      changes.putIfAbsent(uri, () => <JsonMap>[]).add({
+        "range": {
+          "start": {"line": loc.line, "character": loc.startCol},
+          "end": {"line": loc.line, "character": loc.endCol},
+        },
+        "newText": cleanNew,
+      });
+    }
+
+    return {"changes": changes};
+  }
 }

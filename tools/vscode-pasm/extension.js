@@ -335,7 +335,83 @@ function activate(context) {
       ","
     )
   );
+
+  // Reference Provider (Shift+F12 / Find All References)
+  context.subscriptions.push(
+    vscode.languages.registerReferenceProvider("particle-asm", {
+      async provideReferences(doc, pos, refContext) {
+        const res = await client.sendRequest("textDocument/references", {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+          context: { includeDeclaration: !!(refContext && refContext.includeDeclaration) },
+        });
+        if (!Array.isArray(res)) return [];
+        return res.map(
+          (loc) =>
+            new vscode.Location(
+              vscode.Uri.parse(loc.uri),
+              new vscode.Range(
+                loc.range.start.line,
+                loc.range.start.character,
+                loc.range.end.line,
+                loc.range.end.character
+              )
+            )
+        );
+      },
+    })
+  );
+
+  // Rename Provider (F2 / Rename Symbol)
+  context.subscriptions.push(
+    vscode.languages.registerRenameProvider("particle-asm", {
+      async prepareRename(doc, pos) {
+        const res = await client.sendRequest("textDocument/prepareRename", {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+        });
+        if (!res || !res.range) {
+          throw new Error("Cannot rename this element.");
+        }
+        return {
+          range: new vscode.Range(
+            res.range.start.line,
+            res.range.start.character,
+            res.range.end.line,
+            res.range.end.character
+          ),
+          placeholder: res.placeholder,
+        };
+      },
+      async provideRenameEdits(doc, pos, newName) {
+        const res = await client.sendRequest("textDocument/rename", {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+          newName,
+        });
+        if (!res || !res.changes) return null;
+        const wsEdit = new vscode.WorkspaceEdit();
+        for (const [uriStr, edits] of Object.entries(res.changes)) {
+          const targetUri = vscode.Uri.parse(uriStr);
+          for (const e of edits) {
+            wsEdit.replace(
+              targetUri,
+              new vscode.Range(
+                e.range.start.line,
+                e.range.start.character,
+                e.range.end.line,
+                e.range.end.character
+              ),
+              e.newText
+            );
+          }
+        }
+        return wsEdit;
+      },
+    })
+  );
 }
+
 
 function deactivate() {
   if (client) {

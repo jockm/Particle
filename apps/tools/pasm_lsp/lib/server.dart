@@ -145,6 +145,8 @@ class PasmLanguageServer {
               },
               "hoverProvider": true,
               "definitionProvider": true,
+              "referencesProvider": true,
+              "renameProvider": {"prepareProvider": true},
               "documentSymbolProvider": true,
               "completionProvider": {
                 "triggerCharacters": [".", " ", ","],
@@ -230,6 +232,48 @@ class PasmLanguageServer {
           final character = pos["character"] as int;
           final def = analyzer.findDefinition(path, line, character);
           _sendResponse(id, def);
+          break;
+
+        case "textDocument/references":
+          final doc = params["textDocument"] as JsonMap;
+          final pos = params["position"] as JsonMap;
+          final ctx = (params["context"] as JsonMap?) ?? const <String, dynamic>{};
+          final incDecl = (ctx["includeDeclaration"] as bool?) ?? true;
+          final path = _uriToPath(doc["uri"] as String);
+          final line = pos["line"] as int;
+          final character = pos["character"] as int;
+          final refs = analyzer.findReferences(
+            path,
+            line,
+            character,
+            includeDeclaration: incDecl,
+          );
+          _sendResponse(id, refs);
+          break;
+
+        case "textDocument/prepareRename":
+          final doc = params["textDocument"] as JsonMap;
+          final pos = params["position"] as JsonMap;
+          final path = _uriToPath(doc["uri"] as String);
+          final line = pos["line"] as int;
+          final character = pos["character"] as int;
+          final prep = analyzer.prepareRename(path, line, character);
+          if (prep == null) {
+            _sendError(id, -32602, "Cannot rename built-in instruction, register, or literal.");
+          } else {
+            _sendResponse(id, prep);
+          }
+          break;
+
+        case "textDocument/rename":
+          final doc = params["textDocument"] as JsonMap;
+          final pos = params["position"] as JsonMap;
+          final newName = params["newName"] as String? ?? "";
+          final path = _uriToPath(doc["uri"] as String);
+          final line = pos["line"] as int;
+          final character = pos["character"] as int;
+          final edit = analyzer.renameSymbol(path, line, character, newName);
+          _sendResponse(id, edit);
           break;
 
         case "textDocument/documentSymbol":
