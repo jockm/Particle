@@ -1,7 +1,8 @@
 // test_fifo_status: FIFO.STAT and FIFO.TRYW (register-channel forms),
 // through inline asm, assemble to the spec's 0xE4 and 0xE7.
 // Passes with trap(0); fails with trap(15).
-// Target: particle (FIFOs, inline assembly)
+//act:build particle
+// Particle only: FIFOs, inline assembly
 
 // Status word of channel `ch`: bit 0 empty, bit 1 full, bits 16:8 count
 u32 fifo_stat(u32 ch) {

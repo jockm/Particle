@@ -1,7 +1,8 @@
 // The helpers below take their arguments in R1..R3 (the calling
 // convention); spilling the parameters leaves those registers intact, so
 // the asm uses them directly. The result is returned in R1.
-// Target: particle (inline assembly)
+//act:build particle
+// Particle only: inline assembly
 
 // Raw allocator payload of a heap array: the address of its 4-byte length
 // header, just below the elements.

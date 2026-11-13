@@ -300,8 +300,12 @@ class ActionLanguageServer {
         includeDirs: _project.includeDirs,
         defines: _project.defines,
         overlays: _texts.overlays);
-    final targets = _targetsOf(st.sources);
-    final results = [for (final t in targets) analyze(st.sources, options: options, target: t)];
+    final builds = _buildsOf(st.sources);
+    final targets = [for (final b in builds) b.$1];
+    final results = [
+      for (final b in builds)
+        analyze(st.sources, options: options.forTarget(b.$1, b.$2), target: b.$1)
+    ];
     // The first target's types and values are shown in the editor
     final result = results.first;
     st.result = result;
@@ -327,6 +331,10 @@ class ActionLanguageServer {
 
     for (final n in result.notes) {
       add(n, n.severity == DiagnosticSeverity.warning ? 2 : 3);
+    }
+    for (final path in st.files) {
+      final w = _nameWarning(path);
+      if (w != null) add(w, 2);
     }
     void addError(Diagnostic err, int severity, [String prefix = '']) {
       if (!_project.isProgram(st.sources) && _mayBeElsewhere(err.message)) {
@@ -366,19 +374,88 @@ class ActionLanguageServer {
     }
   }
 
-  /// The targets [sources] are checked for: those of the project file,
-  /// unless a file's header comment says `// Target: particle` (or llvm),
-  /// as the test programs do.
-  List<String> _targetsOf(List<String> sources) {
-    for (final path in sources) {
-      final lines = _texts.lines(path) ?? const <String>[];
-      for (final line in lines) {
-        if (!line.startsWith('//')) break;
-        final m = RegExp(r'^// Target: (\w+)').firstMatch(line);
-        if (m != null && analysisTargets.contains(m.group(1))) return [m.group(1)!];
-      }
+  /// The file's build directive, or null when it has none or it is not
+  /// valid (analysis then reports the error).
+  BuildDirective? _directiveOf(String path) {
+    final lines = _texts.lines(path);
+    if (lines == null) return null;
+    try {
+      return readBuildDirective(lines.join('\n'), path);
+    } on CompileError {
+      return null;
     }
-    return _project.targets;
+  }
+
+  /// The builds (target and operating system) [sources] are checked for:
+  /// the targets of the project file, unless the files' `//act:build`
+  /// lines say otherwise. A target is checked when one of the files is
+  /// built for it, on the operating system it has on this computer if a
+  /// file is built for that one.
+  List<(String, String?)> _buildsOf(List<String> sources) {
+    final directives = [for (final path in sources) _directiveOf(path)];
+    if (directives.every((d) => d == null)) {
+      return [for (final t in _project.targets) (t, defaultOs(t))];
+    }
+    bool built(String target, String? os) =>
+        directives.any((d) => d == null || d.matches(target, os));
+    (String, String?)? buildFor(String target) {
+      final usual = defaultOs(target);
+      if (built(target, usual)) return (target, usual);
+      for (final b in validBuilds) {
+        if (b.$1 == target && built(b.$1, b.$2)) return b;
+      }
+      return null;
+    }
+    final inProject = [
+      for (final t in _project.targets)
+        if (buildFor(t) case final b?) b
+    ];
+    if (inProject.isNotEmpty) return inProject;
+    return [
+      for (final t in buildTargets)
+        if (buildFor(t) case final b?) b
+    ];
+  }
+
+  /// A warning when the name of [path] says it is for a target or
+  /// operating system (`name_llvm.act`, `name_macos.act`,
+  /// `name_llvm_macos.act`) that its `//act:build` line does not keep it to.
+  Diagnostic? _nameWarning(String path) {
+    final stem = path.split('/').last.replaceFirst(RegExp(r'\.act$'), '');
+    final parts = stem.split('_');
+    final named = <String>[];
+    for (var k = parts.length - 1; k >= 1 && named.length < 2; k--) {
+      if (!buildTargets.contains(parts[k]) && !buildOses.contains(parts[k])) break;
+      named.insert(0, parts[k]);
+    }
+    if (named.isEmpty) return null;
+    final namedTarget = named.where(buildTargets.contains).firstOrNull;
+    final namedOs = named.where(buildOses.contains).firstOrNull;
+    bool fits((String, String) b) =>
+        (namedTarget == null || b.$1 == namedTarget) && (namedOs == null || b.$2 == namedOs);
+    final expected = named.join(' && ');
+    final lines = _texts.lines(path);
+    if (lines == null) return null;
+    final BuildDirective? d;
+    try {
+      d = readBuildDirective(lines.join('\n'), path);
+    } on CompileError {
+      return null;
+    }
+    final file = path.split('/').last;
+    if (d == null) {
+      return Diagnostic(path, 1, 0,
+          "'$file' is named for $expected, but has no $buildDirectiveMark line; "
+          "by convention it starts with '$buildDirectiveMark $expected'",
+          DiagnosticSeverity.warning);
+    }
+    if (d.builds.every(fits)) return null;
+    String show((String, String) b) => b.$2 == 'none' ? b.$1 : '${b.$1} on ${b.$2}';
+    final others = d.builds.where((b) => !fits(b)).map(show).join(', ');
+    return Diagnostic(path, d.line, 0,
+        "'$file' is named for $expected, but '$buildDirectiveMark ${d.text}' "
+        "builds it ${d.builds.any(fits) ? 'also ' : ''}for $others",
+        DiagnosticSeverity.warning);
   }
 
   static bool _sameDiagnostic(Diagnostic? a, Diagnostic? b) =>

@@ -4,7 +4,8 @@
 //   pbuild apps/act/multi/test_heap_after_asm/heap_after_asm_main.act apps/act/multi/test_heap_after_asm/heap_after_asm_lib.asm
 // (make apps and make compiler-tests build every file in this folder together)
 // Passes with trap(0); fails with trap(15).
-// Target: particle (an assembly library)
+//act:build particle
+// Particle only: an assembly library
 
 // Implemented in heap_after_asm_lib.asm
 asm u32 lib_table_sum();

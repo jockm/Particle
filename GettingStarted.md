@@ -123,8 +123,8 @@ This builds the required Action and Particle tools, runs the Action compiler
 unit tests and Action language-server tests, then builds and simulates the
 Action compiler test programs, including negative and semantic diagnostic
 checks (the last of which, `apps/tools/test_tuple_diagnostics.py`, needs
-Python). Test programs marked `// Target: llvm`, such as the floating-point
-test, use what only the LLVM compiler has and are skipped.
+Python). Test programs with the line `//act:build llvm`, such as the
+floating-point test, use what only the LLVM compiler has and are skipped.
 
 ### Assembly linter tests
 
@@ -144,8 +144,8 @@ make llvm-tests
 ```
 
 This builds the LLVM compiler if needed, builds the Action test programs for
-this computer with clang, and runs them. Tests marked `// Target: particle`,
-which need Particle hardware, are skipped.
+this computer with clang, and runs them. Tests with the line
+`//act:build particle`, which need Particle hardware, are skipped.
 
 ## Building for your computer (LLVM)
 
@@ -163,7 +163,8 @@ make llvm-tools
 
 The programs have debug information, so `lldb` or `gdb` can step through the
 Action source. See section 2.10 of the Action language guide for the
-options and for what differs from Particle.
+options and for what differs from Particle, and section 2.11 for writing a
+program for both Particle and LLVM.
 
 ## Useful Makefile commands
 

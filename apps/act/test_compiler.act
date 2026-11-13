@@ -1,5 +1,6 @@
 // apps/act/test_compiler.act
-// Target: particle (FIFOs)
+//act:build particle
+// Particle only: FIFOs
 
 u32 g_counter = 0;
 u32 g_status = 0;

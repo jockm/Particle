@@ -183,10 +183,36 @@ void main() {
       expect(e['severity'], equals(2));
       expect(e['message'] as String, startsWith('for particle: '));
       // A file that says it is for one target is checked for that one
-      expect(await c.open('only.act', '// Target: particle\nvoid main() { u32 v = readFifo(0); }\n'), isEmpty);
+      expect(await c.open('only.act', '//act:build particle\nvoid main() { u32 v = readFifo(0); }\n'), isEmpty);
       final b = asMap((await c.open('bad.act')).first);
       expect(b['severity'], equals(1));
       expect(b['message'] as String, startsWith("undefined identifier 'zz'"));
+      await c.close();
+    });
+
+    test('a file built only for llvm is checked as llvm', () async {
+      final c = await TestClient.start({
+        'hello_llvm.act': '//act:build llvm\nextern s32 puts(string s);\nvoid main() { puts("hi"); }\n',
+      });
+      expect(await c.open('hello_llvm.act'), isEmpty);
+      await c.close();
+    });
+
+    test('a file named for a target its directive does not keep it to is warned about', () async {
+      final c = await TestClient.start({
+        'a_llvm.act': '//act:build particle\nvoid main() { }\n',
+        'b_llvm.act': 'void main() { }\n',
+        'c_llvm_macos.act': '//act:build llvm && macos\nvoid main() { }\n',
+        'd_status.act': 'void main() { }\n',
+      });
+      final a = asMap((await c.open('a_llvm.act')).first);
+      expect(a['severity'], equals(2));
+      expect(a['message'] as String,
+          equals("'a_llvm.act' is named for llvm, but '//act:build particle' builds it for particle"));
+      final b = asMap((await c.open('b_llvm.act')).first);
+      expect(b['message'] as String, contains("by convention it starts with '//act:build llvm'"));
+      expect(await c.open('c_llvm_macos.act'), isEmpty);
+      expect(await c.open('d_status.act'), isEmpty);
       await c.close();
     });
 

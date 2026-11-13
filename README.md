@@ -96,6 +96,11 @@ has so far (`u64`/`s64`, `f32`/`f64`, and `extern` C functions such as
 `printf`); Particle hardware features (inline assembly, FIFOs, trap handlers)
 are not available. See section 2.10 of the Action language guide.
 
+One program can target both: a file that starts with `//act:build llvm` (or
+`particle`) is compiled only for that target, and `pbuild` and `llbuild`
+define constants such as `COMPILER_TARGET_LLVM` for smaller differences. See
+section 2.11 of the guide.
+
 ### 5. Run ROHD Hardware Tests & Generate SystemVerilog
 ```bash
 cd hdl/particle

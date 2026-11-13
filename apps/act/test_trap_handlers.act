@@ -1,7 +1,8 @@
 // test_trap_handlers: trap(N) handlers run when trap N is
 // taken, and the interrupted code continues with its values intact.
 // Passes with trap(0); fails with trap(15).
-// Target: particle (trap handlers)
+//act:build particle
+// Particle only: trap handlers
 
 const u32 TICK = 2;
 

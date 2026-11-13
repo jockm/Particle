@@ -6,6 +6,7 @@
 library;
 
 export 'src/ast.dart';
+export 'src/build_directive.dart';
 export 'src/target.dart';
 export 'src/particle/backend.dart';
 export 'src/particle/particle.dart';

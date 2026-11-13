@@ -64,9 +64,12 @@ together with the rest of it; any other file is checked on its own.
 
 `target` is the compiler programs are checked for: `"particle"` (the
 default), `"llvm"`, or both as a list. With both, an error found for only one
-of them is shown as a warning that names it (`for llvm: ...`). A file whose
-header comment has the line `// Target: particle` (or `llvm`) is checked for
-that target only.
+of them is shown as a warning that names it (`for llvm: ...`). A file with a
+build directive such as `//act:build llvm` is checked for the targets it is
+built for, and a file named for a target (`name_llvm.act`) that its directive
+does not keep it to gets a warning.
+
+Lines starting with `//act:build` are highlighted as build directives.
 
 ## Developing the extension
 

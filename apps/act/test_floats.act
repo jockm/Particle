@@ -1,6 +1,6 @@
 // test_floats: f32 and f64 values, literals, conversions, constants,
 // arrays, records, functions and C's printf
-// Target: llvm
+//act:build llvm
 // Passes with exit status 0; fails with 15.
 
 extern s32 snprintf(string buf, u64 n, string fmt, ...);

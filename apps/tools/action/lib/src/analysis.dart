@@ -104,7 +104,8 @@ AnalysisResult analyze(List<String> sources,
   final Map<String, int> defines;
   try {
     defines = parseDefines(options.defines);
-    program = loadProgram(sources, options);
+    program = loadProgram(
+        sources, options.target == target ? options : options.forTarget(target));
   } on CompileError catch (e) {
     return AnalysisResult(null, Diagnostic.fromError(e), null);
   }

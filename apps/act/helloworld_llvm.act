@@ -1,0 +1,9 @@
+//act:build llvm
+
+// helloworld_llvm.act - prints "hello world" and exits (LLVM)
+
+extern s32 puts(string s);              // from the C library
+
+void main() {
+    puts("hello world");
+}

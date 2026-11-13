@@ -49,7 +49,8 @@ FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWA
 APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
 APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 
-APP_ACT_SRCS  := $(wildcard apps/act/*.act)
+# Files with the line "//act:build llvm" are for the LLVM compiler only
+APP_ACT_SRCS  := $(shell grep -L '^//act:build llvm$$' apps/act/*.act)
 APP_ACT_BINS  := $(patsubst apps/act/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
 # Multi-file programs: each folder in apps/act/multi is one program. Every
@@ -166,9 +167,10 @@ ACT_TRAP_TESTS := apps/act/test_dyn_bounds_fail.act \
                   apps/act/test_field_bounds_fail.act \
                   apps/act/test_field_null_fail.act
 ACT_TEST_SRCS := $(filter-out $(ACT_TRAP_TESTS),$(wildcard apps/act/test_*.act))
-# A test whose header has "// Target: llvm" uses what only the LLVM compiler
-# has (such as f32 and f64), and is skipped here
-PARTICLE_SKIP_MARKER := ^// Target: llvm
+# A test with the line "//act:build llvm" uses what only the LLVM compiler
+# has (such as f32 and f64), and is skipped here. The test programs use only
+# the plain forms "//act:build llvm" and "//act:build particle".
+PARTICLE_SKIP_MARKER := ^//act:build llvm$$
 
 compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 	@mkdir -p $(BUILD_DIR)
@@ -243,9 +245,9 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 # natively: a test passes with exit status 0 (trap(0)); trap(15) and failed
 # run-time checks exit with 15. A test that needs Particle hardware (fixed
 # addresses, FIFOs, trap handlers, inline assembly) has the line
-# "// Target: particle" and is skipped; so is a multi-file program with such
+# "//act:build particle" and is skipped; so is a multi-file program with such
 # a file or an .asm file. Outputs go to build/llvm.
-LLVM_MARKER := ^// Target: particle
+LLVM_MARKER := ^//act:build particle$$
 
 llvm-tests: $(ACTION_LLVM_BIN)
 	@mkdir -p $(LLVM_BUILD_DIR)

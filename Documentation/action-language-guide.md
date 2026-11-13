@@ -39,6 +39,7 @@ This document has three parts:
   - [2.8 Error messages](#28-error-messages)
   - [2.9 Editor support](#29-editor-support)
   - [2.10 Building for your computer (LLVM)](#210-building-for-your-computer-llvm)
+  - [2.11 Code for both targets](#211-code-for-both-targets)
 - [Part 3: Reference](#part-3-reference)
   - [3.1 Lexical structure](#31-lexical-structure)
   - [3.2 Modules and imports](#32-modules-and-imports)
@@ -1001,6 +1002,8 @@ Every error is printed as `action: error: …`. A message about the program star
 | `Unexpected token '…'` | A syntax error. |
 | `pointer type '…*' is not supported; Action has no pointers` | `T*` was used. `*x`, `&x` and `->` give similar messages. |
 | `undefined identifier '…'` | A name that is not a variable, constant or function in scope. When a local of that name exists elsewhere in the function, the message adds where it is declared and that it is not in scope there. |
+| `no source files are built for …` | Every file named has a build directive that leaves it out for this compiler (see [2.11](#211-code-for-both-targets)). |
+| `//act:build …` | A build directive that is misplaced, repeated, malformed, names something unknown or can never be true. |
 | `variable '…' is already declared in this block` | Two declarations of one name in the same block. An inner block may reuse the name. |
 | `variable '…' has the name of a parameter of '…'` | A local in a function's outermost block has a parameter's name. |
 | `String literal length (N) exceeds capacity (M)` | The initializer does not fit in the buffer. |
@@ -1120,7 +1123,7 @@ A file is checked the way the compiler would check it. By default, that means th
 | `defines` | Constants, like `-D NAME=VALUE`. |
 | `programFolders` | Folders whose subfolders are each one program: all the `.act` files in the subfolder, checked together. Adding a folder or a file needs no change to `action.json`. This repository's `action.json` names `apps/act/multi` (see [2.2](#22-multi-file-projects)). |
 | `programs` | Other groups of files compiled together, listed file by file. |
-| `target` | The compiler programs are checked for: `"particle"` (the default), `"llvm"` (see [2.10](#210-building-for-your-computer-llvm)), or both as a list. With both, an error found for only one of them is shown as a warning that names it, such as `for llvm: 'readFifo': FIFOs are Particle hardware…`. A file whose header comment has the line `// Target: particle` (or `llvm`) is checked for that target only. Types and values shown on hover are those of the first target. |
+| `target` | The compiler programs are checked for: `"particle"` (the default), `"llvm"` (see [2.10](#210-building-for-your-computer-llvm)), or both as a list. With both, an error found for only one of them is shown as a warning that names it, such as `for llvm: 'readFifo': FIFOs are Particle hardware…`. A file with a build directive, such as `//act:build llvm`, is checked for the targets it is built for (see [2.11](#211-code-for-both-targets)). The editor also warns when a file's name says it is for a target or operating system (`name_llvm.act`) that its directive does not keep it to, or that it has no directive. Types and values shown on hover are those of the first target. |
 
 A file in a program is checked with the rest of it; any other file is checked on its own.
 
@@ -1187,7 +1190,86 @@ The language is the same, with these differences:
   lldb build/llvm/main          # breakpoint set -f main.act -l 12, run, frame variable
   ```
 
-`make llvm-tests` builds the test programs with `llbuild` and runs them. A test that needs Particle hardware has the line `// Target: particle` and is skipped. In the same way, a test that needs what only the LLVM compiler has (such as `f32`) has the line `// Target: llvm`, and `make compiler-tests` skips it.
+`make llvm-tests` builds the test programs with `llbuild` and runs them. A test that needs Particle hardware has the line `//act:build particle` and is skipped (see [2.11](#211-code-for-both-targets)). In the same way, a test that needs what only the LLVM compiler has (such as `f32`) has the line `//act:build llvm`, and `make compiler-tests` skips it.
+
+## 2.11 Code for both targets
+
+A program can be written for both compilers. Two things help: a **build directive**, which says which targets a whole file is for, and **target constants**, for small differences inside a file that is shared.
+
+### Build directives
+
+A file that only makes sense for some targets says so on a line of its own, before its first `import` or declaration:
+
+```c
+//act:build llvm
+
+// console_llvm.act - console output through the C library
+extern s32 puts(string s);
+
+void print(string s) {
+    puts(s);
+}
+```
+
+```c
+//act:build particle
+
+// console_particle.act - console output through FIFO 0
+void print(string s) {
+    u32 i = 0;
+    while (s[i] != 0) {
+        writeFifo(0, s[i]);
+        i = i + 1;
+    }
+}
+```
+
+A program can import both. Each compiler sees only the file meant for it, so `extern` never reaches Particle and FIFOs never reach LLVM:
+
+```c
+import "console_particle.act";
+import "console_llvm.act";
+
+void main() {
+    print("hello world\n");
+}
+```
+
+The rules:
+
+- A build is a target and an operating system. The targets are `particle` and `llvm`. The operating systems are `none` (Particle runs without one), and `macos` and `linux` for LLVM, which builds for the computer it runs on. So the builds are `particle` with `none`, and `llvm` with `macos` or `linux`.
+- The directive is an expression of those names with `!`, `&&`, `||` and parentheses. `!` binds tightest, then `&&`, then `||`: `//act:build llvm && (macos || linux)`, `//act:build !particle`.
+- It is written `//act:build`, with no space after `//`: `// act:build` is an ordinary comment. Only comments and blank lines may come before it, and a file has at most one.
+- A file whose directive is false for the build is **left out entirely**. It is read only as far as the directive: it is not parsed or checked, and its declarations do not exist for that build. Importing it adds nothing.
+- It is an error when every file named on the command line is left out (`no source files are built for llvm on macos`).
+- A misplaced or repeated directive, an unknown name (such as a misspelled `llmv`) and a directive that can never be true (`particle && macos`) are errors.
+
+By convention a file for one target or operating system says so in its name, after the last `_`: the target first, then the operating system, as in `console_llvm.act`, `console_particle.act`, `clock_macos.act` and `clock_llvm_linux.act`. Only the directive decides what is built; the editor warns when a file's name and its directive disagree (see [2.9](#29-editor-support)).
+
+### Target constants
+
+`pbuild` and `llbuild` define these constants (with `-D`) for every build:
+
+| Constant | `pbuild` | `llbuild` on macOS | `llbuild` on Linux |
+|----------|----------|--------------------|--------------------|
+| `COMPILER_TARGET_PARTICLE` | 1 | 0 | 0 |
+| `COMPILER_TARGET_LLVM` | 0 | 1 | 1 |
+| `COMPILER_OS_NONE` | 1 | 0 | 0 |
+| `COMPILER_OS_MACOS` | 0 | 1 | 0 |
+| `COMPILER_OS_LINUX` | 0 | 0 | 1 |
+
+They come after any `-D` of your own, so they cannot be overridden. A constant condition decides at compile time, and the branch that is not taken is not checked, so it may use what only the other target has:
+
+```c
+void main() {
+    print("hello world\n");
+    if (COMPILER_TARGET_PARTICLE) {
+        trap(0);        // end the run in psim; on LLVM, main returns
+    }
+}
+```
+
+The compilers themselves (`build/tools/action` and `action_llvm`) do not define them: a program that uses them and is compiled without `pbuild` or `llbuild` needs the same `-D` options.
 
 ---
 
@@ -1195,7 +1277,7 @@ The language is the same, with these differences:
 
 ## 3.1 Lexical structure
 
-**Comments:** `// to end of line` and `/* block */`. Block comments do not nest.
+**Comments:** `// to end of line` and `/* block */`. Block comments do not nest. A line `//act:build …` before the first declaration is a build directive, not a comment (see [2.11](#211-code-for-both-targets)).
 
 **Identifiers:** a letter or `_`, followed by letters, digits or `_`. Identifiers are case-sensitive. A lone `_` is the wildcard in tuple assignment.
 
@@ -1240,7 +1322,7 @@ import "lib/protokernel.act";
 4. `lib/`
 5. the current directory
 
-Each file is loaded once, however many times it is imported, so circular imports are harmless. There is no preprocessor: no `#define`, `#include`, `#if` or predefined names such as `__LINE__`.
+Each file is loaded once, however many times it is imported, so circular imports are harmless. There is no preprocessor: no `#define`, `#include`, `#if` or predefined names such as `__LINE__`. A file can be limited to some targets with a build directive; an imported file that is left out adds nothing (see [2.11](#211-code-for-both-targets)).
 
 ## 3.3 Types
 

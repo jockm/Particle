@@ -1,6 +1,7 @@
 // test_memory_builtins: peek8/16/32 and poke8/16/32 at an address computed at run time
 // Passes with trap(0); fails with trap(15).
-// Target: particle (fixed addresses)
+//act:build particle
+// Particle only: fixed addresses
 
 const u32 SCRATCH = 0x9000;    // free RAM: above the program, below the stack (no heap is used)
 

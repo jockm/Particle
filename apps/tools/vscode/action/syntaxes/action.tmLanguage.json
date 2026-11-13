@@ -19,6 +19,8 @@
   "repository": {
     "comments": {
       "patterns": [
+        { "name": "meta.preprocessor.build.action", "match": "^\\s*(//act:build)\\b(.*)$",
+          "captures": { "1": { "name": "keyword.control.directive.action" }, "2": { "name": "entity.name.function.preprocessor.action" } } },
         { "name": "comment.line.double-slash.action", "match": "//.*$" },
         { "name": "comment.block.action", "begin": "/\\*", "end": "\\*/" }
       ]

@@ -5,6 +5,7 @@
 import 'dart:io';
 
 import 'ast.dart';
+import 'build_directive.dart';
 import 'particle/backend.dart';
 import 'particle/particle.dart';
 import 'compiler.dart';
@@ -35,12 +36,35 @@ class CompileOptions {
   /// its unsaved text this way.
   final Map<String, String> overlays;
 
+  /// The compiler the program is built for, one of [buildTargets]: files
+  /// whose `//act:build` line is false for it are left out.
+  final String target;
+
+  /// The operating system the program is built for, one of [buildOses];
+  /// null for the usual one ([defaultOs]).
+  final String? os;
+
   const CompileOptions(
       {this.includeDirs = const [],
       this.defines = const [],
       this.boundsCheck = true,
       this.referenceCheck = true,
-      this.overlays = const {}});
+      this.overlays = const {},
+      this.target = 'particle',
+      this.os});
+
+  /// The operating system this build is for.
+  String? get buildOs => os ?? defaultOs(target);
+
+  /// These options for [target] (and [os], or its usual one).
+  CompileOptions forTarget(String target, [String? os]) => CompileOptions(
+      includeDirs: includeDirs,
+      defines: defines,
+      boundsCheck: boundsCheck,
+      referenceCheck: referenceCheck,
+      overlays: overlays,
+      target: target,
+      os: os);
 }
 
 /// Loads [sources] (and everything they import) and returns the merged
@@ -124,10 +148,12 @@ ProgramNode _loadOnce(
     return null;
   }
 
-  void ingestFile(String filePath) {
+  /// Reads [filePath] and what it imports; false when its build directive
+  /// leaves it out of this build.
+  bool ingestFile(String filePath) {
     final realP = p.realPath(filePath);
     if (importedFiles.contains(realP)) {
-      return;
+      return true;
     }
     importedFiles.add(realP);
 
@@ -138,6 +164,9 @@ ProgramNode _loadOnce(
       throw CompileError("[Errno 2] No such file or directory: '$filePath'");
     }
 
+    if (!(readBuildDirective(content, realP)?.matches(options.target, options.buildOs) ?? true)) {
+      return false;
+    }
     final fileTokens = tokenize(content, fname: realP);
     final parserInst = Parser(fileTokens, aliases: aliases);
     final parsedAst = parserInst.parseProgram();
@@ -168,10 +197,18 @@ ProgramNode _loadOnce(
         allDecls.add(decl);
       }
     }
+    return true;
   }
 
+  var built = 0;
   for (final srcPath in sources) {
-    ingestFile(srcPath);
+    if (ingestFile(srcPath)) built++;
+  }
+  if (sources.isNotEmpty && built == 0) {
+    final os = options.buildOs;
+    throw CompileError(
+        'no source files are built for ${options.target}${os == null || os == 'none' ? '' : ' on $os'}: '
+        'the $buildDirectiveMark line of each one leaves it out');
   }
   return ProgramNode(allDecls);
 }
@@ -212,7 +249,7 @@ String compile(List<String> sources,
     Backend? backend,
     List<CompileNote>? notes}) {
   final predefined = parseDefines(options.defines);
-  final mergedAst = loadProgram(sources, options);
+  final mergedAst = loadProgram(sources, options.forTarget('particle'));
   final cg = CodeGen(
       boundsCheck: options.boundsCheck,
       referenceCheck: options.referenceCheck,
@@ -231,7 +268,7 @@ String compileLlvm(List<String> sources,
     bool debugInfo = true,
     List<CompileNote>? notes}) {
   final predefined = parseDefines(options.defines);
-  final mergedAst = loadProgram(sources, options);
+  final mergedAst = loadProgram(sources, options.forTarget('llvm', options.os));
   final gen = LlvmGen(
       boundsCheck: options.boundsCheck,
       referenceCheck: options.referenceCheck,

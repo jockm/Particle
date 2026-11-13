@@ -156,8 +156,14 @@ run_step() {
 GFLAG=()
 [ $DEBUG -eq 1 ] && GFLAG=("-g") || ACT_FLAGS+=("-g0")
 
-# Which compiler this is; after the user's -D, so it cannot be overridden
-TARGET_DEFINES=(-D COMPILER_TARGET_LLVM=1 -D COMPILER_TARGET_PARTICLE=0)
+# Which compiler and operating system this is (this computer's); after the
+# user's -D, so it cannot be overridden
+TARGET_DEFINES=(-D COMPILER_TARGET_LLVM=1 -D COMPILER_TARGET_PARTICLE=0 -D COMPILER_OS_NONE=0)
+case "$(uname -s)" in
+    Darwin) TARGET_DEFINES+=(-D COMPILER_OS_MACOS=1 -D COMPILER_OS_LINUX=0) ;;
+    Linux)  TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=1) ;;
+    *)      TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=0) ;;
+esac
 run_step "$ACTION_LLVM" "${ACT_INPUTS[@]}" -o "$LL" -I "$LIB_DIR" \
     ${INCLUDES[@]+"${INCLUDES[@]}"} ${DEFINES[@]+"${DEFINES[@]}"} "${TARGET_DEFINES[@]}" ${ACT_FLAGS[@]+"${ACT_FLAGS[@]}"}
 if [ $EMIT_ONLY -eq 1 ]; then

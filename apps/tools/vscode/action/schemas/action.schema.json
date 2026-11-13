@@ -19,7 +19,7 @@
           "additionalProperties": { "type": ["integer", "boolean", "string"] }
         },
         "target": {
-          "description": "The compiler programs are checked for: \"particle\" (the default) or \"llvm\", or a list of both. With both, an error found for only one of them is shown as a warning naming it. A file whose header comment has '// Target: particle' (or llvm) is checked for that target only.",
+          "description": "The compiler programs are checked for: \"particle\" (the default) or \"llvm\", or a list of both. With both, an error found for only one of them is shown as a warning naming it. A file with a build directive such as '//act:build llvm' is checked for the targets it is built for.",
           "oneOf": [
             { "enum": ["particle", "llvm"] },
             { "type": "array", "minItems": 1, "items": { "enum": ["particle", "llvm"] } }

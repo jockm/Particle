@@ -2,7 +2,8 @@
 // tryReadFifo returns 1 and stores into the variable when data is waiting,
 // otherwise returns 0 and leaves the variable alone. Channels may be consts.
 // Passes with trap(0); fails with trap(15).
-// Target: particle (FIFOs)
+//act:build particle
+// Particle only: FIFOs
 
 const u32 CHAN = 2;
 
