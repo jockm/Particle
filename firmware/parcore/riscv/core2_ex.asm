@@ -6,7 +6,7 @@
 .include "lib/common.inc"
 
 .org 0x00000100
-.define CSR_BASE         0x0700
+.define CSR_BASE         0x0E00
 .define CSR_OFS_CYCLE    0x00    ; 0xC00 (cycle), 0xC01 (time)
 .define CSR_OFS_CYCLEH   0x04    ; 0xC80 (cycleh), 0xC81 (timeh)
 .define CSR_OFS_INSTRET  0x08    ; 0xC02 (instret)

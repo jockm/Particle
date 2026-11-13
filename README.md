@@ -51,6 +51,9 @@ particle/
 
 ## Toolchain & Build Quickstart
 
+For complete setup instructions, VS Code installation, and test commands, see
+[Getting Started](GettingStarted.md).
+
 ### Prerequisites
 * **Dart SDK** `>= 3.0.0 < 4.0.0` with `rohd: ^0.5.0`
 * **Python** `>= 3.8`

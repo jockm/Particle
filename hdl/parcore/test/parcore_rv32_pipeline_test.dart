@@ -117,7 +117,7 @@ void main() {
 
       await Simulator.endSimulation();
 
-      const int regBase = 0x0600;
+      const int regBase = 0x0800;
       final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
       final Map<int, int> regs = {};
       for (int i = 1; i <= 31; i++) {
@@ -264,7 +264,7 @@ void main() {
 
       await Simulator.endSimulation();
 
-      const int regBase = 0x0600;
+      const int regBase = 0x0800;
       final c1Tcm = signedTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
       final Map<int, int> regs = {};
       for (int i = 1; i <= 31; i++) {
@@ -372,7 +372,7 @@ void main() {
 
       await Simulator.endSimulation();
 
-      const int regBase = 0x0600;
+      const int regBase = 0x0800;
       final c1Tcm = mulTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
       final Map<int, int> regs = {};
       for (int i = 1; i <= 31; i++) {
@@ -474,7 +474,7 @@ void main() {
 
       await Simulator.endSimulation();
 
-      const int regBase = 0x0600;
+      const int regBase = 0x0800;
       final c1Tcm = memTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
       final Map<int, int> regs = {};
       for (int i = 1; i <= 31; i++) {
@@ -569,7 +569,7 @@ void main() {
 
       await Simulator.endSimulation();
 
-      const int regBase = 0x0600;
+      const int regBase = 0x0800;
       final c1Tcm = branchTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
       final Map<int, int> regs = {};
       for (int i = 1; i <= 31; i++) {
@@ -705,7 +705,7 @@ void main() {
       print('=== Section 7 Pipeline Activity ===');
       print('  Pushes (C0): $pushes, Pops (C1): $pops');
 
-      const regBase = 0x0600;
+      const regBase = 0x0800;
       final c1Tcm = csrTop.subModules.firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
 
       final x2 = c1Tcm.readWord(regBase + 2 * 4);

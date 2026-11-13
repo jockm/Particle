@@ -5,8 +5,8 @@
 ; ==============================================================================
 .include "lib/common.inc"
 
-.define REG_BASE        0x0600  ; Local TCM base for x0..x31 (32 words = 128 bytes)
-.define SCOREBOARD_MASK 0x0680  ; Local TCM address for 32-bit in-flight bitmask
+.define REG_BASE        0x0800  ; Local TCM base for x0..x31 (32 words = 128 bytes)
+.define SCOREBOARD_MASK 0x0880  ; Local TCM address for 32-bit in-flight bitmask
 
 .org 0x00000100
 _reset_vector:
