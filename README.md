@@ -77,7 +77,26 @@ python3 tools/psim.py build/test.bin
 python3 tools/psim.py build/test.bin -d
 ```
 
-### 4. Run ROHD Hardware Tests & Generate SystemVerilog
+### 4. Build Action Programs for Your Computer (LLVM)
+
+Action also compiles through LLVM to native programs for 64-bit macOS and
+Linux, which is handy for testing algorithms and libraries off the hardware.
+It needs clang (LLVM 15 or later).
+
+```bash
+make llvm-tools                        # builds build/tools/action_llvm
+./llbuild myprogram.act --run          # compile, link with clang, and run
+make llvm-tests                        # run the Action test programs natively
+```
+
+`llbuild` accepts several `.act` files, C sources and libraries (`-l`), and
+optimization levels (`-O0` to `-O3`); the programs carry debug information for
+`lldb`/`gdb`. The language is the same, with additions only the LLVM compiler
+has so far (`u64`/`s64`, `f32`/`f64`, and `extern` C functions such as
+`printf`); Particle hardware features (inline assembly, FIFOs, trap handlers)
+are not available. See section 2.10 of the Action language guide.
+
+### 5. Run ROHD Hardware Tests & Generate SystemVerilog
 ```bash
 cd hdl/particle
 dart pub get

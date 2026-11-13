@@ -266,7 +266,9 @@ ASM_SOURCES=()
 if [ "${#ACT_INPUTS[@]}" -gt 0 ]; then
     ACT_ASM="build/${STEM}.asm"
     mkdir -p "$(dirname "$ACT_ASM")"
-    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$ACTION" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"}
+    # Which compiler this is; after the user's -D, so it cannot be overridden
+    TARGET_DEFINES=(-D COMPILER_TARGET_PARTICLE=1 -D COMPILER_TARGET_LLVM=0)
+    run_step "Compiling Action: ${ACT_INPUTS[*]} -> $ACT_ASM" "$ACTION" "${ACT_INPUTS[@]}" -o "$ACT_ASM" ${INCLUDES[@]+"${INCLUDES[@]}"} ${ACT16_FLAGS[@]+"${ACT16_FLAGS[@]}"} ${DEFINES[@]+"${DEFINES[@]}"} "${TARGET_DEFINES[@]}"
     ASM_SOURCES+=("$ACT_ASM")
 fi
 

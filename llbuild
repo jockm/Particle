@@ -156,8 +156,10 @@ run_step() {
 GFLAG=()
 [ $DEBUG -eq 1 ] && GFLAG=("-g") || ACT_FLAGS+=("-g0")
 
+# Which compiler this is; after the user's -D, so it cannot be overridden
+TARGET_DEFINES=(-D COMPILER_TARGET_LLVM=1 -D COMPILER_TARGET_PARTICLE=0)
 run_step "$ACTION_LLVM" "${ACT_INPUTS[@]}" -o "$LL" -I "$LIB_DIR" \
-    ${INCLUDES[@]+"${INCLUDES[@]}"} ${DEFINES[@]+"${DEFINES[@]}"} ${ACT_FLAGS[@]+"${ACT_FLAGS[@]}"}
+    ${INCLUDES[@]+"${INCLUDES[@]}"} ${DEFINES[@]+"${DEFINES[@]}"} "${TARGET_DEFINES[@]}" ${ACT_FLAGS[@]+"${ACT_FLAGS[@]}"}
 if [ $EMIT_ONLY -eq 1 ]; then
     exit 0
 fi

@@ -284,4 +284,15 @@ void main() {
       expect(llvmErrorOf('void main() { u32 x = 1.5; }'), contains('1.5 is not an integer'));
     });
   });
+
+  group('lambdas', () {
+    test('called through variables, arrays and arguments', () {
+      expectPasses('''
+    BinOp add = fn(u32 a, u32 b) -> u32 { return a + b; };
+    BinOp ops[2] = {add, fn(u32 a, u32 b) -> u32 { return a * b; }};
+    BinOp pw = fn p(u32 b, u32 e) -> u32 { if (e == 0) return 1; return b * p(b, e - 1); };
+    if (add(2, 3) != 5 || ops[1](4, 5) != 20 || pw(2, 10) != 1024) trap(15);''',
+          decls: 'type BinOp = fn(u32, u32) -> u32;');
+    });
+  });
 }

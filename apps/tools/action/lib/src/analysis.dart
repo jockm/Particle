@@ -8,8 +8,8 @@
 // constants and functions.
 
 import 'ast.dart';
-import 'backend/particle.dart';
-import 'codegen/codegen.dart';
+import 'particle/particle.dart';
+import 'compiler.dart';
 import 'driver.dart';
 import 'errors.dart';
 

@@ -563,4 +563,35 @@ void main() {
           contains("floating-point type 'f32' is not supported by target backend 'particle' yet"));
     });
   });
+
+  group('lambdas', () {
+    const op = 'type Op = fn(u32) -> u32;\n';
+    test('a lambda is a function value', () {
+      expect(checkErrorOf('${op}u32 run(Op f) { return f(2); }\n'
+          'void main() { const u32 K = 3; Op f = fn(u32 x) -> u32 { return x + K; }; '
+          'u32 v = run(fn sq(u32 x) -> u32 { if (x == 0) return 0; return x * x + sq(0); }); }'), isNull);
+    });
+
+    test('it cannot use the variables of the function it is written in', () {
+      expect(checkErrorOf('${op}void main() { u32 k = 3; Op f = fn(u32 x) -> u32 { return x + k; }; }'),
+          contains("cannot use 'k', a variable of the function it is written in"));
+      expect(checkErrorOf('${op}void main() { u32 k = 3; Op f = fn(u32 k) -> u32 { return k; }; }'), isNull);
+    });
+
+    test('its name is seen only inside it', () {
+      expect(checkErrorOf('${op}void main() { Op f = fn sq(u32 x) -> u32 { return x; }; u32 v = sq(2); }'),
+          contains("'sq' is not declared"));
+    });
+
+    test('a lambda is a value, of the right signature', () {
+      expect(checkErrorOf('void main() { fn(u32 x) -> u32 { return x; }; }'),
+          contains('a lambda is a value'));
+      expect(checkErrorOf('${op}void main() { Op f = fn(u32 x, u32 y) -> u32 { return x; }; }'),
+          contains('Function signature mismatch: cannot assign lambda at'));
+      expect(checkErrorOf('${op}void main() { Op f = fn named(u32 x) -> u32 { if (x > 1) { return x; } }; }'),
+          contains("missing return at the end of lambda 'named'"));
+      expect(checkErrorOf('${op}Op g = fn(u32 x) -> u32 { return x; };\nvoid main() { }'),
+          contains('a global starts with a constant value'));
+    });
+  });
 }

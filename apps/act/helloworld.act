@@ -1,0 +1,13 @@
+// helloworld.act - prints "hello world" on the console and exits
+
+const u32 CONSOLE = 0;                  // FIFO 0 is the console
+const string MSG = "hello world\n";
+
+void main() {
+    u32 i = 0;
+    while (MSG[i] != 0) {
+        writeFifo(CONSOLE, MSG[i]);
+        i = i + 1;
+    }
+    trap(0);                            // reset: psim stops here, exit code 0
+}

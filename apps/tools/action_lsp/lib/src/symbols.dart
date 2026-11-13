@@ -122,6 +122,9 @@ class ProgramIndex {
   /// Function definitions with bodies, with their locals and parameters.
   final List<(Sym, List<Sym>)> bodies = [];
 
+  /// Where each body in [bodies] ends (its closing brace).
+  final Map<Sym, Pos> _bodyEnd = Map.identity();
+
   /// Every file in the program.
   final Set<String> files = {};
 
@@ -129,6 +132,13 @@ class ProgramIndex {
     for (final d in program.decls) {
       final start = parseLoc(d.loc);
       if (start != null) files.add(start.$1);
+      // A function made from a lambda, or a constant taken out of a function,
+      // is not a top-level declaration of the file: only its body is indexed
+      if (d is FuncDeclNode && d.lambdaShown != null) {
+        _function(d, topLevel: false);
+        continue;
+      }
+      if (d is VarDeclNode && d.name.contains(internalNameMark)) continue;
       final syms = _declare(d);
       for (final s in syms) {
         final path = s.declStart?.path;
@@ -144,6 +154,8 @@ class ProgramIndex {
     for (final b in bodies) {
       final s = b.$1.declStart;
       if (s == null || s.path != path || pos < s.start) continue;
+      final end = _bodyEnd[b.$1];
+      if (end != null && end < pos) continue;
       if (best == null || best.$1.declStart!.start < s.start) best = b;
     }
     if (best == null) return null;
@@ -251,7 +263,7 @@ class ProgramIndex {
     return s;
   }
 
-  List<Sym> _function(FuncDeclNode f) {
+  List<Sym> _function(FuncDeclNode f, {bool topLevel = true}) {
     final isMethod = f.params.isNotEmpty && f.params.first.name == 'this';
     String name = f.name;
     String? container;
@@ -272,9 +284,11 @@ class ProgramIndex {
     final s = _sym(name, kind, f.loc, container: container, decl: f);
     // A prototype does not hide the definition
     final prev = globals[f.name];
-    if (prev == null || prev.kind == SymKind.prototype) {
+    if (topLevel && (prev == null || prev.kind == SymKind.prototype)) {
       globals[f.name] = s;
     }
+    final end = parseLoc(f.body?.endLoc)?.$2;
+    if (end != null) _bodyEnd[s] = end;
     if (f.body != null) {
       final locals = <Sym>[];
       for (final p in f.params) {

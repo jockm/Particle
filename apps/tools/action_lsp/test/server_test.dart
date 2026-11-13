@@ -235,6 +235,26 @@ void main() {
       await c.close();
     });
 
+    test('hover inside and after a lambda', () async {
+      const src = 'type Op = fn(u8) -> u8;\nvoid main() {\n    u32 total = 1;\n'
+          '    Op f = fn(u8 val) -> u8 { return val + 1; };\n    total += 2;\n}\n';
+      final c = await TestClient.start({'lam.act': src});
+      await c.open('lam.act');
+      Future<String> hoverAt(String what) async {
+        final (l, ch) = find(src, what);
+        final h = asMap(await c.result('textDocument/hover', c.at('lam.act', l, ch)));
+        return asMap(h['contents'])['value'] as String;
+      }
+
+      expect(await hoverAt('val + 1'), contains('u8 val'));
+      expect(await hoverAt('total += 2'), contains('u32 total'));
+      final syms = await c.result('textDocument/documentSymbol', {
+        'textDocument': {'uri': c.uri('lam.act')}
+      });
+      expect('$syms', isNot(contains('lambda')));
+      await c.close();
+    });
+
     test('hover follows block scopes', () async {
       const src = 'void main() {\n    u32 x = 1;\n    {\n        u8 x = 2;\n        x += 1;\n    }\n    x += 5;\n}\n';
       final c = await TestClient.start({'scoped.act': src});

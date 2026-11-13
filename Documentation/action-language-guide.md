@@ -266,6 +266,23 @@ void main() {
 }
 ```
 
+A **lambda** is a function written where a function value is needed. It looks like a function type, with parameter names and a body:
+
+```c
+void main() {
+    const u32 LIMIT = 10;
+    BinOp sub = fn(u32 a, u32 b) -> u32 { return a - b; };
+    u32 r = apply(fn(u32 a, u32 b) -> u32 { return a * b + LIMIT; }, 6, 7);
+
+    BinOp power = fn pow(u32 b, u32 e) -> u32 {   // a name lets it call itself
+        if (e == 0) return 1;
+        return b * pow(b, e - 1);
+    };
+}
+```
+
+A lambda uses its parameters, its own locals, the globals, and the constants of the function it is written in, but not that function's variables: pass them as parameters.
+
 A function whose result type is not `void` must end with a `return` on every path; running off the end is a compile error. A call gives exactly as many arguments as the function has parameters, and the call of a `void` function has no value to use.
 
 ## 1.5 Arrays and strings
@@ -1017,6 +1034,8 @@ Every error is printed as `action: error: …`. A message about the program star
 | `'…' has N elements, but M values are given` | A brace initializer with too many values. |
 | `a '…' holds references, so it cannot be copied` | `copyFrom` on a type with references. |
 | `type '…' has both a field and a method named '…'` | `t.f(x)` would be ambiguous. |
+| `lambda … cannot use '…', a variable of the function it is written in` | Lambdas capture nothing: pass the value as a parameter. |
+| `a lambda is a value; give it to a variable, field or parameter` | A lambda was written as a statement on its own. |
 | `an array of N dimensions is expected here; '…' has M` | An argument for an open array parameter of more dimensions. |
 | `an f32 value and a u32 value do not mix` / `f32 and f64 values do not mix` | Mixed floating-point and integer (or f32 and f64) operands; convert one (LLVM). |
 | `'…' was moved to another variable or field and can no longer be used` | A reference was used after it was assigned to another variable or stored in a field (`may have been moved` if on some paths only). |
@@ -1583,6 +1602,22 @@ Slots 1–4 travel in R1–R4 and later slots on the stack (see [2.6](#26-callin
 **Open arrays of more dimensions:** `T m[][]` takes a fixed array of two dimensions (a local, a global, a field, or another such parameter), of the same element type. `m.len` is the number of rows and `m[i].len` the length of a row; each index is checked against its own length. A row `m[i]` can be passed to a `T row[]` parameter. For `string names[][]`, the last length is the strings' capacity: `names.len` is the number of strings, `names[i].len` the length of one string and `names[i].capacity` its capacity. An open array parameter has at most 3 dimensions; one of an inline function has one.
 
 **Values that must not change:** arrays, strings and records are passed by reference, so a function can change its caller's value through a parameter. The compiler works out which parameters each function writes through (directly, or by passing them on to one that does), and it is an error to pass a constant table, a string constant, a string literal or `main`'s command line to one. It cannot see into `extern` and `asm` functions, which are taken not to write through their parameters; a call through a function value is taken to write through all of them.
+
+**Lambdas:**
+
+```
+fn(params) -> ReturnType { body }
+fn name(params) -> ReturnType { body }      // a name, seen only inside the body
+fn(params) { body }                         // returns nothing
+```
+
+A lambda is a function value, written where one is expected: given to a variable, field or array element, passed as an argument, returned, or used in a brace initializer or `T.create(...)`. Its signature must match the function type it is given to. It is compiled as a hidden function of its own, so calling one costs the same as calling any function value.
+
+- It can use its parameters, its own locals, the globals, the functions, and the constants (but not the variables or parameters) of the function it is written in. Using one of that function's variables is an error: pass it as a parameter. Nothing is captured, and nothing is allocated.
+- The optional name is seen only inside the lambda, so that it can call itself. Outside it, the name is not declared.
+- A lambda written as a statement on its own is an error: it is a value. A global cannot start with a lambda (or any function); give it one in code.
+- Lambdas may be written inside lambdas. A lambda cannot be `inline` or a task.
+- Messages name a lambda `lambda 'pow'`, or `lambda at main.act:12:9` when it has no name. In the debugger and the assembly it is the function `main.pow` or `main.lambda1`, named after the function it is written in.
 
 **Return values:** a scalar, reference or function value is returned in R1. Tuples return in R1 to R4. In a tuple-returning function, every `return` must give the declared number of values. In a scalar function, `return (a, b)` is an error. A function must not run off the end of its body without returning a value (see **Missing return** in [3.6](#36-statements)).
 

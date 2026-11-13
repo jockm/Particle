@@ -860,11 +860,20 @@ class Checker {
     final ret = cleanType(f.retType);
     if (ret is String && ret == 'void') return;
     if (_terminates(f.body!)) return;
-    throw CompileError("missing return at the end of '${_displayFuncName(f)}': a function that "
+    throw CompileError("missing return at the end of ${_shownFunc(f.name)}: a function that "
             'returns a value must end with a return, or with an if/else, a switch with a default, '
             'or an endless while loop whose every path returns (or with inline assembly that '
             'leaves the result in R1)')
         .at(f.body!.endLoc ?? f.loc);
+  }
+
+  /// How messages name function [name]: `'f'`, or for one made from a
+  /// lambda, `lambda 'cmp'` or `lambda at main.act:12:9`.
+  String _shownFunc(String name) {
+    for (final f in _funcDecls) {
+      if (f.name == name) return f.lambdaShown ?? "'${_displayFuncName(f)}'";
+    }
+    return "'$name'";
   }
 
   String _displayFuncName(FuncDeclNode f) {

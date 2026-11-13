@@ -259,6 +259,10 @@ class FuncDeclNode extends AstNode {
   /// The body's blocks and the locals each declares, set by
   /// [resolveBlockScopes].
   LocalScope? scopes;
+
+  /// For a function made from a lambda: how messages name it (`lambda 'cmp'`
+  /// or `lambda at main.act:12:9`).
+  String? lambdaShown;
   FuncDeclNode(this.retType, this.retPtr, this.name, this.params, this.body,
       {this.isInline = false, this.trapExpr});
   @override
@@ -430,6 +434,20 @@ class VarAccessNode extends AstNode {
   VarAccessNode(this.name);
   @override
   String? get nodeName => name;
+}
+
+/// `fn [name](params) [-> Ret] { body }`: a lambda, a function written where
+/// a function value is expected. It cannot use the variables of the function
+/// it is written in. The scope pass ([resolveBlockScopes]) makes it a hidden
+/// top-level function and sets [name] (inherited: this node is then a use of
+/// that function's name, its address).
+class LambdaNode extends VarAccessNode {
+  /// The name written after `fn`, visible only inside [body].
+  final String? lambdaName;
+  final List<Param> params;
+  final Object retType;
+  final BlockNode body;
+  LambdaNode(this.lambdaName, this.params, this.retType, this.body) : super('');
 }
 
 /// `{a, b, c}`: the values of an array's elements (or rows), in order.

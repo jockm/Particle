@@ -5,9 +5,9 @@
 import 'dart:io';
 
 import 'ast.dart';
-import 'backend/backend.dart';
-import 'backend/particle.dart';
-import 'codegen/codegen.dart';
+import 'particle/backend.dart';
+import 'particle/particle.dart';
+import 'compiler.dart';
 import 'errors.dart';
 import 'lexer.dart';
 import 'parser.dart';

@@ -35,10 +35,18 @@ String sourceName(String name) =>
 /// hide either; local constants keep their name, so that the checker can
 /// report one that reuses a global's.
 void resolveBlockScopes(ProgramNode root, Set<String> globalVars, Set<String> globalNames) {
-  final hoisted = <VarDeclNode>[];
+  final hoisted = <AstNode>[];
+  _lambdaNames.clear();
   for (final d in root.decls) {
     if (d is FuncDeclNode && d.body != null && d.scopes == null) {
       _FunctionScopes(d, globalVars, globalNames, hoisted).run();
+    } else if (d is VarDeclNode) {
+      final lambda = _findLambda(d.initExpr) ?? _findLambda(d.initList);
+      if (lambda != null) {
+        throw CompileError("global '${d.name}': a global starts with a constant value, so it is "
+                'given a function (or lambda) in code, not in its declaration')
+            .at(lambda.loc ?? d.loc);
+      }
     }
   }
   // Constant tables and string constants declared in a function are
@@ -48,6 +56,28 @@ void resolveBlockScopes(ProgramNode root, Set<String> globalVars, Set<String> gl
 
 /// Numbers the constant tables taken out of functions, program-wide.
 int _hoistSerial = 0;
+
+/// The names given to functions made from lambdas, program-wide.
+final Set<String> _lambdaNames = {};
+
+/// A lambda in a global's value, if any.
+LambdaNode? _findLambda(AstNode? e) {
+  if (e == null) return null;
+  if (e is LambdaNode) return e;
+  if (e is InitListNode) {
+    for (final x in e.elems) {
+      final l = _findLambda(x);
+      if (l != null) return l;
+    }
+  }
+  if (e is RecordInitNode) {
+    for (final (_, v) in e.fields) {
+      final l = _findLambda(v);
+      if (l != null) return l;
+    }
+  }
+  return null;
+}
 
 /// One visible declaration: its internal name and where it is declared.
 typedef _Visible = ({String internal, String? loc, bool isParam});
@@ -73,11 +103,25 @@ class _FunctionScopes {
   /// The location of the statement being resolved, for nodes without one.
   String? _stmtLoc;
 
-  /// Constant tables and string constants taken out of the function, to be
-  /// stored with the globals.
-  final List<VarDeclNode> hoisted;
+  /// Constant tables and string constants taken out of the function, and the
+  /// functions made from its lambdas, to be stored with the globals.
+  final List<AstNode> hoisted;
 
-  _FunctionScopes(this.func, this.globalVars, this.globalNames, this.hoisted);
+  /// For a function made from a lambda: the names it sees from around it
+  /// (the lambda's own name, and the constants of the function it is
+  /// written in), and the variables of that function, which it cannot use.
+  final Map<String, _Visible> outer;
+  final Set<String> enclosingVars;
+
+  /// The internal names of the local constants declared so far, in order,
+  /// with their declarations; and the lambdas' names in this function.
+  final List<String> _constOrder = [];
+  final Map<String, VarDeclNode> _constDecls = {};
+  final Set<String> _fnNames = {};
+  int _lambdaSerial = 0;
+
+  _FunctionScopes(this.func, this.globalVars, this.globalNames, this.hoisted,
+      {this.outer = const {}, this.enclosingVars = const {}});
 
   void run() {
     final names = <String>{};
@@ -86,6 +130,7 @@ class _FunctionScopes {
     final root = LocalScope(null, null);
     func.scopes = root;
     _scope = root;
+    if (outer.isNotEmpty) _blocks.add(Map.of(outer));
     _blocks.add({
       for (final p in func.params) p.name: (internal: p.name, loc: p.loc ?? func.loc, isParam: true)
     });
@@ -144,6 +189,7 @@ class _FunctionScopes {
     _taken.add(name);
     _declaredAt[name] = loc;
     block[name] = (internal: internal, loc: loc, isParam: false);
+    if (isConst) _constOrder.add(internal);
     return internal;
   }
 
@@ -152,6 +198,11 @@ class _FunctionScopes {
     for (var i = _blocks.length - 1; i >= 0; i--) {
       final v = _blocks[i][name];
       if (v != null) return v.internal;
+    }
+    if (enclosingVars.contains(name)) {
+      throw CompileError("${func.lambdaShown ?? 'a lambda'} cannot use '$name', a variable of "
+              'the function it is written in; pass it as a parameter')
+          .at(loc ?? _stmtLoc);
     }
     if (_allLocalNames.contains(name) &&
         !globalVars.contains(name) &&
@@ -216,6 +267,10 @@ class _FunctionScopes {
   }
 
   void _stmtInner(AstNode node) {
+    if (node is ExprStmtNode && node.expr is LambdaNode) {
+      throw CompileError('a lambda is a value; give it to a variable, field or parameter')
+          .at(node.expr.loc ?? node.loc);
+    }
     if (node is BlockNode) {
       if (identical(node, func.body)) {
         _blockStmts(node);
@@ -231,6 +286,7 @@ class _FunctionScopes {
       _expr(node.boundAddrExpr);
       _expr(node.initExpr);
       node.name = _declare(node.name, node.loc, isConst: node.isConst);
+      if (node.isConst) _constDecls[node.name] = node;
       if (!node.isConst && node.boundAddrExpr == null) {
         node.nested = _scope.parent != null;
         _scope.decls.add(node);
@@ -315,6 +371,10 @@ class _FunctionScopes {
 
   void _expr(AstNode? e) {
     if (e == null) return;
+    if (e is LambdaNode) {
+      _hoistLambda(e);
+      return;
+    }
     if (e is VarAccessNode) {
       e.name = _use(e.name, e.loc);
     } else if (e is CallNode) {
@@ -387,6 +447,100 @@ class _FunctionScopes {
       _expr(e.expr);
     }
     // Literals, traps, asm, break, continue and labels name no variables
+  }
+
+  // ------------------------------------------------------------ lambdas
+
+  /// Makes lambda [l] a top-level function of its own, named after this
+  /// function (`main.cmp`, or `main.lambda1` without a name), and [l] a use
+  /// of that function's name. It sees its own name, its parameters, the
+  /// globals and the constants visible here (copied into its body); using
+  /// a variable of this function is an error.
+  void _hoistLambda(LambdaNode l) {
+    var base = '${func.name}.${l.lambdaName ?? 'lambda${++_lambdaSerial}'}';
+    var name = base;
+    for (var n = 2; !_lambdaNames.add(name); n++) {
+      name = '$base.$n';
+    }
+    // What is visible here: constants (innermost first wins), variables
+    final visibleConsts = <String, String>{};
+    final visibleFns = <String, _Visible>{};
+    final vars = <String>{};
+    for (var i = _blocks.length - 1; i >= 0; i--) {
+      for (final MapEntry(key: src, value: v) in _blocks[i].entries) {
+        if (visibleConsts.containsKey(src) || visibleFns.containsKey(src) || vars.contains(src)) {
+          continue;
+        }
+        if (_constDecls.containsKey(v.internal)) {
+          visibleConsts[src] = v.internal;
+        } else if (_fnNames.contains(v.internal)) {
+          visibleFns[src] = v;
+        } else {
+          vars.add(src);
+        }
+      }
+    }
+    for (final v in enclosingVars) {
+      if (!visibleConsts.containsKey(v) && !visibleFns.containsKey(v)) vars.add(v);
+    }
+    // Copies of the constants, in the order they were declared
+    final lambdaOuter = <String, _Visible>{...visibleFns};
+    final rename = <String, String>{};
+    final injected = <AstNode>[];
+    final order = [..._constOrder]..retainWhere(visibleConsts.containsValue);
+    for (final internal in order) {
+      final d = _constDecls[internal]!;
+      final srcs = [
+        for (final e in visibleConsts.entries)
+          if (e.value == internal) e.key
+      ];
+      final copy = '${sourceName(srcs.first)}$internalNameMark${100000 + ++_hoistSerial}';
+      rename[internal] = copy;
+      injected.add(VarDeclNode(d.typeName, d.isPtr, copy, _copyConstExpr(d.initExpr, rename), true)
+        ..loc = d.loc);
+      for (final src in srcs) {
+        lambdaOuter[src] = (internal: copy, loc: d.loc, isParam: false);
+      }
+    }
+    if (l.lambdaName != null) {
+      lambdaOuter[l.lambdaName!] = (internal: name, loc: l.loc, isParam: false);
+    }
+    final fd = FuncDeclNode(l.retType, false, name, l.params, l.body)
+      ..loc = l.loc
+      ..lambdaShown = l.lambdaName != null
+          ? "lambda '${l.lambdaName}'"
+          : 'lambda at ${(l.loc ?? '').split('/').last}';
+    l.body.stmts.insertAll(0, injected);
+    hoisted.add(fd);
+    _FunctionScopes(fd, globalVars, globalNames, hoisted, outer: lambdaOuter, enclosingVars: vars)
+      .._fnNames.addAll({name, for (final v in visibleFns.values) v.internal})
+      ..run();
+    l.name = name;
+  }
+
+  /// A copy of constant expression [e], with the constants it names renamed
+  /// by [rename].
+  static AstNode? _copyConstExpr(AstNode? e, Map<String, String> rename) {
+    if (e == null) return null;
+    AstNode copy(AstNode x) => _copyConstExpr(x, rename)!;
+    final AstNode out;
+    if (e is VarAccessNode && e is! LambdaNode) {
+      out = VarAccessNode(rename[e.name] ?? e.name);
+    } else if (e is BinaryOpNode) {
+      out = BinaryOpNode(e.op, copy(e.left), copy(e.right));
+    } else if (e is UnaryOpNode) {
+      out = UnaryOpNode(e.op, copy(e.operand));
+    } else if (e is ConvertNode) {
+      out = ConvertNode(e.typeName, copy(e.expr));
+    } else if (e is MemberAccessNode) {
+      out = MemberAccessNode(copy(e.expr), e.member);
+    } else if (e is SizeofNode) {
+      final t = e.target;
+      out = SizeofNode(t is String ? (rename[t] ?? t) : copy(t as AstNode));
+    } else {
+      return e;
+    }
+    return out..loc = e.loc;
   }
 
   // ------------------------------------------------------------ pre-scan

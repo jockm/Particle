@@ -510,41 +510,7 @@ class Parser {
             variadic = dots;
             break;
           }
-          Token? refTok;
-          if (peek().val == 'ref') refTok = consume();
-          final pType = parseType();
-          var pPtr = false;
-          _rejectPointerType(pType);
-          final pTok = peek();
-          final pName = consume('IDENT').val;
-          var isOpenArr = false;
-          var openRank = 0;
-          while (peek().val == '[') {
-            final br = consume('PUNCT', '[');
-            if (peek().val != ']') {
-              throw CompileError("${br.loc}: an array parameter is open: '$pName[]' takes an "
-                  "array of any length, and '$pName[][]' one of two dimensions");
-            }
-            consume('PUNCT', ']');
-            isOpenArr = true;
-            pPtr = true;
-            openRank++;
-          }
-          if (openRank > 3) {
-            throw CompileError("${pTok.loc}: an open array parameter has at most 3 dimensions");
-          }
-          if (refTok != null && openRank > 1) {
-            throw CompileError("${pTok.loc}: an array of references has one dimension: "
-                "'ref $pType $pName[]'");
-          }
-          if (refTok != null && !isOpenArr) {
-            throw CompileError(
-                "${refTok.loc}: a parameter of a user-defined type is already passed by reference; 'ref' is for an array of references, such as 'ref $pType $pName[]'");
-          }
-          params.add(Param(pType, pPtr, pName, isOpenArr)
-            ..loc = pTok.loc
-            ..isRefArray = refTok != null
-            ..openRank = openRank == 0 ? 1 : openRank);
+          params.add(_parseParam());
           if (peek().val == ',') {
             consume();
           } else {
@@ -572,6 +538,45 @@ class Parser {
     } else {
       return _finishVarDecl(tName, isPtr, name, isConst, isVolatile);
     }
+  }
+
+  /// One parameter: `[ref] Type name[[]...]`.
+  Param _parseParam() {
+    Token? refTok;
+    if (peek().val == 'ref') refTok = consume();
+    final pType = parseType();
+    var pPtr = false;
+    _rejectPointerType(pType);
+    final pTok = peek();
+    final pName = consume('IDENT').val;
+    var isOpenArr = false;
+    var openRank = 0;
+    while (peek().val == '[') {
+      final br = consume('PUNCT', '[');
+      if (peek().val != ']') {
+        throw CompileError("${br.loc}: an array parameter is open: '$pName[]' takes an "
+            "array of any length, and '$pName[][]' one of two dimensions");
+      }
+      consume('PUNCT', ']');
+      isOpenArr = true;
+      pPtr = true;
+      openRank++;
+    }
+    if (openRank > 3) {
+      throw CompileError("${pTok.loc}: an open array parameter has at most 3 dimensions");
+    }
+    if (refTok != null && openRank > 1) {
+      throw CompileError("${pTok.loc}: an array of references has one dimension: "
+          "'ref $pType $pName[]'");
+    }
+    if (refTok != null && !isOpenArr) {
+      throw CompileError(
+          "${refTok.loc}: a parameter of a user-defined type is already passed by reference; 'ref' is for an array of references, such as 'ref $pType $pName[]'");
+    }
+    return Param(pType, pPtr, pName, isOpenArr)
+      ..loc = pTok.loc
+      ..isRefArray = refTok != null
+      ..openRank = openRank == 0 ? 1 : openRank;
   }
 
   /// Parses the rest of a variable declaration after its type and name:
@@ -1364,6 +1369,35 @@ class Parser {
       consume();
       final raw = decodeEscapes(tok.val.substring(1, tok.val.length - 1));
       return StringLitNode(raw);
+    }
+    // fn [name](params) [-> Ret] { body }: a lambda
+    if (tok.val == 'fn' &&
+        pos + 1 < tokens.length &&
+        (ahead(1).val == '(' || (ahead(1).type == 'IDENT' && ahead(2).val == '('))) {
+      consume();
+      final nameTok = peek().type == 'IDENT' ? consume() : null;
+      consume('PUNCT', '(');
+      final params = <Param>[];
+      if (peek().val == 'void' && ahead(1).val == ')') consume();
+      while (peek().val != ')') {
+        params.add(_parseParam());
+        if (peek().val != ',') break;
+        consume();
+      }
+      consume('PUNCT', ')');
+      Object retT = 'void';
+      if (peek().val == '->') {
+        consume('OP_ARROW', '->');
+        final t = parseType();
+        _rejectPointerType(t);
+        retT = t;
+      }
+      if (peek().val != '{') {
+        throw CompileError("${peek().loc}: a lambda's body is a block: "
+            "fn${nameTok != null ? ' ${nameTok.val}' : ''}(...) -> T { ... }");
+      }
+      final body = parseBlock();
+      return LambdaNode(nameTok?.val, params, retT, body)..loc = tok.loc;
     }
     // T(x): a conversion to a scalar type (or an alias of one)
     if (pos + 1 < tokens.length &&

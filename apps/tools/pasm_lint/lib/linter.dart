@@ -902,6 +902,11 @@ bool _isMem(String op) => op.startsWith("(") && op.endsWith(")");
       continue;
     }
     if (!_isR14(op)) continue;
+    if (k == 1 && mnem == "JMP") {
+      // JMP Rr, Rl: the link register is only written
+      writes = true;
+      continue;
+    }
     if (k == 0) {
       // A destination that is only written
       final pureWrite = const {"LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||

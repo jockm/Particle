@@ -11,6 +11,11 @@ commands below from the repository root unless a step says otherwise.
 - **Visual Studio Code** to install and use the extensions.
 - **Python 3.8 or later** for Python-based project tools and test scripts.
 - **Git** to clone the repository.
+- **clang** (LLVM 15 or later), only to build Action programs for your own
+  computer with the LLVM compiler (see [Building for your computer](#building-for-your-computer-llvm)).
+  On macOS it comes with the Xcode Command Line Tools
+  (`xcode-select --install`); on Linux, install your distribution's `clang`
+  package.
 
 Check that the commands are available in your shell:
 
@@ -20,6 +25,7 @@ node --version
 npm --version
 python3 --version
 code --version
+clang --version      # only for the LLVM compiler
 ```
 
 On macOS, if `code` is not found, open VS Code's Command Palette and run
@@ -60,7 +66,8 @@ make tools
 
 This builds the Action compiler, assembler, simulator, assembly linter, and
 both language servers. Their Dart dependencies are fetched by the Makefile as
-part of the builds.
+part of the builds (the first build needs internet access for that). The
+Action compiler for LLVM is built separately, with `make llvm-tools`.
 
 ## Build project applications
 
@@ -115,7 +122,9 @@ make compiler-tests
 This builds the required Action and Particle tools, runs the Action compiler
 unit tests and Action language-server tests, then builds and simulates the
 Action compiler test programs, including negative and semantic diagnostic
-checks.
+checks (the last of which, `apps/tools/test_tuple_diagnostics.py`, needs
+Python). Test programs marked `// Target: llvm`, such as the floating-point
+test, use what only the LLVM compiler has and are skipped.
 
 ### Assembly linter tests
 
@@ -134,8 +143,27 @@ If you are working on the LLVM version of Action, run:
 make llvm-tests
 ```
 
-This builds Action test programs for the host and runs them. Particle-only
-tests are skipped.
+This builds the LLVM compiler if needed, builds the Action test programs for
+this computer with clang, and runs them. Tests marked `// Target: particle`,
+which need Particle hardware, are skipped.
+
+## Building for your computer (LLVM)
+
+Action programs can also run on the computer you work on (64-bit macOS or
+Linux). `make llvm-tools` builds the LLVM compiler
+(`build/tools/action_llvm`), and the `llbuild` script at the repository root
+compiles and links a program with clang:
+
+```sh
+make llvm-tools
+./llbuild hello.act --run                  # builds build/llvm/hello and runs it
+./llbuild main.act util.act -o build/llvm/app -O2
+./llbuild app.act helpers.c -lm            # with C sources and libraries
+```
+
+The programs have debug information, so `lldb` or `gdb` can step through the
+Action source. See section 2.10 of the Action language guide for the
+options and for what differs from Particle.
 
 ## Useful Makefile commands
 
@@ -144,6 +172,7 @@ Run `make help` to see the available targets. Common ones include:
 | Command | Purpose |
 |---------|---------|
 | `make tools` | Build all command-line tools and both language servers |
+| `make llvm-tools` | Build the Action compiler for LLVM |
 | `make vscode-install` | Build servers and extensions, then install the extensions |
 | `make vscode-ext` | Build the VSIX packages without installing them |
 | `make build` | Build firmware and applications |

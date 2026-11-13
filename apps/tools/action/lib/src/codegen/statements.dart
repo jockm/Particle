@@ -557,10 +557,11 @@ extension _AssignRules on Checker {
         if (expParamsClean.length != actParams.length ||
             !_listEq(expParamsClean, actParams) ||
             expRet != actRet) {
-          final expSig = 'fn(${pyListRepr(expParamsClean)}) -> $expRet';
-          final actSig = 'fn(${pyListRepr(actParams)}) -> $actRet';
-          throw CompileError(
-              "Function signature mismatch: cannot assign '$fnName' ($actSig) to type '$targetType' ($expSig)");
+          String sigText(List<Object> ps, Object? r) =>
+              "fn(${ps.join(', ')})${cleanName(r) == 'void' ? '' : ' -> ${cleanName(r)}'}";
+          throw CompileError('Function signature mismatch: cannot assign '
+              '${_shownFunc(fnName)} (${sigText(actParams, actRet)}) to type '
+              "'$targetType' (${sigText(expParamsClean, expRet)})");
         }
       } else if (fnTypes.containsKey(rhsT)) {
         final a = fnTypes[targetType]!;

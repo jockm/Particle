@@ -165,21 +165,21 @@ extension _CheckWalk on Checker {
       final retTypeInfo = currentFuncRet;
       if (retTypeInfo.$1 is! List) {
         throw CompileError(
-            "Function '$currentFuncName' has scalar return type '${retTypeInfo.$1}', cannot return tuple");
+            "Function ${_shownFunc(currentFuncName)} has scalar return type '${retTypeInfo.$1}', cannot return tuple");
       }
       final retTypes = retTypeInfo.$1 as List;
       if (stmt.exprs.length != retTypes.length) {
         throw CompileError(
-            "Tuple return arity mismatch in '$currentFuncName': expected ${retTypes.length}, got ${stmt.exprs.length}");
+            "Tuple return arity mismatch in ${_shownFunc(currentFuncName)}: expected ${retTypes.length}, got ${stmt.exprs.length}");
       }
       for (var i = 0; i < stmt.exprs.length; i++) {
         final rt = retTypes[i];
         final (Object? rtName, bool rtPtr) = rt is (Object?, bool) ? rt : (rt, false);
         _rejectZeroReference(rtName, rtPtr, stmt.exprs[i],
-            _zeroResultMessage("result ${i + 1} of '$currentFuncName'", rtName, rtPtr));
-        _checkResultKind(stmt.exprs[i], rtName, rtPtr, "result ${i + 1} of '$currentFuncName'");
+            _zeroResultMessage("result ${i + 1} of ${_shownFunc(currentFuncName)}", rtName, rtPtr));
+        _checkResultKind(stmt.exprs[i], rtName, rtPtr, "result ${i + 1} of ${_shownFunc(currentFuncName)}");
         _checkConstFits(stmt.exprs[i], rtName, rtPtr,
-            "return value ${i + 1} of '$currentFuncName'");
+            "return value ${i + 1} of ${_shownFunc(currentFuncName)}");
       }
       for (final e in stmt.exprs) {
         _checkExpr(e);
@@ -196,21 +196,21 @@ extension _CheckWalk on Checker {
       final retTypeInfo = currentFuncRet;
       if (retTypeInfo.$1 is List) {
         throw CompileError(
-            "Function '$currentFuncName' declared with tuple return of arity ${(retTypeInfo.$1 as List).length}, cannot return scalar or void");
+            "Function ${_shownFunc(currentFuncName)} declared with tuple return of arity ${(retTypeInfo.$1 as List).length}, cannot return scalar or void");
       }
       if (currentFuncIsTask && _inlineDepth == 0) {
         if (stmt.expr != null) {
           throw CompileError(
-              "task '$currentFuncName' cannot return a value; 'return;' ends the task");
+              "task ${_shownFunc(currentFuncName)} cannot return a value; 'return;' ends the task");
         }
         return;
       }
       if (stmt.expr != null) {
         _rejectZeroReference(retTypeInfo.$1, retTypeInfo.$2, stmt.expr!,
-            _zeroResultMessage("the result of '$currentFuncName'", retTypeInfo.$1, retTypeInfo.$2));
-        _checkResultKind(stmt.expr!, retTypeInfo.$1, retTypeInfo.$2, "the result of '$currentFuncName'");
+            _zeroResultMessage("the result of ${_shownFunc(currentFuncName)}", retTypeInfo.$1, retTypeInfo.$2));
+        _checkResultKind(stmt.expr!, retTypeInfo.$1, retTypeInfo.$2, "the result of ${_shownFunc(currentFuncName)}");
         _checkConstFits(stmt.expr, retTypeInfo.$1, retTypeInfo.$2,
-            "return value of '$currentFuncName'");
+            "return value of ${_shownFunc(currentFuncName)}");
         _checkExpr(stmt.expr!);
       }
     } else if (stmt is IfNode) {
