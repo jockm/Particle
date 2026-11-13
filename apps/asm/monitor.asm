@@ -96,52 +96,61 @@ _cmd_prompt_loop:
     LD      R14, 0x64
     LD      R3, R1
     SUB     R3, R14
-    LOAD32  R2, _cmd_dump
-    FBRA.Z  R3, _exec_cmd
+    FBRA.NZ R3, ._chk_w
+    LOAD32  R14, _cmd_dump
+    JMP     R14, R0
 
+._chk_w:
     ; Check 'w' (Write Memory Word)
     LD      R14, 0x77
     LD      R3, R1
     SUB     R3, R14
-    LOAD32  R2, _cmd_write
-    FBRA.Z  R3, _exec_cmd
+    FBRA.NZ R3, ._chk_g
+    LOAD32  R14, _cmd_write
+    JMP     R14, R0
 
+._chk_g:
     ; Check 'g' (Go / Run Address)
     LD      R14, 0x67
     LD      R3, R1
     SUB     R3, R14
-    LOAD32  R2, _cmd_go
-    FBRA.Z  R3, _exec_cmd
+    FBRA.NZ R3, ._chk_r
+    LOAD32  R14, _cmd_go
+    JMP     R14, R0
 
+._chk_r:
     ; Check 'r' (Display Registers)
     LD      R14, 0x72
     LD      R3, R1
     SUB     R3, R14
-    LOAD32  R2, _cmd_regs_entry
-    FBRA.Z  R3, _exec_cmd
+    FBRA.NZ R3, ._chk_b
+    LOAD32  R14, _cmd_regs_entry
+    JMP     R14, R0
 
+._chk_b:
     ; Check 'b' (Configure Aux UART Baud Divisor via MMIO)
     LD      R14, 0x62
     LD      R3, R1
     SUB     R3, R14
-    LOAD32  R2, _cmd_baud
-    FBRA.Z  R3, _exec_cmd
+    FBRA.NZ R3, ._chk_t
+    LOAD32  R14, _cmd_baud
+    JMP     R14, R0
 
+._chk_t:
     ; Check 't' (Transmit Test Byte on Aux UART FIFO 1)
     LD      R14, 0x74
     LD      R3, R1
     SUB     R3, R14
-    LOAD32  R2, _cmd_tx_aux
-    FBRA.Z  R3, _exec_cmd
+    FBRA.NZ R3, ._chk_unk
+    LOAD32  R14, _cmd_tx_aux
+    JMP     R14, R0
 
+._chk_unk:
     ; Unknown command
     LOAD32  R1, _str_unknown
     RCALL   _con_putstr
     LOAD32  R14, _cmd_prompt_loop
     JMP     R14, R0
-
-_exec_cmd:
-    JMP     R2, R0
 
 ; ------------------------------------------------------------------------------
 ; Command: Dump Memory (D <hex_addr> <count>)
@@ -180,7 +189,8 @@ _dump_word_loop:
     SUB     R6, 1
     SUB     R8, 1
     FBRA.Z  R6, _dump_row_done
-    BBRA.NZ R8, _dump_word_loop
+    FBRA.Z  R8, _dump_row_done
+    BBRA    _dump_word_loop
 
 _dump_row_done:
     LOAD32  R1, _str_newline
@@ -270,8 +280,10 @@ _cmd_registers:
     ADD     R6, 1
     LOAD16  R7, 13
     SUB     R7, R6
-    BBRA.NZ R7, ._reg_dump_loop
+    FBRA.Z  R7, ._reg_dump_done
+    BBRA    ._reg_dump_loop
 
+._reg_dump_done:
     POP32   R14
     RRET
 
@@ -467,16 +479,19 @@ _con_read_hex:
     SHIFTL  R2, 3               ; R2 = 0x20 (' ')
     LD      R3, R1
     SUB     R3, R2
-    FBRA.Z  R3, ._read_hex_done
+    FBRA.Z  R3, ._read_hex_delim
     LD      R2, 0x0A
     LD      R3, R1
     SUB     R3, R2
-    FBRA.Z  R3, ._read_hex_done
+    FBRA.Z  R3, ._read_hex_delim
     LD      R2, 0x0D
     LD      R3, R1
     SUB     R3, R2
-    FBRA.Z  R3, ._read_hex_done
+    FBRA.NZ R3, ._parse_nibble
+._read_hex_delim:
+    FBRA    ._read_hex_done
 
+._parse_nibble:
     ; Parse hex nibble
     LOAD16  R2, 0x39            ; '9'
     SLT     R2, R1
