@@ -142,9 +142,11 @@ test-particle: setup
 	@echo "==> Running Particle single-core ROHD tests..."
 	@cd $(ROHD_DIR) && $(DART) test
 
-test-parcore: setup
+test-parcore: setup firmware guest-tests
+	@echo "==> Running Parcore unit tests..."
+	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
-	@cd $(PARCORE_DIR) && ./test_pipeline.sh
+	@(cd $(PARCORE_DIR) && ./test_pipeline.sh)
 
 # Run instruction-level simulation tests with $(PSIM) (build/tools/psim).
 test-sim: $(BUILD_DIR)/branch_suite.bin
@@ -492,13 +494,18 @@ $(BUILD_DIR)/tools/psim: apps/tools/psim/bin/main.dart apps/tools/psim/lib/core.
 	$(DART) compile exe apps/tools/psim/bin/main.dart -o $(BUILD_DIR)/tools/psim
 
 # --- Guest RV32 Test Program Targets ---
-GUEST_GEN_DIR := apps/asm/gen
-GUEST_TEST_BIN := build/guest_rv32_test.bin
+GUEST_GEN_DIR   := apps/asm/gen
+GUEST_GEN_SRCS  := $(wildcard $(GUEST_GEN_DIR)/gen_guest_rv32*.py)
+GUEST_TEST_BINS := $(BUILD_DIR)/guest_rv32_test.bin \
+                   $(BUILD_DIR)/guest_rv32_branch.bin \
+                   $(BUILD_DIR)/guest_rv32_mem_test.bin \
+                   $(BUILD_DIR)/guest_rv32_mul_test.bin \
+                   $(BUILD_DIR)/guest_rv32_signed_div.bin
 
-$(GUEST_TEST_BIN): $(GUEST_GEN_DIR)/gen_guest_rv32.py
-	mkdir -p build
-	python3 $(GUEST_GEN_DIR)/gen_guest_rv32.py
+$(GUEST_TEST_BINS): $(GUEST_GEN_SRCS)
+	@mkdir -p $(BUILD_DIR)
+	@for s in $(GUEST_GEN_SRCS); do $(PYTHON) "$$s"; done
 
-guest-tests: $(GUEST_TEST_BIN)
+guest-tests: $(GUEST_TEST_BINS)
 
 .PHONY: guest-tests

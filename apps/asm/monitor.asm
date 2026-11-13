@@ -150,9 +150,10 @@ _cmd_dump:
     AND     R5, R7
 
 _dump_line_loop:
-    LD      R0, R6
+    FBRA.NZ R6, ._dump_line_go
     LOAD32  R14, _cmd_prompt_loop
-    BGET    R0, 0               ; Exit if count == 0
+    JMP     R14, R0             ; Exit if count == 0
+._dump_line_go:
 
     ; Print address prefix
     LD      R1, R5
@@ -171,12 +172,8 @@ _dump_word_loop:
 
     SUB     R6, 1
     SUB     R8, 1
-    LD      R0, R6
-    LOAD32  R14, _dump_row_done
-    BGET    R0, 0
-    LD      R0, R8
-    LOAD32  R14, _dump_word_loop
-    BGET    R0, 0
+    FBRA.Z  R6, _dump_row_done
+    BBRA.NZ R8, _dump_word_loop
 
 _dump_row_done:
     LOAD32  R1, _str_newline
@@ -369,9 +366,7 @@ _con_putstr:
     LD      R3, R1
 _putstr_loop:
     LD8     R1, (R3++)
-    LD      R0, R1
-    LOAD32  R14, _putstr_done
-    BGET    R0, 0
+    FBRA.Z  R1, _putstr_done
     PUSH32  R3
     RCALL   _con_putchar
     POP32   R3
@@ -406,9 +401,14 @@ _hex_alpha:
 _hex_emit:
     RCALL   _con_putchar
     SUB     R4, 4
-    LD      R0, R4
+    LOAD16  R2, 0
+    SSLT    R2, R4
+    FBRA.Z  R4, ._hex_continue
+    FBRA.Z  R2, ._hex_done
+._hex_continue:
     LOAD32  R14, _hex_loop
-    BGET    R0, 0
+    JMP     R14, R0
+._hex_done:
     POP32   R1
     POP32   R14
     RRET
