@@ -164,10 +164,10 @@ extension _LlvmStatements on LlvmGen {
       final endB = _newBlock('for.end');
       final vt = typeOf(stmt.varName);
       _store(_slots[stmt.varName]!, _expr(stmt.startExpr), vt.name, false);
-      _store(_slots['${stmt.varName}__end']!, _expr(stmt.endExpr), 'u32', false);
+      _store(_slots[loopEndName(stmt.varName)]!, _expr(stmt.endExpr), 'u32', false);
       _startBlock(head);
       final i = _load(_slots[stmt.varName]!, vt.name, false);
-      final end = _load(_slots['${stmt.varName}__end']!, 'u32', false);
+      final end = _load(_slots[loopEndName(stmt.varName)]!, 'u32', false);
       final ty = i.ty == 'i64' ? 'i64' : 'i32';
       final signed = _isSignedName(cleanName(stmt.varType));
       final c = _val('icmp ${signed ? 'slt' : 'ult'} $ty ${_conv(i, ty).v}, ${_conv(end, ty).v}');

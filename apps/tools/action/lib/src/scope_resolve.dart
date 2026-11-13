@@ -37,14 +37,19 @@ String sourceName(String name) =>
 void resolveBlockScopes(ProgramNode root, Set<String> globalVars, Set<String> globalNames) {
   final hoisted = <AstNode>[];
   _lambdaNames.clear();
+  // A lambda's name must not be one a function already has: a method
+  // (`Point.move`) or a function made from an earlier lambda
+  for (final d in root.decls) {
+    if (d is FuncDeclNode) _lambdaNames.add(d.name);
+  }
   for (final d in root.decls) {
     if (d is FuncDeclNode && d.body != null && d.scopes == null) {
       _FunctionScopes(d, globalVars, globalNames, hoisted).run();
     } else if (d is VarDeclNode) {
       final lambda = _findLambda(d.initExpr) ?? _findLambda(d.initList);
       if (lambda != null) {
-        throw CompileError("global '${d.name}': a global starts with a constant value, so it is "
-                'given a function (or lambda) in code, not in its declaration')
+        throw CompileError("global '${d.name}': a lambda cannot be a global's starting value; "
+                'declare it as a function and start the global with its name')
             .at(lambda.loc ?? d.loc);
       }
     }

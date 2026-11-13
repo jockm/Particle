@@ -908,7 +908,7 @@ The generated assembly is organized as follows:
    - vectors 1–15 (`_vector_mbox`, then `_vector_2` … `_vector_15`): each is `FAST_ENTER_TRAP`, then `RCALL` of the trap handler if one is declared, then `FAST_EXIT_TRAP`
 
    Every vector is emitted, so no trap can land in the middle of code. The program's code starts at `0x500`.
-3. One block per function, with label `_name`. Methods use the label `_Type_method`.
+3. One block per function, with label `_name`. Methods use the label `_Type.method`, and lambdas `_outer.name` (such as `_main.pow`).
 4. **Global variable section**: one label `_name` per global, each a whole number of words.
 5. **String literal table**: `.asciz` entries.
 6. `.include "lib/alloc.asm"` for the heap runtime.
@@ -954,7 +954,7 @@ You need this when you write `asm(...)` blocks or link to hand-written assembly.
 - Scalars are passed by value. Instances of user-defined types are passed by **address**. An open array takes **two** slots: data address, then length. A method's receiver (`this`) takes the first slot.
 - **Slots 1–4** go in R1–R4. **Slots 5 and up** go on the stack: before evaluating the arguments, the caller reserves 4 bytes per extra slot below its stack pointer, with slot 5 at the lowest address, and releases the area after the call. The callee finds slot 5 just above its saved return address.
 - **No registers are preserved across calls.** Assume R1–R14 are clobbered.
-- Labels: functions and globals are `_name`. Methods are `_Type_method`, so a free function named `Point_move` would collide with method `Point.move`.
+- Labels: functions and globals are `_name`. Methods are `_Type.method` and lambdas `_outer.name`. A name in Action cannot contain `.`, so these never collide with a function's own name: a function may be called `Point_move` alongside the method `Point.move`.
 - **Trap handlers** are called from their vector after `FAST_ENTER_TRAP` swaps R1–R14 with the shadow registers, so the interrupted code's registers are untouched.
 
 Inline assembly is copied verbatim into the output, one instruction per line:
@@ -1052,6 +1052,10 @@ Every error is printed as `action: error: …`. A message about the program star
 | `Maximum 4 scalar return values supported` | A tuple has more than four elements. |
 | `Tuple return arity mismatch` | `return (…)` has the wrong number of values. |
 | `The initializer of global variable '…' must be a constant expression` | A global was initialized from a non-constant. |
+| `'…' is a function value; a global starts with the name of a function, or empty` | A global (or an element or field of one) of function type was given something other than a function's name. |
+| `type '…' is not declared` | A variable, parameter, result, field or function type uses a type that does not exist; declare it, or import the file that does. |
+| `'len' is not a method: the length is 'x.len', without parentheses` | `x.len()` was written for an array's or string's length. |
+| `method '…' of '…' is not declared` | A method call on a type that has no such method (for a string, no string function of that name; see [1.5](#15-arrays-and-strings)). Arrays and numbers have no methods. |
 | `global array '…' is given its values in braces` | A global array was given something other than a brace initializer (or, for a string, a string literal). |
 | `Redefinition of function 'f' in …` | `f` is defined in two source files. |
 | `Imported file '…' not found` | No search location contains the file. |
@@ -1279,7 +1283,7 @@ The compilers themselves (`build/tools/action` and `action_llvm`) do not define 
 
 **Comments:** `// to end of line` and `/* block */`. Block comments do not nest. A line `//act:build …` before the first declaration is a build directive, not a comment (see [2.11](#211-code-for-both-targets)).
 
-**Identifiers:** a letter or `_`, followed by letters, digits or `_`. Identifiers are case-sensitive. A lone `_` is the wildcard in tuple assignment.
+**Identifiers:** a letter or `_`, followed by letters, digits or `_`. Identifiers are case-sensitive. A lone `_` is the wildcard in tuple assignment. Every identifier is available to the program: the names the compiler makes for itself (such as the hidden length of an open array) contain characters an identifier cannot, so they never clash with a program's names.
 
 **Integer literals:**
 - Decimal: `0`, `42`, `65535`
@@ -1417,7 +1421,7 @@ ref Type name[D];              // array of references (see 3.9)
 
 - Array dimensions and `@` addresses are **constant expressions**: literals, `const` and `enum` names, `sizeof`, and operators over them.
 - **Locals** are allocated in the function's stack frame, which is zero-filled each time the function is entered. A local declared without a value is zero; one declared in an inner block is cleared each time its declaration runs (so it is zero on every pass of a loop). Blocks side by side never run at the same time, so their locals share the same words of the frame.
-- **Globals** are emitted after the code. A global scalar may have a **constant-expression** initializer, a global string buffer a string literal (`string msg[16] = "hello";`), and a global array or record a brace initializer whose values are constants. Anything not given a value starts zero. A global of a user-defined type is stored in the data section, unless it is a reference.
+- **Globals** are emitted after the code. A global scalar may have a **constant-expression** initializer, a global string buffer a string literal (`string msg[16] = "hello";`), and a global array or record a brace initializer whose values are constants. A global, element or field of function type starts with the name of a function of that type (`Op handler = reset;`, `const Op table[2] = { start, stop };`), or empty. Anything not given a value starts zero. A global of a user-defined type is stored in the data section, unless it is a reference.
 - `ref Type name;` declares a reference that starts **empty**; `Type name = 0;` is an error (there is no null).
 - **Bound variables** (`@`) allocate no storage. Every access goes to the given address. Bound variables can be declared at the top level or inside functions.
 - `volatile` is accepted before a top-level declaration and has no effect. Accesses to bound variables are never optimized away.
@@ -1435,7 +1439,7 @@ Shape s = {kind: 1, corners: {{x: 1}, {y: 2}}, label: "box"};
 - An array takes a brace list of at most as many values as its first dimension; an array of more dimensions takes one brace list per row. A string row takes a string.
 - A user-defined type stored in place takes `{field: value, ...}`, each field at most once, in any order.
 - Elements and fields not given are zero. In a loop, a local with an initializer starts afresh on every pass.
-- A local's values can be any expressions; a global's must be constants. A global's reference fields cannot be given values (they start empty).
+- A local's values can be any expressions; a global's must be constants, or names of functions for values of function type. A global's reference fields cannot be given values (they start empty).
 - A heap array, a reference and a scalar do not take a brace initializer. A local declared with one must be inside `{ }` (not the whole body of an `if`, `while` or `for`).
 - A heap record is given values in the same way through `create`: `Point.create(x: 1, y: 2)` (see [3.10](#310-heap-allocation-and-ownership)).
 
@@ -1697,7 +1701,7 @@ A lambda is a function value, written where one is expected: given to a variable
 
 - It can use its parameters, its own locals, the globals, the functions, and the constants (but not the variables or parameters) of the function it is written in. Using one of that function's variables is an error: pass it as a parameter. Nothing is captured, and nothing is allocated.
 - The optional name is seen only inside the lambda, so that it can call itself. Outside it, the name is not declared.
-- A lambda written as a statement on its own is an error: it is a value. A global cannot start with a lambda (or any function); give it one in code.
+- A lambda written as a statement on its own is an error: it is a value. A global can start with a function's name, but not with a lambda: declare the lambda as a function instead.
 - Lambdas may be written inside lambdas. A lambda cannot be `inline` or a task.
 - Messages name a lambda `lambda 'pow'`, or `lambda at main.act:12:9` when it has no name. In the debugger and the assembly it is the function `main.pow` or `main.lambda1`, named after the function it is written in.
 
@@ -1722,7 +1726,7 @@ u32 main(ref string args[]) {
 
 `args` is read-only: writing to it, or to one of its strings, is an error. As in C, `args[0]` is the program's name. On Particle there is no command line, so `args.len` is 0. Built with LLVM, `main`'s result is the program's exit status.
 
-**Function values:** a variable of function type `F` can be assigned a function whose parameter types and return type **exactly** match `F`, or a value of the same function type. Assigning a function to a non-function variable, or a non-function to a function variable, is a compile-time error. Calling `v(args)` on a function variable `v` makes an indirect call. Trap handlers cannot be used as function values.
+**Function values:** a variable of function type `F` can be assigned a function whose parameter types and return type **exactly** match `F`, or a value of the same function type. Assigning a function to a non-function variable, or a non-function to a function variable, is a compile-time error. Calling `v(args)` on a function variable `v` makes an indirect call. A global of function type, or a function-typed element or field of a global, can start with a function's name, such as a table of handlers `const Op table[2] = { start, stop };` (see [3.4](#34-declarations)). Trap handlers cannot be used as function values.
 
 ## 3.8 User-defined types
 

@@ -46,10 +46,10 @@ extension _CheckWalk on Checker {
       locals[p.name] = 0;
       if (p.isOpenArr) {
         openArrays.add(p.name);
-        locals['${p.name}__len'] = 0;
+        locals[lenName(p.name)] = 0;
         if (p.openRank > 1) openRanks[p.name] = p.openRank;
         for (var k = 1; k < p.openRank; k++) {
-          locals['${p.name}__len$k'] = 0;
+          locals[lenName(p.name, k)] = 0;
         }
       }
     }
@@ -912,13 +912,13 @@ extension _CheckWalk on Checker {
         !locals.containsKey(baseExpr.name) &&
         !globals.contains(baseExpr.name) &&
         !boundAddrs.containsKey(baseExpr.name)) {
-      if (funcSignatures.containsKey('${baseExpr.name}_$member')) return;
+      if (funcSignatures.containsKey(methodFuncName(baseExpr.name, member))) return;
       throw CompileError("Type '${baseExpr.name}' has no method '$member'");
     }
 
     final (tN, _) = _getExprType(baseExpr);
     final possibleType = cleanName(tN);
-    if (funcSignatures.containsKey('${possibleType}_$member')) {
+    if (funcSignatures.containsKey(methodFuncName(possibleType, member))) {
       final baseName = baseExpr.nodeName ?? 'instance';
       throw CompileError(
           "Cannot extract unbound method reference from instance '$baseName'. "
@@ -1034,7 +1034,7 @@ extension _CheckWalk on Checker {
 
   /// Mirrors [CodeGen._genCall].
   void _checkCall(CallNode expr) {
-    if (expr.name == '__copyFrom') {
+    if (expr.name == copyFromName) {
       _checkCopyFrom(expr);
       return;
     }
@@ -1054,7 +1054,7 @@ extension _CheckWalk on Checker {
       return;
     }
     if (!identical(expr, _statementExpr) && _callReturnsNothing(expr)) {
-      final name = expr.name.replaceFirst('__METHOD__', '');
+      final name = isMethodCall(expr.name) ? methodOfCall(expr.name) : expr.name;
       throw CompileError("'$name' returns nothing, so its call has no value to use");
     }
     if (_trapHandlerNames.contains(expr.name)) {
@@ -1079,12 +1079,13 @@ extension _CheckWalk on Checker {
       throw CompileError(
           "'${expr.name}' returns from the task; use it as a statement, not in an expression");
     }
-    if (expr.name.startsWith('__METHOD__')) {
-      final mName = expr.name.replaceAll('__METHOD__', '');
+    if (isMethodCall(expr.name)) {
+      final mName = methodOfCall(expr.name);
       final rcvNode = expr.args[0];
       final sName = cleanName(_getExprType(rcvNode).$1);
       final (resolved, _) = _resolveMethod(sName, mName);
-      final targetFunc = resolved ?? '${sName}_$mName';
+      final targetFunc = resolved ?? methodFuncName(sName, mName);
+      if (!funcSignatures.containsKey(targetFunc)) _noSuchMethod(rcvNode, sName, mName);
       if (rcvNode is CallNode) {
         _checkExpr(rcvNode);
       } else if (_refField(rcvNode) != null) {
@@ -1230,11 +1231,11 @@ extension _CheckWalk on Checker {
   bool _callReturnsNothing(CallNode call) {
     Object? ret;
     final n = call.name;
-    if (n.startsWith('__METHOD__')) {
+    if (isMethodCall(n)) {
       try {
         final sName = cleanName(_getExprType(call.args[0]).$1);
-        final (resolved, _) = _resolveMethod(sName, n.substring(10));
-        ret = funcSignatures[resolved ?? '${sName}_${n.substring(10)}']?.retType;
+        final (resolved, _) = _resolveMethod(sName, methodOfCall(n));
+        ret = funcSignatures[resolved ?? methodFuncName(sName, methodOfCall(n))]?.retType;
       } on CompileError {
         return false;
       }
@@ -1507,6 +1508,8 @@ extension _CheckWalk on Checker {
             throw CompileError(
                 "The initializer of global variable '${d.name}' must be a constant expression");
           }
+        } else if (fnTypes.containsKey(cleanT) && !d.isPtr && init != null) {
+          _globalFunctionValue(cleanT, init, "global '${d.name}'");
         } else if (init is IntLitNode) {
           _checkConstFits(init, cleanT, d.isPtr, "global variable '${d.name}'");
         } else if (init != null) {
@@ -1515,6 +1518,31 @@ extension _CheckWalk on Checker {
       } on CompileError catch (e) {
         throw e.at(d.loc);
       }
+    }
+  }
+
+  /// The error for `x.name(...)` when [sName] has no method [mName].
+  Never _noSuchMethod(AstNode rcv, String sName, String mName) {
+    final kind = _kindOf(rcv);
+    final shown = rcv is VarAccessNode ? sourceName(rcv.name) : null;
+    if (mName == 'len' && (kind == _Kind.array || kind == _Kind.string)) {
+      throw CompileError("'len' is not a method: the length is "
+          "'${shown ?? 'x'}.len', without parentheses");
+    }
+    switch (kind) {
+      case _Kind.array:
+        throw CompileError("arrays have no method '$mName'");
+      case _Kind.string:
+        final helper = 'string${mName[0].toUpperCase()}${mName.substring(1)}';
+        throw CompileError("string method '$mName' is not declared; "
+            "a string's methods are the string functions, so "
+            "s.$mName(...) calls $helper(s, ...)");
+      case _Kind.record:
+      case _Kind.reference:
+        throw CompileError("method '$mName' of '$sName' is not declared; "
+            "a method is declared as 'T $sName.$mName(...)'");
+      default:
+        throw CompileError("a '$sName' value has no methods");
     }
   }
 }

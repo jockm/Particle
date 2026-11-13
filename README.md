@@ -28,23 +28,31 @@ particle/
 │   ├── hdl_architecture.md            # Pure ROHD datapath, memory & execution model
 │   ├── configuration_guide.md         # CpuConfig parameters and synthesis flow
 │   └── memory_map_and_conventions.md  # Vector layout, ABI, and calling conventions
+├── Makefile                           # Build, test and tool targets ('make help')
+├── action.json                        # Project file for the Action language server
+├── pbuild                             # Build (and run) a Particle program in one step
+├── llbuild                            # Build (and run) an Action program for this computer
 ├── hdl/
-│   └── rohd/                          # Hardware description workspace
-│       ├── pubspec.yaml               # Dart package configuration (rohd, test)
-│       ├── Makefile                   # Test execution & synthesis generation targets
-│       ├── bin/generate.dart          # Synthesizable SystemVerilog generator
-│       ├── lib/                       # ROHD module implementations
-│       └── test/                      # Unit & integration hardware testbenches
+│   ├── particle/                      # Particle core in ROHD (lib, test, bin/generate.dart)
+│   └── parcore/                       # Multi-core Parcore fabric in ROHD
+├── firmware/
+│   └── parcore/                       # Parcore pipeline microkernels (assembly)
 ├── lib/
 │   ├── common.inc                     # Architectural macros, vector defines & tiered loads
-│   └── particle_runtime.asm           # Direct stride vector table & cold-boot entry
-├── tools/
-│   ├── pasm.py                        # Two-pass macro assembler
-│   ├── psim.py                        # Instruction-accurate simulator & p4db
-│   └── act16c.py                      # Action systems compiler
-└── apps/
-    ├── asm/                           # Assembly validation suites
-    └── Action/                         # Action application sources
+│   ├── particle_runtime.asm           # Direct stride vector table & cold-boot entry
+│   ├── alloc.asm                      # Heap allocator
+│   └── *.act                          # Action libraries (strings, protokernel, ...)
+├── apps/
+│   ├── asm/                           # Assembly validation suites
+│   ├── act/                           # Action programs and the compiler's test programs
+│   └── tools/                         # The toolchain, in Dart (built into build/tools)
+│       ├── action/                    # Action compiler (action, action_llvm)
+│       ├── action_lsp/                # Action language server
+│       ├── pasm/, pasm_lint/          # Assembler and assembly linter
+│       ├── pasm_lsp/                  # Assembly language server
+│       ├── psim/                      # Instruction-accurate simulator & p4db
+│       └── vscode/                    # VS Code extensions for Action and Particle assembly
+└── tools/                             # The original Python tools (act16c.py, pasm.py, psim.py)
 ```
 
 ---
@@ -55,26 +63,33 @@ For complete setup instructions, VS Code installation, and test commands, see
 [Getting Started](GettingStarted.md).
 
 ### Prerequisites
-* **Dart SDK** `>= 3.0.0 < 4.0.0` with `rohd: ^0.5.0`
-* **Python** `>= 3.8`
+* **Dart SDK** `>= 3.0.0 < 4.0.0` (the hardware uses `rohd: ^0.5.0`)
+* **clang** (LLVM 15 or later), only to build Action programs for your computer
 
-### 1. Compile Action Programs
+### 1. Build the Tools
 ```bash
-python3 tools/act16c.py apps/act/streaming_demo.act -o apps/asm/streaming_demo.asm
+make tools                             # compiler, assembler, linter, simulator, language servers
 ```
 
-### 2. Assemble to Binary or Hex
+### 2. Build and Run an Action Program
 ```bash
-python3 tools/pasm.py apps/asm/comprehensive_test.asm -I lib -o build/test.bin --format bin
+./pbuild apps/act/helloworld.act -o build/helloworld.bin --sim
 ```
 
-### 3. Simulate & Debug
-```bash
-# Run simulator
-python3 tools/psim.py build/test.bin
+`pbuild` compiles, lints, assembles and, with `--sim`, runs the program in the
+simulator; `--debug` runs it under the p4db debugger instead. The tools can
+also be run one at a time:
 
-# Run interactive debugger (p4db)
-python3 tools/psim.py build/test.bin -d
+```bash
+build/tools/action apps/act/helloworld.act -o build/helloworld.asm
+build/tools/pasm build/helloworld.asm -I lib -o build/helloworld.bin --format bin
+build/tools/psim build/helloworld.bin          # add -d for the p4db debugger
+```
+
+### 3. Run the Tests
+```bash
+make compiler-tests                    # Action compiler, language server and test programs
+make test                              # hardware and simulator tests
 ```
 
 ### 4. Build Action Programs for Your Computer (LLVM)
@@ -85,7 +100,7 @@ It needs clang (LLVM 15 or later).
 
 ```bash
 make llvm-tools                        # builds build/tools/action_llvm
-./llbuild myprogram.act --run          # compile, link with clang, and run
+./llbuild apps/act/helloworld_llvm.act --run   # compile, link with clang, and run
 make llvm-tests                        # run the Action test programs natively
 ```
 

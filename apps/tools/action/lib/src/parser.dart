@@ -483,7 +483,7 @@ class Parser {
       final methodName = consume('IDENT').val;
       final boundType = _resolveAlias(name);
       boundStruct = boundType;
-      name = '${boundType}_$methodName';
+      name = methodFuncName(boundType, methodName);
     }
 
     if (peek().val == '(') {
@@ -1194,7 +1194,7 @@ class Parser {
               }
               node = HeapAllocNode(rcvName, values, paths)..loc = openTok.loc;
             } else {
-              node = CallNode('__METHOD__$member', [node, ...args]);
+              node = CallNode(methodCallName(member), [node, ...args]);
             }
           } else if (member == 'createArray') {
             if (rcvName == null) {
@@ -1226,7 +1226,7 @@ class Parser {
             if (args.length != 1) {
               throw CompileError('copyFrom(source) takes exactly 1 argument, the value to copy');
             }
-            node = CallNode('__copyFrom', [node, args[0]])..loc = openTok.loc;
+            node = CallNode(copyFromName, [node, args[0]])..loc = openTok.loc;
           } else if (member == 'sameAs') {
             if (args.length != 1) {
               throw CompileError('sameAs(other) takes exactly 1 argument, the other reference');
@@ -1238,7 +1238,7 @@ class Parser {
             }
             node = BinaryOpNode('=', node, IntLitNode(0))..isUnset = true;
           } else {
-            node = CallNode('__METHOD__$member', [node, ...args]);
+            node = CallNode(methodCallName(member), [node, ...args]);
           }
         } else {
           node = MemberAccessNode(node, member);

@@ -66,11 +66,11 @@ extension _ReadOnlyParams on Checker {
   /// writes it, or it is called through a function value (unknown).
   bool _calleeWrites(CallNode call, int j) {
     final n = call.name;
-    if (n.startsWith('__METHOD__')) {
+    if (isMethodCall(n)) {
       // The receiver's type is not known here: any method of that name
-      final m = n.substring(10);
+      final m = methodOfCall(n);
       for (final e in _writtenParams.entries) {
-        if (e.key.endsWith('_$m') && e.value.contains(j)) return true;
+        if (e.key.endsWith('.$m') && e.value.contains(j)) return true;
         if (e.key.startsWith('string') &&
             e.key.length > 6 &&
             e.key.substring(6).toLowerCase() == m.toLowerCase() &&

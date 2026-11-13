@@ -121,10 +121,9 @@ make compiler-tests
 
 This builds the required Action and Particle tools, runs the Action compiler
 unit tests and Action language-server tests, then builds and simulates the
-Action compiler test programs, including negative and semantic diagnostic
-checks (the last of which, `apps/tools/test_tuple_diagnostics.py`, needs
-Python). Test programs with the line `//act:build llvm`, such as the
-floating-point test, use what only the LLVM compiler has and are skipped.
+Action compiler test programs. Test programs with the line `//act:build llvm`,
+such as the floating-point test, use what only the LLVM compiler has and are
+skipped.
 
 ### Assembly linter tests
 

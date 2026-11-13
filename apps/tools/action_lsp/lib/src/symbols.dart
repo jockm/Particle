@@ -270,7 +270,7 @@ class ProgramIndex {
     if (isMethod) {
       final t = f.params.first.type;
       container = t;
-      if (name.startsWith('${t}_')) name = name.substring(t.length + 1);
+      if (name.startsWith('$t.')) name = name.substring(t.length + 1);
     }
     final kind = f.body == null
         ? SymKind.prototype

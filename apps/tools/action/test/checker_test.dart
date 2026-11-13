@@ -58,6 +58,46 @@ void main() {
       });
     }
 
+    test('a method that does not exist is an error, on both compilers', () {
+      const cases = {
+        'void f(u32 xs[]) { u32 n = xs.len(); }\nvoid main() { }':
+            "'len' is not a method: the length is 'xs.len', without parentheses",
+        'void main() { string a[8] = "hi"; u32 n = a.len(); }':
+            "'len' is not a method: the length is 'a.len', without parentheses",
+        'void main() { u32 a[4]; a.sort(); }': "arrays have no method 'sort'",
+        'void main() { string a[8] = "hi"; a.shout(); }':
+            "string method 'shout' is not declared; a string's methods are the string functions, "
+                "so s.shout(...) calls stringShout(s, ...)",
+        'type Point { u32 x; }\nvoid main() { Point p; p.nothing(); }':
+            "method 'nothing' of 'Point' is not declared; a method is declared as 'T Point.nothing(...)'",
+        'void main() { u32 x = 3; x.foo(); }': "a 'u32' value has no methods",
+      };
+      for (final c in cases.entries) {
+        expect(checkErrorOf(c.key), contains(c.value));
+        expect(() => checkSource(c.key, target: LlvmTarget()),
+            throwsA(isA<CompileError>().having((e) => e.message, 'message', contains(c.value))));
+      }
+    });
+
+    test('a global of function type starts with a function, of the right type', () {
+      const op = 'type Op = fn(u32) -> u32;\nu32 dbl(u32 x) { return x * 2; }\n';
+      expect(checkErrorOf('${op}Op g = dbl;\nOp t[2] = { dbl };\nvoid main() { }'), isNull);
+      expect(checkErrorOf('${op}u8 f(u8 x) { return x; }\nOp g = f;\nvoid main() { }'),
+          contains("Function signature mismatch: cannot assign 'f' (fn(u8) -> u8) to type 'Op'"));
+      expect(checkErrorOf('${op}Op g = 3;\nvoid main() { }'),
+          contains("global 'g' is a function value; a global starts with the name of a function"));
+      expect(checkErrorOf('${op}Op t[2] = { nothere };\nvoid main() { }'),
+          contains("'t[0]' is a function value"));
+      expect(checkErrorOf('${op}Op g = fn(u32 x) -> u32 { return x; };\nvoid main() { }'),
+          contains("a lambda cannot be a global's starting value"));
+    });
+
+    test('a string variable without a size is an error that says so', () {
+      expect(checkErrorOf('void main() { string msg = "hi"; }'),
+          contains("string 'msg' needs a size, for example 'string msg[32] = ...'; "
+              "for text that never changes use 'const string msg = ...'"));
+    });
+
     test('a branch left out by a constant condition is not checked', () {
       expect(checkErrorOf('void main() { if (0) { u32 v = zz; } }'), isNull);
       expect(checkErrorOf('void main() { if (1) { u32 v = zz; } }'),
@@ -201,7 +241,12 @@ void main() {
 
     test('an unknown field type, and types that contain each other', () {
       expect(checkErrorOf('type S {\n    Point;\n};\nvoid main() { }'),
-          startsWith("2:4: type 'S': 'Point' is not a declared type"));
+          startsWith("2:4: type 'Point' is not declared; declare it with 'type Point { ... }', "
+              "or import the file that does (in field 'Point' of type 'S')"));
+      expect(checkErrorOf('void main() { Foo v; v.x = 1; }'),
+          startsWith("1:14: type 'Foo' is not declared"));
+      expect(checkErrorOf('type F = fn(Foo) -> u32;\nvoid main() { }'),
+          startsWith("1:0: type 'Foo' is not declared"));
       expect(checkErrorOf('type A { B b; };\ntype B { A a; };\nvoid main() { }'),
           startsWith("1:0: types 'A', 'B' contain each other"));
     });
@@ -591,7 +636,7 @@ void main() {
       expect(checkErrorOf('${op}void main() { Op f = fn named(u32 x) -> u32 { if (x > 1) { return x; } }; }'),
           contains("missing return at the end of lambda 'named'"));
       expect(checkErrorOf('${op}Op g = fn(u32 x) -> u32 { return x; };\nvoid main() { }'),
-          contains('a global starts with a constant value'));
+          contains("a lambda cannot be a global's starting value"));
     });
   });
 }

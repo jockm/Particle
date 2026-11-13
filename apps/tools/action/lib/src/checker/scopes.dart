@@ -179,7 +179,7 @@ extension _Scopes on Checker {
         _hideLocalConsts());
     // The caller's names, which the inline body may not use
     _hiddenCallerNames = {..._hiddenCallerNames, ...locals.keys, ...saved.consts.values.keys}
-      ..removeWhere((n) => n.endsWith('__len') || n.endsWith('__end'));
+      ..removeWhere((n) => n.contains(RegExp(r'~(len\d*|end)$')));
     locals = {};
     types = Map.of(global.types);
     arrayDims

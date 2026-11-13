@@ -164,7 +164,7 @@ class _DebugInfo {
     _types[name] = id;
     final members = <String>[];
     for (final e in info.fields.entries) {
-      if (e.key.startsWith('__')) continue;
+      if (e.key.contains('~')) continue;
       final f = e.value;
       final int t;
       final int bytes;

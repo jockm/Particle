@@ -35,7 +35,7 @@ extension _LlvmExpressions on LlvmGen {
     }
     if (expr is ConvertNode) return _genConvert(expr);
     if (expr is IntLitNode) return _const(BigInt.from(expr.val));
-    if (expr is CallNode && expr.name == '__copyFrom') return _genCopyFrom(expr);
+    if (expr is CallNode && expr.name == copyFromName) return _genCopyFrom(expr);
     if (expr is HeapAllocNode) {
       final p = _calloc('i64 ${structSize(cleanName(expr.typeName))}');
       if (expr.args.isNotEmpty) _genCreateValues(expr, p);
@@ -253,7 +253,7 @@ extension _LlvmExpressions on LlvmGen {
       final what = baseName ?? (baseNode is MemberAccessNode ? baseNode.member : 'array');
       if (d == 0 && (isOpen || heap)) {
         _V len = isOpen
-            ? _load(_slots['${baseName}__len']!, 'u32', false)
+            ? _load(_slots[lenName(baseName)]!, 'u32', false)
             : _headerLen(base);
         if (isWrite && isString && !isOpen && !refElems) len = _V(_val('sub i32 ${len.v}, 1'), 'i32');
         _boundsCheck(_V(i64, 'i64'), _conv(len, 'i64'), what);
@@ -284,7 +284,7 @@ extension _LlvmExpressions on LlvmGen {
 
   /// Length [k] of open array parameter [name] (0 is the first dimension).
   _V _openLen(String name, int k) =>
-      _load(_slots[k == 0 ? '${name}__len' : '${name}__len$k']!, 'u32', false);
+      _load(_slots[lenName(name, k)]!, 'u32', false);
 
   /// An element (or row) of an open array parameter with more than one
   /// dimension: the flat index from the lengths passed in, each index
@@ -360,7 +360,7 @@ extension _LlvmExpressions on LlvmGen {
                     !typeOf(baseExpr.name).refElems))) &&
         baseExpr is VarAccessNode &&
         openArrays.contains(baseExpr.name)) {
-      return _load(_slots['${baseExpr.name}__len']!, 'u32', false);
+      return _load(_slots[lenName(baseExpr.name)]!, 'u32', false);
     }
     if (member == 'len' || member == 'capacity') {
       if (baseExpr is ArrayAccessNode && _isRefElement(baseExpr) &&
@@ -433,7 +433,7 @@ extension _LlvmExpressions on LlvmGen {
         !locals.containsKey(baseExpr.name) &&
         !globals.contains(baseExpr.name) &&
         !boundAddrs.containsKey(baseExpr.name)) {
-      return _V(_fnName('${baseExpr.name}_$member'), 'ptr');
+      return _V(_fnName(methodFuncName(baseExpr.name, member)), 'ptr');
     }
     final (tName, _) = _getExprType(baseExpr);
     final f = fieldOf(cleanName(tName), member);
@@ -461,7 +461,7 @@ extension _LlvmExpressions on LlvmGen {
   _V _arrayLen(AstNode baseExpr) {
     final baseName = baseExpr.nodeName ?? '';
     if (baseName.isNotEmpty && openArrays.contains(baseName)) {
-      return _load(_slots['${baseName}__len']!, 'u32', false);
+      return _load(_slots[lenName(baseName)]!, 'u32', false);
     }
     if (baseExpr is MemberAccessNode) {
       final (parentT, _) = _getExprType(baseExpr.expr);
@@ -804,7 +804,7 @@ extension _LlvmExpressions on LlvmGen {
       final argv = _argList(args, sigs);
       return _callResult(ret, 'call $ret ${fp.v}(${argv.join(', ')})', rt, false);
     }
-    if (expr.name.startsWith('__METHOD__')) return _methodCall(expr);
+    if (isMethodCall(expr.name)) return _methodCall(expr);
 
     final isFnVar = locals.containsKey(expr.name) ||
         globals.contains(expr.name) ||
@@ -843,11 +843,11 @@ extension _LlvmExpressions on LlvmGen {
   }
 
   _V _methodCall(CallNode expr) {
-    final mName = expr.name.replaceAll('__METHOD__', '');
+    final mName = methodOfCall(expr.name);
     final rcvNode = expr.args[0];
     final sName = cleanName(_getExprType(rcvNode).$1);
     var (targetFunc, embedOffset) = _resolveMethod(sName, mName);
-    targetFunc ??= '${sName}_$mName';
+    targetFunc ??= methodFuncName(sName, mName);
     String rcv;
     if (rcvNode is CallNode) {
       rcv = _conv(_expr(rcvNode), 'ptr').v;
@@ -864,7 +864,7 @@ extension _LlvmExpressions on LlvmGen {
       final rcvName = rcvNode.nodeName;
       _V len;
       if (rcvName != null && openArrays.contains(rcvName)) {
-        len = _load(_slots['${rcvName}__len']!, 'u32', false);
+        len = _load(_slots[lenName(rcvName)]!, 'u32', false);
       } else if (rcvName != null && arrayDims.containsKey(rcvName)) {
         len = _i32(arrayDims[rcvName]!.last);
       } else {
@@ -1042,7 +1042,7 @@ extension _LlvmExpressions on LlvmGen {
     if (argName != null && openArrays.contains(argName)) {
       return (
         _val('load ptr, ptr ${_slots[argName]}'),
-        _load(_slots['${argName}__len']!, 'u32', false)
+        _load(_slots[lenName(argName)]!, 'u32', false)
       );
     }
     if (argName != null &&

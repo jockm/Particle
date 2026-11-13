@@ -329,6 +329,17 @@ class Checker {
 
     final typeDefs = root.decls.whereType<TypeDefNode>().toList();
     _declaredTypes.addAll(typeDefs.map((t) => t.name));
+    for (final d in root.decls) {
+      if (d is! FnTypeNode) continue;
+      try {
+        for (final p in d.paramTypes) {
+          _validateBackendType(p, "function type '${d.name}'");
+        }
+        _validateBackendType(d.retType, "function type '${d.name}'");
+      } on CompileError catch (e) {
+        throw e.at(d.loc);
+      }
+    }
     _layoutStructs(typeDefs);
     _dataDecls = root.decls.whereType<VarDeclNode>().toList();
     _readOnlyGlobals.addAll([for (final d in _dataDecls) if (d.isReadOnly) d.name]);
@@ -341,13 +352,17 @@ class Checker {
     final rawFuncDecls = root.decls.whereType<FuncDeclNode>().toList();
     for (final f in rawFuncDecls) {
       try {
-        _validateBackendType(f.retType, "return type of function '${f.name}'");
+        _validateBackendType(f.retType, "return type of function '${_displayFuncName(f)}'");
       } on CompileError catch (e) {
         throw e.at(f.loc);
       }
       for (final p in f.params) {
         try {
-          _validateBackendType(p.type, "parameter '${p.name}' of function '${f.name}'");
+          _validateBackendType(
+              p.type,
+              p.name == 'this'
+                  ? "method '${f.name}'"
+                  : "parameter '${p.name}' of function '${_displayFuncName(f)}'");
         } on CompileError catch (e) {
           throw e.at(p.loc ?? f.loc);
         }
@@ -377,7 +392,7 @@ class Checker {
     // A field and a method of one name would make t.f(x) ambiguous
     for (final td in typeDefs) {
       for (final f in td.fields) {
-        if (funcSignatures.containsKey('${td.name}_${f.name}')) {
+        if (funcSignatures.containsKey(methodFuncName(td.name, f.name))) {
           throw CompileError("type '${td.name}' has both a field and a method named '${f.name}'")
               .at(f.loc ?? td.loc);
         }
@@ -522,6 +537,10 @@ class Checker {
     return c is String ? c : '';
   }
 
+  static const _builtinTypeNames = {
+    'u8', 's8', 'u16', 's16', 'u32', 's32', 'u64', 's64', 'bool', 'string', 'f32', 'f64', 'void'
+  };
+
   void _validateBackendType(Object tName, [String context = '']) {
     if (tName is List) {
       for (final sub in tName) {
@@ -530,6 +549,14 @@ class Checker {
       return;
     }
     final clean = cleanName(tName);
+    if (clean.isNotEmpty &&
+        !_builtinTypeNames.contains(clean) &&
+        !_declaredTypes.contains(clean) &&
+        !fnTypes.containsKey(clean)) {
+      final ctxStr = context.isNotEmpty ? ' (in $context)' : '';
+      throw CompileError("type '$clean' is not declared; declare it with 'type $clean { ... }', "
+          'or import the file that does$ctxStr');
+    }
     if ((clean == 'f32' || clean == 'f64') && !target.supportsType(clean)) {
       final ctxStr = context.isNotEmpty ? ' in $context' : '';
       throw CompileError("floating-point type '$clean' is not supported by target backend "
@@ -546,7 +573,7 @@ class Checker {
   }
 
   (String?, int) _resolveMethod(String structName, String methodName) {
-    final direct = '${structName}_$methodName';
+    final direct = methodFuncName(structName, methodName);
     if (funcSignatures.containsKey(direct)) {
       return (direct, 0);
     }
@@ -637,7 +664,7 @@ class Checker {
               embeddedList.add((fType, embedBaseOff));
               fields[fName] = FieldInfo(embedBaseOff, fType, false, null);
               for (final sub in structs[fType]!.fields.entries) {
-                if (sub.key.startsWith('__')) continue;
+                if (sub.key.contains('~')) continue;
                 final sv = sub.value;
                 fields.putIfAbsent(
                     sub.key,
@@ -802,9 +829,7 @@ class Checker {
   String _displayName(FuncDeclNode f) {
     if (f.params.isNotEmpty && f.params.first.name == 'this') {
       final t = '${f.params.first.type}';
-      if (f.name.startsWith('${t}_')) {
-        return '$t.${f.name.substring(t.length + 1)}';
-      }
+      if (f.name.startsWith('$t.')) return f.name;
     }
     return f.name;
   }
@@ -879,7 +904,7 @@ class Checker {
   String _displayFuncName(FuncDeclNode f) {
     if (f.params.isNotEmpty && f.params.first.name == 'this') {
       final t = cleanName(f.params.first.type);
-      if (f.name.startsWith('${t}_')) return '$t.${f.name.substring(t.length + 1)}';
+      if (f.name.startsWith('$t.')) return f.name;
     }
     return f.name;
   }
@@ -1063,8 +1088,8 @@ class Checker {
       final callee = call.args[0];
       return (callee, cleanName(_getExprType(callee).$1), call.args.sublist(1));
     }
-    if (call.name.startsWith('__METHOD__')) {
-      final m = call.name.substring(10);
+    if (isMethodCall(call.name)) {
+      final m = methodOfCall(call.name);
       final Object rcvT;
       try {
         rcvT = _getExprType(call.args[0]).$1;

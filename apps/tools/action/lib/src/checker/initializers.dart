@@ -139,6 +139,10 @@ extension _Initializers on Checker {
       throw CompileError('${_q(what)} is a $ct, so its value is a single value, not a brace list')
           .at(init.loc);
     }
+    if (isGlobal && fnTypes.containsKey(ct)) {
+      _globalFunctionValue(ct, init, _q(what));
+      return;
+    }
     if (isGlobal) {
       final c = _tryConst(init) ?? (_tryFloatConst(init) != null ? _ConstVal(BigInt.zero, null) : null);
       if (c == null) {
@@ -150,15 +154,33 @@ extension _Initializers on Checker {
 
   /// The initial bytes of global [d] ([size] bytes): zero, with the values
   /// of its brace initializer or string literal written in.
-  List<int> _initImage(VarDeclNode d, int size) {
+  /// Checks that [init], the starting value of a global of function type
+  /// [fnType], names a function of that type, and returns the function.
+  String _globalFunctionValue(String fnType, AstNode init, String what) {
+    if (init is! VarAccessNode || !funcSignatures.containsKey(init.name) ||
+        types.containsKey(init.name) || _constInfo(init.name) != null) {
+      throw CompileError('$what is a function value; a global starts with the name of a '
+          "function, or empty (it is then given a function in code)");
+    }
+    _validateFnTypeAssignment(fnType, init, what);
+    return init.name;
+  }
+
+  /// The initial bytes of global [d] ([size] bytes): zero, with the values
+  /// of its brace initializer or string literal written in. A function
+  /// value is not a number the compiler knows: its offset and function are
+  /// added to [funcs], and its bytes are left zero for the code generator
+  /// to replace with the function's address.
+  List<int> _initImage(VarDeclNode d, int size, [Map<int, String>? funcs]) {
     final bytes = List<int>.filled(size, 0, growable: true);
     final dims = d.arrayDims ?? (d.arrayDim != null ? [d.arrayDim!] : <int>[]);
     final init = d.initList ?? d.initExpr;
-    if (init != null) _writeInit(bytes, 0, d.typeName, dims, init);
+    if (init != null) _writeInit(bytes, 0, d.typeName, dims, init, funcs);
     return bytes;
   }
 
-  void _writeInit(List<int> bytes, int at, Object t, List<int> dims, AstNode init) {
+  void _writeInit(List<int> bytes, int at, Object t, List<int> dims, AstNode init,
+      [Map<int, String>? funcs]) {
     final ct = cleanName(t);
     final isString = ct == 'string';
     final rows = isString && dims.isNotEmpty ? dims.sublist(0, dims.length - 1) : dims;
@@ -169,7 +191,7 @@ extension _Initializers on Checker {
         stride *= d;
       }
       for (var i = 0; i < init.elems.length; i++) {
-        _writeInit(bytes, at + i * stride, t, inner, init.elems[i]);
+        _writeInit(bytes, at + i * stride, t, inner, init.elems[i], funcs);
       }
       return;
     }
@@ -191,8 +213,12 @@ extension _Initializers on Checker {
             : fi.dim is int
                 ? [fi.dim as int]
                 : <int>[];
-        _writeInit(bytes, at + fi.offset, fi.type, fdims, v);
+        _writeInit(bytes, at + fi.offset, fi.type, fdims, v, funcs);
       }
+      return;
+    }
+    if (fnTypes.containsKey(ct)) {
+      if (init is VarAccessNode) funcs?[at] = init.name;
       return;
     }
     if (ct == 'f32' || ct == 'f64') {

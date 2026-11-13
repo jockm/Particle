@@ -29,18 +29,22 @@ extension _LlvmFunctions on LlvmGen {
       final align = structs.containsKey(cleanT) && !d.isPtr && !d.isRefArray
           ? structs[cleanT]!.align
           : target.alignOf(elem);
-      text = '$name = internal ${d.isReadOnly ? 'constant' : 'global'} [$size x i8] '
-          '${_dataInit(d, size)}, align $align';
+      final (ty, init) = _dataInit(d, size);
+      text = '$name = internal ${d.isReadOnly ? 'constant' : 'global'} $ty $init, align $align';
       diType = _di.array(_diElement(d.typeName, d.isRefArray), elem, dims);
     } else if (structs.containsKey(cleanT) && !d.isPtr && !_globalRefs.contains(d.name)) {
       final info = structs[cleanT]!;
-      text = '$name = internal global [${info.size} x i8] ${_dataInit(d, info.size)}, align ${info.align}';
+      final (ty, init) = _dataInit(d, info.size);
+      text = '$name = internal global $ty $init, align ${info.align}';
       diType = _di.record(cleanT);
     } else {
       final isRef = d.isPtr || _globalRefs.contains(d.name);
       final st = _storeTy(d.typeName, isRef);
       String init;
-      if (st == 'ptr') {
+      final fnInit = d.initExpr;
+      if (st == 'ptr' && !isRef && fnTypes.containsKey(cleanT) && fnInit is VarAccessNode) {
+        init = _fnName(fnInit.name);
+      } else if (st == 'ptr') {
         init = 'null';
       } else if (d.initExpr == null) {
         init = _zeroOf(st);
@@ -62,21 +66,44 @@ extension _LlvmFunctions on LlvmGen {
     _globalIr.add(text);
   }
 
-  /// The initial contents of global [d] ([size] bytes), as an LLVM constant.
-  String _dataInit(VarDeclNode d, int size) {
+  /// The type and initial contents of global [d] ([size] bytes), as an
+  /// LLVM constant: an array of bytes, or, when it holds function values,
+  /// a packed structure of byte runs and the functions' addresses.
+  (String, String) _dataInit(VarDeclNode d, int size) {
     final hasImage = d.initList != null || d.initExpr is StringLitNode;
-    if (!hasImage) return 'zeroinitializer';
-    final bytes = _initImage(d, size);
-    final b = StringBuffer('c"');
-    for (final x in bytes) {
-      if (x >= 0x20 && x < 0x7F && x != 0x22 && x != 0x5C) {
-        b.writeCharCode(x);
-      } else {
-        b.write('\\${x.toRadixString(16).padLeft(2, '0').toUpperCase()}');
+    if (!hasImage) return ('[$size x i8]', 'zeroinitializer');
+    final funcs = <int, String>{};
+    final bytes = _initImage(d, size, funcs);
+    String run(List<int> part) {
+      final b = StringBuffer('c"');
+      for (final x in part) {
+        if (x >= 0x20 && x < 0x7F && x != 0x22 && x != 0x5C) {
+          b.writeCharCode(x);
+        } else {
+          b.write('\\${x.toRadixString(16).padLeft(2, '0').toUpperCase()}');
+        }
       }
+      b.write('"');
+      return b.toString();
     }
-    b.write('"');
-    return b.toString();
+    if (funcs.isEmpty) return ('[$size x i8]', run(bytes));
+    final types = <String>[];
+    final values = <String>[];
+    var at = 0;
+    for (final off in funcs.keys.toList()..sort()) {
+      if (off > at) {
+        types.add('[${off - at} x i8]');
+        values.add('[${off - at} x i8] ${run(bytes.sublist(at, off))}');
+      }
+      types.add('ptr');
+      values.add('ptr ${_fnName(funcs[off]!)}');
+      at = off + target.pointerSize;
+    }
+    if (at < size) {
+      types.add('[${size - at} x i8]');
+      values.add('[${size - at} x i8] ${run(bytes.sublist(at, size))}');
+    }
+    return ('<{ ${types.join(', ')} }>', '<{ ${values.join(', ')} }>');
   }
 
   /// The debug type of an element of an array of [tName]: for an array of
@@ -201,22 +228,22 @@ extension _LlvmFunctions on LlvmGen {
       argNo++;
       if (p.isOpenArr) {
         openArrays.add(p.name);
-        locals['${p.name}__len'] = 0;
+        locals[lenName(p.name)] = 0;
         if (isMain) {
           // The command line: C's argc and argv
-          sigParams.add('i32 %a.${p.name}__len');
+          sigParams.add('i32 %a.${p.name}.len');
           sigParams.add('ptr %a.${p.name}');
         } else {
           sigParams.add('ptr %a.${p.name}');
-          sigParams.add('i32 %a.${p.name}__len');
+          sigParams.add('i32 %a.${p.name}.len');
         }
         _paramSlot(p.name, 'ptr', '%a.${p.name}', _diParam(p, argNo, path, line));
-        _paramSlot('${p.name}__len', 'i32', '%a.${p.name}__len', null);
+        _paramSlot(lenName(p.name), 'i32', '%a.${p.name}.len', null);
         if (p.openRank > 1) openRanks[p.name] = p.openRank;
         for (var k = 1; k < p.openRank; k++) {
-          locals['${p.name}__len$k'] = 0;
-          sigParams.add('i32 %a.${p.name}__len$k');
-          _paramSlot('${p.name}__len$k', 'i32', '%a.${p.name}__len$k', null);
+          locals[lenName(p.name, k)] = 0;
+          sigParams.add('i32 %a.${p.name}.len$k');
+          _paramSlot(lenName(p.name, k), 'i32', '%a.${p.name}.len$k', null);
         }
       } else {
         final ty = isRef ? 'ptr' : _regTy(p.type, p.isPtr);
@@ -381,7 +408,7 @@ extension _LlvmFunctions on LlvmGen {
             : (d.isPtr ? _di.pointerTo(_di.element(d.typeName, false)) : _di.scalar(d.typeName));
       }
     }
-    if (debugInfo && _scope != null && !d.name.endsWith('__end')) {
+    if (debugInfo && _scope != null && !d.name.endsWith('~end')) {
       final line = _lineCol(d.loc ?? _func?.loc).$1;
       final scope = _diScopeOf(_declScope[d]);
       _declareVar(slot, _di.variable(d.name, scope, path, line, diType!), scope: scope);

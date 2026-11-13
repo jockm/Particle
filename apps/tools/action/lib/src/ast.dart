@@ -321,7 +321,7 @@ class ForRangeNode extends AstNode {
 
   /// The loop variable and its end value as locals, made once.
   late final VarDeclNode loopVar = VarDeclNode(varType, false, varName)..loc = loc;
-  late final VarDeclNode loopEnd = VarDeclNode('u32', false, '${varName}__end')..loc = loc;
+  late final VarDeclNode loopEnd = VarDeclNode('u32', false, loopEndName(varName))..loc = loc;
   ForRangeNode(
       this.varType, this.varName, this.startExpr, this.endExpr, this.body);
 }
@@ -417,7 +417,35 @@ class TrapNode extends AstNode {
 
 /// The name of a [CallNode] that calls a function value computed by an
 /// expression (`t[i](x)`): `args[0]` is the value, the rest its arguments.
-const callValueName = '__CALLVALUE__';
+///
+/// Names the compiler makes up contain `~` or `.`, which a program cannot
+/// write in a name, so they can never clash with the program's own names.
+const callValueName = '~callValue';
+
+/// The name of the [CallNode] for `a.copyFrom(b)`.
+const copyFromName = '~copyFrom';
+
+const _methodCallMark = '~method~';
+
+/// The name of the [CallNode] for a method call `x.name(...)` (the receiver
+/// is `args[0]`), before the method is resolved.
+String methodCallName(String method) => '$_methodCallMark$method';
+
+/// Whether [callName] is a method call made by [methodCallName].
+bool isMethodCall(String callName) => callName.startsWith(_methodCallMark);
+
+/// The method a [methodCallName] call names.
+String methodOfCall(String callName) => callName.substring(_methodCallMark.length);
+
+/// The function that is the method [method] of type [type] (`Point.move`).
+String methodFuncName(String type, String method) => '$type.$method';
+
+/// The hidden variable holding the length of dimension [k] of the open
+/// array parameter [array] (`xs~len`, then `xs~len1`, ...).
+String lenName(String array, [int k = 0]) => k == 0 ? '$array~len' : '$array~len$k';
+
+/// The hidden variable holding the end of the range loop over [loopVar].
+String loopEndName(String loopVar) => '$loopVar~end';
 
 class CallNode extends AstNode {
   String name;

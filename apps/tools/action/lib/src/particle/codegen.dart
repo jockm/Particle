@@ -265,11 +265,17 @@ class CodeGen extends Checker {
           var size = dims == null || dims.isEmpty
               ? structs[cleanT]!.size
               : dims.fold(_getElemSize(d.typeName, false), (a, b) => a * b);
-          final bytes = _initImage(d, size);
+          final funcs = <int, String>{};
+          final bytes = _initImage(d, size, funcs);
           while (bytes.length % 4 != 0) {
             bytes.add(0);
           }
           for (var i = 0; i < bytes.length; i += 4) {
+            final f = funcs[i];
+            if (f != null) {
+              emit('.word   _$f', "Function '${sourceName(f)}'");
+              continue;
+            }
             final w = bytes[i] | bytes[i + 1] << 8 | bytes[i + 2] << 16 | bytes[i + 3] << 24;
             emit('.word   0x${w.toRadixString(16).padLeft(8, '0').toUpperCase()}');
           }
@@ -303,7 +309,9 @@ class CodeGen extends Checker {
             }
             continue;
           }
-          if (init is IntLitNode) {
+          if (fnTypes.containsKey(cleanT) && !d.isPtr && init is VarAccessNode) {
+            emit('.word   _${init.name}', "Function '${sourceName(init.name)}'");
+          } else if (init is IntLitNode) {
             emit('.word   ${init.val}');
           } else if (init != null) {
             emit('.word   ${_evalConstExpr(init)}');
@@ -484,11 +492,11 @@ class CodeGen extends Checker {
         openArrays.add(pName);
         _bindParamSlot(rIdx, pName, "Spill open array ptr '$pName'");
         rIdx++;
-        _bindParamSlot(rIdx, '${pName}__len', "Spill open array len '$pName'");
+        _bindParamSlot(rIdx, lenName(pName), "Spill open array len '$pName'");
         rIdx++;
         if (p.openRank > 1) openRanks[pName] = p.openRank;
         for (var k = 1; k < p.openRank; k++) {
-          _bindParamSlot(rIdx, '${pName}__len$k', "Spill open array len $k of '$pName'");
+          _bindParamSlot(rIdx, lenName(pName, k), "Spill open array len $k of '$pName'");
           rIdx++;
         }
       } else {

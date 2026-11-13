@@ -140,7 +140,7 @@ extension _TypeRules on Checker {
           !locals.containsKey(base.name) &&
           !globals.contains(base.name) &&
           !boundAddrs.containsKey(base.name)) {
-        final mangled = '${base.name}_${expr.member}';
+        final mangled = methodFuncName(base.name, expr.member);
         if (funcSignatures.containsKey(mangled)) {
           return ('fn_$mangled', false);
         }
@@ -149,7 +149,7 @@ extension _TypeRules on Checker {
 
       final (pT, _) = _getExprType(expr.expr);
       final possibleType = cleanName(pT);
-      final mangled = '${possibleType}_${expr.member}';
+      final mangled = methodFuncName(possibleType, expr.member);
       if (funcSignatures.containsKey(mangled)) {
         final baseName = expr.expr.nodeName ?? 'instance';
         throw CompileError(
@@ -193,12 +193,12 @@ extension _TypeRules on Checker {
         return (fn?.$2 ?? 'u32', false);
       }
       String fname;
-      if (expr.name.startsWith('__METHOD__')) {
-        final mName = expr.name.replaceAll('__METHOD__', '');
+      if (isMethodCall(expr.name)) {
+        final mName = methodOfCall(expr.name);
         final (rcvT, _) = _getExprType(expr.args[0]);
         final sName = cleanName(rcvT);
         final (resolved, _) = _resolveMethod(sName, mName);
-        fname = resolved ?? '${sName}_$mName';
+        fname = resolved ?? methodFuncName(sName, mName);
       } else {
         fname = expr.name;
       }

@@ -91,7 +91,7 @@ extension _Expressions on CodeGen {
       if (boundsCheck) {
         final lblInBounds = newLabel('in_bounds');
         if (isOpen && dimIdx == 0) {
-          final lenOff = stackOffset - locals['${baseName}__len']!;
+          final lenOff = stackOffset - locals[lenName(baseName)]!;
           emitImmediate(14, lenOff);
           emit('ADD     R14, R15');
           emit('LD32    R14, (R14)', "Load dynamic length for '$baseName'");
@@ -293,7 +293,7 @@ extension _Expressions on CodeGen {
   /// Loads length [k] of open array parameter [name] (0 is the first
   /// dimension) into [reg].
   void _emitOpenLen(String name, int k, int reg) {
-    final off = stackOffset - locals[k == 0 ? '${name}__len' : '${name}__len$k']!;
+    final off = stackOffset - locals[lenName(name, k)]!;
     emitImmediate(reg, off);
     emit('ADD     R$reg, R15');
     emit('LD32    R$reg, (R$reg)', "Length ${k + 1} of '$name'");
@@ -372,7 +372,7 @@ extension _Expressions on CodeGen {
       _genConvert(expr, targetReg);
       return;
     }
-    if (expr is CallNode && expr.name == '__copyFrom') {
+    if (expr is CallNode && expr.name == copyFromName) {
       _genCopyFrom(expr);
       return;
     }
@@ -820,7 +820,7 @@ extension _Expressions on CodeGen {
                     !typeOf(baseExpr.name).refElems))) &&
         baseExpr is VarAccessNode &&
         openArrays.contains(baseExpr.name)) {
-      final lenOff = stackOffset - locals['${baseExpr.name}__len']!;
+      final lenOff = stackOffset - locals[lenName(baseExpr.name)]!;
       emitImmediate(14, lenOff);
       emit('ADD     R14, R15');
       emit('LD32    R$targetReg, (R14)',
@@ -866,7 +866,7 @@ extension _Expressions on CodeGen {
       final arrName = baseExpr.nodeName ?? '';
       int arrCap;
       if (openArrays.contains(arrName)) {
-        final lenOff = stackOffset - locals['${arrName}__len']!;
+        final lenOff = stackOffset - locals[lenName(arrName)]!;
         emitImmediate(14, lenOff);
         emit('ADD     R14, R15');
         emit('LD32    R$targetReg, (R14)', "Dynamic .capacity for open array '$arrName'");
@@ -908,7 +908,7 @@ extension _Expressions on CodeGen {
       if (baseExpr is VarAccessNode) {
         final arrName2 = baseExpr.name;
         if (openArrays.contains(arrName2)) {
-          final lenOff = stackOffset - locals['${arrName2}__len']!;
+          final lenOff = stackOffset - locals[lenName(arrName2)]!;
           emitImmediate(14, lenOff);
           emit('ADD     R14, R15');
           emit('LD32    R$targetReg, (R14)', "Dynamic .len for open array '$arrName2'");
@@ -933,7 +933,7 @@ extension _Expressions on CodeGen {
         !locals.containsKey(baseExpr.name) &&
         !globals.contains(baseExpr.name) &&
         !boundAddrs.containsKey(baseExpr.name)) {
-      final mangledFunc = '${baseExpr.name}_$member';
+      final mangledFunc = methodFuncName(baseExpr.name, member);
       emit('LOAD32  R$targetReg, _$mangledFunc', "Method function address '$mangledFunc'");
       return;
     }
@@ -1209,13 +1209,13 @@ extension _Expressions on CodeGen {
       _genCallValue(cv.$1, cv.$2, cv.$3, targetReg);
       return;
     }
-    if (expr.name.startsWith('__METHOD__')) {
-      final mName = expr.name.replaceAll('__METHOD__', '');
+    if (isMethodCall(expr.name)) {
+      final mName = methodOfCall(expr.name);
       var rcvNode = expr.args[0];
       final (tName, _) = _getExprType(rcvNode);
       final sName = cleanName(tName);
       var (targetFunc, embedOffset) = _resolveMethod(sName, mName);
-      targetFunc ??= '${sName}_$mName';
+      targetFunc ??= methodFuncName(sName, mName);
 
       // Reserve any stack-argument area before the receiver is evaluated and
       // held on the stack. The receiver counts as the first slot(s).
@@ -1251,7 +1251,7 @@ extension _Expressions on CodeGen {
       if (rcvIsOpen) {
         final rcvName = rcvNode.nodeName;
         if (rcvName != null && openArrays.contains(rcvName)) {
-          final lenOff = stackOffset - locals['${rcvName}__len']!;
+          final lenOff = stackOffset - locals[lenName(rcvName)]!;
           emitImmediate(2, lenOff);
           emit('ADD     R2, R15');
           emit('LD32    R2, (R2)', "Dynamic capacity for open array receiver '$rcvName'");
@@ -1416,7 +1416,7 @@ extension _Expressions on CodeGen {
   void _emitArrayLen(AstNode baseExpr, [int targetReg = 14]) {
     final baseName = baseExpr.nodeName ?? '';
     if (baseName.isNotEmpty && openArrays.contains(baseName)) {
-      final lenOff = stackOffset - locals['${baseName}__len']!;
+      final lenOff = stackOffset - locals[lenName(baseName)]!;
       emitImmediate(targetReg, lenOff);
       emit('ADD     R$targetReg, R15');
       emit('LD32    R$targetReg, (R$targetReg)', "Dynamic len for open array '$baseName'");
@@ -1662,7 +1662,7 @@ extension _Expressions on CodeGen {
           emitImmediate(curReg, off);
           emit('ADD     R$curReg, R15');
           emit('LD32    R$curReg, (R$curReg)', "Forward open array ptr '$argName'");
-          final lenOff = stackOffset - locals['${argName}__len']!;
+          final lenOff = stackOffset - locals[lenName(argName)]!;
           emitImmediate(curReg + 1, lenOff);
           emit('ADD     R${curReg + 1}, R15');
           emit('LD32    R${curReg + 1}, (R${curReg + 1})', "Forward open array len '$argName'");

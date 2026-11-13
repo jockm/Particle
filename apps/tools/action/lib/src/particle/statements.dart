@@ -337,7 +337,7 @@ extension _Statements on CodeGen {
       final lblEnd = newLabel('for_end');
       breakStack.add(lblEnd);
 
-      final endVarName = '${stmt.varName}__end';
+      final endVarName = loopEndName(stmt.varName);
 
       // 1. Initialize induction variable
       genExpr(stmt.startExpr, 1);

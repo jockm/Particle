@@ -111,12 +111,12 @@ extension _Ownership on Checker {
   /// Name of the function a call runs, or null for a call through a
   /// function value.
   String? _calleeName(CallNode call) {
-    if (call.name.startsWith('__METHOD__')) {
-      final mName = call.name.replaceAll('__METHOD__', '');
+    if (isMethodCall(call.name)) {
+      final mName = methodOfCall(call.name);
       final (rcvT, _) = _getExprType(call.args[0]);
       final sName = cleanName(rcvT);
       final (resolved, _) = _resolveMethod(sName, mName);
-      return resolved ?? '${sName}_$mName';
+      return resolved ?? methodFuncName(sName, mName);
     }
     return funcSignatures.containsKey(call.name) ? call.name : null;
   }

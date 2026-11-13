@@ -1,0 +1,60 @@
+// test_internal_names: names the compiler makes up for itself (array
+// lengths, loop ends, methods) cannot clash with the program's own names,
+// whatever they are called.
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    u32 x;
+};
+
+void Point.move(u32 d) {
+    this.x = this.x + d;
+}
+
+// The method above is Point.move; a function may be called Point_move
+u32 Point_move() {
+    return 40;
+}
+
+type Inc = fn(u32) -> u32;
+
+// A function named like the type, with a lambda named like the method
+u32 Point() {
+    Inc f = fn move(u32 a) -> u32 { return a + 1; };
+    return f(1);
+}
+
+// The compiler keeps the length of xs for itself; a local called xs__len
+// is just a local
+u32 lengthOf(u32 xs[]) {
+    u32 xs__len = 7;
+    xs__len = xs__len + 1;
+    return xs.len;
+}
+
+void main() {
+    u32 ok = 1;
+
+    Point p;
+    p.x = 1;
+    p.move(2);
+    if (p.x != 3) ok = 0;
+    if (Point_move() != 40) ok = 0;
+    if (Point() != 2) ok = 0;
+
+    u32 a[2];
+    if (lengthOf(a) != 2) ok = 0;
+
+    // The compiler keeps the end of the loop for itself too
+    u32 n = 0;
+    for (u32 i : 0..3) {
+        u32 i__end = 100;
+        n = n + i__end - 99;
+    }
+    if (n != 3) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

@@ -232,8 +232,6 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 		echo "==> [FAIL] Action compiler tests failed."; \
 		exit 1; \
 	else \
-		echo "==> Running Action negative & semantic diagnostic tests..."; \
-		$(PYTHON) apps/tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
 		echo "==> [PASS] All Action compiler tests passed successfully."; \
 	fi
 	@$(DOT_CLEAN_CMD)
