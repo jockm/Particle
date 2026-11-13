@@ -29,8 +29,9 @@ _vector_reset:
 ; --- Trap 1: Soft Breakpoint Handler ---
 _vector_breakpoint:
     ; Context save: Hardware latches PC of instruction following trap into R14
-    LOAD32  R13, _saved_pc
-    LD32    (R13), R14          ; Save breakpoint return PC
+    LD      R13, R14            ; Preserve trap return PC before LOAD32 uses R14
+    LOAD32  R14, _saved_pc
+    ST32    (R14), R13          ; Save breakpoint return PC
     
     ; Snapshot general registers R1-R12
     LOAD32  R13, _saved_regs
@@ -93,39 +94,45 @@ _cmd_prompt_loop:
 
     ; Check 'd' (Dump Memory)
     LD      R14, 0x64
-    SUB     R14, R1
+    LD      R3, R1
+    SUB     R3, R14
     LOAD32  R2, _cmd_dump
-    FBRA.Z  R14, _exec_cmd
+    FBRA.Z  R3, _exec_cmd
 
     ; Check 'w' (Write Memory Word)
     LD      R14, 0x77
-    SUB     R14, R1
+    LD      R3, R1
+    SUB     R3, R14
     LOAD32  R2, _cmd_write
-    FBRA.Z  R14, _exec_cmd
+    FBRA.Z  R3, _exec_cmd
 
     ; Check 'g' (Go / Run Address)
     LD      R14, 0x67
-    SUB     R14, R1
+    LD      R3, R1
+    SUB     R3, R14
     LOAD32  R2, _cmd_go
-    FBRA.Z  R14, _exec_cmd
+    FBRA.Z  R3, _exec_cmd
 
     ; Check 'r' (Display Registers)
     LD      R14, 0x72
-    SUB     R14, R1
+    LD      R3, R1
+    SUB     R3, R14
     LOAD32  R2, _cmd_regs_entry
-    FBRA.Z  R14, _exec_cmd
+    FBRA.Z  R3, _exec_cmd
 
     ; Check 'b' (Configure Aux UART Baud Divisor via MMIO)
     LD      R14, 0x62
-    SUB     R14, R1
+    LD      R3, R1
+    SUB     R3, R14
     LOAD32  R2, _cmd_baud
-    FBRA.Z  R14, _exec_cmd
+    FBRA.Z  R3, _exec_cmd
 
     ; Check 't' (Transmit Test Byte on Aux UART FIFO 1)
     LD      R14, 0x74
-    SUB     R14, R1
+    LD      R3, R1
+    SUB     R3, R14
     LOAD32  R2, _cmd_tx_aux
-    FBRA.Z  R14, _exec_cmd
+    FBRA.Z  R3, _exec_cmd
 
     ; Unknown command
     LOAD32  R1, _str_unknown
@@ -247,7 +254,7 @@ _cmd_registers:
     LOAD32  R5, _saved_regs
     LOAD16  R6, 1
 
-_reg_dump_loop:
+._reg_dump_loop:
     LOAD32  R1, _str_r_prefix
     RCALL   _con_putstr
     LD      R1, R6
@@ -263,8 +270,7 @@ _reg_dump_loop:
     ADD     R6, 1
     LOAD16  R7, 13
     SUB     R7, R6
-    LOAD32  R14, _reg_dump_loop
-    BGET    R7, 0
+    BBRA.NZ R7, ._reg_dump_loop
 
     POP32   R14
     RRET
@@ -364,41 +370,38 @@ _aux_getchar:
 _con_putstr:
     PUSH32  R14
     LD      R3, R1
-_putstr_loop:
+._putstr_loop:
     LD8     R1, (R3++)
-    FBRA.Z  R1, _putstr_done
+    FBRA.Z  R1, ._putstr_done
     PUSH32  R3
     RCALL   _con_putchar
     POP32   R3
-    LOAD32  R14, _putstr_loop
-    JMP     R14, R0
-_putstr_done:
+    BBRA    ._putstr_loop
+._putstr_done:
     POP32   R14
     RRET
 
 ; Print 32-bit hex in R1
 _con_puthex32:
     PUSH32  R14
-    PUSH32  R1
+    PUSH32  R3
+    LD      R3, R1
     LD      R4, 14
     SHIFTL  R4, 1               ; R4 = 28
-_hex_loop:
-    POP32   R1
-    PUSH32  R1
+._hex_loop:
+    LD      R1, R3
     SHIFTR  R1, R4
     AND     R1, 0x0F
     LOAD16  R2, 9
     SLT     R2, R1
-    LOAD32  R14, _hex_alpha
-    BGET    R2, 0
+    FBRA.NZ R2, ._hex_alpha
     LD      R14, 0x30
-    ADD     R1, R14            ; '0'-'9'
-    LOAD32  R14, _hex_emit
-    JMP     R14, R0
-_hex_alpha:
+    ADD     R1, R14             ; '0'-'9'
+    FBRA    ._hex_emit
+._hex_alpha:
     LD      R14, 0x37
-    ADD     R1, R14            ; 'A'-'F'
-_hex_emit:
+    ADD     R1, R14             ; 'A'-'F'
+._hex_emit:
     RCALL   _con_putchar
     SUB     R4, 4
     LOAD16  R2, 0
@@ -406,10 +409,9 @@ _hex_emit:
     FBRA.Z  R4, ._hex_continue
     FBRA.Z  R2, ._hex_done
 ._hex_continue:
-    LOAD32  R14, _hex_loop
-    JMP     R14, R0
+    BBRA    ._hex_loop
 ._hex_done:
-    POP32   R1
+    POP32   R3
     POP32   R14
     RRET
 
@@ -444,14 +446,13 @@ _con_puthex8:
 ; Read command character token (skipping whitespace)
 _con_read_token:
     PUSH32  R14
-_read_tok_poll:
+._read_tok_poll:
     RCALL   _con_getchar
     LD      R2, 4
     SHIFTL  R2, 3               ; R2 = 0x20 (' ')
-    SUB     R3, R1
-    ADD     R3, R2
-    LOAD32  R14, _read_tok_poll
-    BGET    R3, 0               ; Discard spaces
+    LD      R3, R1
+    SUB     R3, R2
+    BBRA.Z  R3, ._read_tok_poll ; Discard spaces
     POP32   R14
     RRET
 
@@ -459,47 +460,41 @@ _read_tok_poll:
 _con_read_hex:
     PUSH32  R14
     LD      R5, 0               ; Accumulator
-_read_hex_loop:
+._read_hex_loop:
     RCALL   _con_getchar
     ; Check delimiter (space, CR, LF)
     LD      R2, 4
     SHIFTL  R2, 3               ; R2 = 0x20 (' ')
-    SUB     R3, R1
-    ADD     R3, R2
-    LOAD32  R14, _read_hex_done
-    BGET    R3, 0
+    LD      R3, R1
+    SUB     R3, R2
+    FBRA.Z  R3, ._read_hex_done
     LD      R2, 0x0A
-    SUB     R3, R1
-    ADD     R3, R2
-    LOAD32  R14, _read_hex_done
-    BGET    R3, 0
+    LD      R3, R1
+    SUB     R3, R2
+    FBRA.Z  R3, ._read_hex_done
     LD      R2, 0x0D
-    SUB     R3, R1
-    ADD     R3, R2
-    LOAD32  R14, _read_hex_done
-    BGET    R3, 0
+    LD      R3, R1
+    SUB     R3, R2
+    FBRA.Z  R3, ._read_hex_done
 
     ; Parse hex nibble
     LOAD16  R2, 0x39            ; '9'
     SLT     R2, R1
-    LOAD32  R14, _nibble_letter
-    BGET    R2, 0
+    FBRA.NZ R2, ._nibble_letter
     LD      R14, 0x30
-    SUB     R1, R14            ; '0'-'9'
-    LOAD32  R14, _nibble_accum
-    JMP     R14, R0
-_nibble_letter:
+    SUB     R1, R14             ; '0'-'9'
+    FBRA    ._nibble_accum
+._nibble_letter:
     LD      R14, 0xDF
-    AND     R1, R14            ; Uppercase
+    AND     R1, R14             ; Uppercase
     LD      R14, 0x37
-    SUB     R1, R14            ; 'A'-'F'
-_nibble_accum:
+    SUB     R1, R14             ; 'A'-'F'
+._nibble_accum:
     SHIFTL  R5, 4
     OR      R5, R1
-    LOAD32  R14, _read_hex_loop
-    JMP     R14, R0
+    BBRA    ._read_hex_loop
 
-_read_hex_done:
+._read_hex_done:
     LD      R1, R5
     POP32   R14
     RRET
