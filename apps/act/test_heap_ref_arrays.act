@@ -1,0 +1,117 @@
+// test_heap_ref_arrays: heap arrays of references, fields that are arrays of
+// references, and arrays of references to strings that own their strings
+// Passes with trap(0); fails with trap(15).
+
+type Node {
+    u32 val;
+    ref Node kids[3];          // a fixed array of references in the record
+    ref Node more[];           // a reference to a heap array of references
+};
+
+type Tags {
+    ref string names[];        // owns heap strings
+};
+
+u32 count(ref Node xs[]) {
+    u32 n = 0;
+    for (u32 i : 0..xs.len) {
+        if (xs[i].exists()) n += 1;
+    }
+    return n;
+}
+
+ref Node g_pool[];
+
+void main() {
+    u32 ok = 1;
+
+    // A heap array of references: n null references
+    ref Node xs[] = Node.createArray(3);
+    if (xs.len != 3) ok = 0;
+    if (count(xs) != 0) ok = 0;
+    xs[1] = Node.create();
+    xs[1].val = 9;
+    if (count(xs) != 1) ok = 0;
+
+    // Growing it adds null references; shrinking drops the last ones
+    xs.resize(6);
+    if (xs.len != 6) ok = 0;
+    if (count(xs) != 1) ok = 0;
+    if (xs[5].exists()) ok = 0;
+    xs[5] = Node.create();
+    xs[5].destroy();
+    xs.resize(2);
+    if (xs.len != 2 || xs[1].val != 9) ok = 0;
+
+    // Destroying the array frees only the array (shallow): its records
+    // are destroyed first
+    xs[1].destroy();
+    xs.destroyArray();
+
+    // Fields
+    Node root = Node.create();
+    root.kids[0] = Node.create();
+    root.kids[0].val = 1;
+    root.kids[2] = Node.create();
+    root.kids[2].val = 2;
+    if (count(root.kids) != 2) ok = 0;
+    root.more = Node.createArray(4);
+    root.more[3] = Node.create();
+    root.more[3].val = 5;
+    if (root.more.len != 4 || count(root.more) != 1) ok = 0;
+    if (root.kids[2].val + root.more[3].val != 7) ok = 0;
+    root.more[3].destroy();
+    root.more.destroyArray();
+    root.kids[0].destroy();
+    root.kids[2].destroy();
+    root.destroy();
+
+    // A global heap array of references
+    g_pool = Node.createArray(2);
+    g_pool[0] = Node.create();
+    if (count(g_pool) != 1) ok = 0;
+    g_pool[0].destroy();
+    g_pool.destroyArray();
+
+    // Elements own their strings: values that are not heap strings are
+    // copied into new ones
+    ref string words[3];
+    string buf[8] = "abc";
+    words[0] = buf;
+    words[1] = "literal";
+    buf[0] = 'X';                        // the copy is not changed
+    if (words[0][0] != 'a') ok = 0;
+    if (words[0].capacity != 4) ok = 0;  // length and terminator
+    words[1][0] = 'L';                   // writing to a copy is fine
+    if (words[1][0] != 'L' || words[1].len != 7) ok = 0;
+    string h[] = string.create(10);
+    h[0] = 'h';
+    words[2] = h;                        // a heap string is moved in
+    if (words[2].capacity != 10) ok = 0;
+    for (u32 i : 0..3) {
+        words[i].destroy();              // all of them are heap strings
+    }
+    ref string many[] = string.createArray(5);
+    if (many.len != 5) ok = 0;
+    many[4] = "x";
+    if (many[4].len != 1) ok = 0;
+    many[4].destroy();
+    many.destroyArray();
+
+    Tags t = Tags.create();
+    t.names = string.createArray(2);
+    if (t.names.len != 2) ok = 0;
+    t.names[0] = "one";
+    t.names[1] = t.names[0];             // a copy, not a second owner
+    t.names[1][0] = 'O';
+    if (t.names[0][0] != 'o' || t.names[1][0] != 'O') ok = 0;
+    t.names[0].destroy();
+    t.names[1].destroy();
+    t.names.destroyArray();
+    t.destroy();
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

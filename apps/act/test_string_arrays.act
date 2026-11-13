@@ -1,0 +1,72 @@
+// test_string_arrays: fixed arrays of strings, and copying into string buffers
+// Passes with trap(0); fails with trap(15).
+
+type Person {
+    string name[12];
+    u32 age;
+};
+
+u32 count_char(string s, u8 c) {
+    u32 n = 0;
+    u32 i = 0;
+    while (s[i] != 0) {
+        if (s[i] == c) n += 1;
+        i += 1;
+    }
+    return n;
+}
+
+u32 open_len(string s[]) {
+    return s.len;
+}
+
+void main() {
+    u32 ok = 1;
+    string names[3][8];
+    if (names.len != 3) ok = 0;
+    if (names[0].capacity != 8) ok = 0;
+    if (names[1].len != 0) ok = 0;
+
+    names[0] = "alpha";
+    names[1] = "be";
+    names[2] = "gamma";
+    if (names[0].len != 5) ok = 0;
+    if (names[1].len != 2) ok = 0;
+    if (names[2][0] != 'g') ok = 0;
+    names[1][0] = 'B';
+    if (names[1][0] != 'B') ok = 0;
+    if (count_char(names[0], 'a') != 2) ok = 0;
+    if (open_len(names[2]) != 5) ok = 0;
+
+    // A copy stops at the buffer's capacity, leaving room for the terminator
+    string word[4] = "abc";
+    names[0] = word;
+    if (names[0].len != 3) ok = 0;
+    string longer[16] = "abcdefghijk";
+    names[2] = longer;
+    if (names[2].len != 7) ok = 0;
+    if (names[2][6] != 'g') ok = 0;
+    word = "xy";
+    if (word.len != 2) ok = 0;
+    if (word[1] != 'y') ok = 0;
+
+    // A string field is a buffer too
+    Person p;
+    p.name = "Ada";
+    if (p.name.len != 3) ok = 0;
+    p.name = names[1];
+    if (p.name[0] != 'B') ok = 0;
+
+    // A heap string copied into a buffer
+    string h[] = string.create(10);
+    h[0] = 'h';
+    h[1] = 'i';
+    string copy[8] = h;
+    if (copy.len != 2) ok = 0;
+    h.destroy();
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

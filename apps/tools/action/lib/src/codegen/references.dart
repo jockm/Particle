@@ -19,7 +19,7 @@ part of 'codegen.dart';
 // A reference occupies one pointer-sized slot; reading a field dereferences
 // it, exactly as for record parameters.
 
-extension _References on CodeGen {
+extension _References on Checker {
   bool _isRecordTypeName(Object? t) =>
       t is String && structs.containsKey(cleanName(t));
 
@@ -36,8 +36,20 @@ extension _References on CodeGen {
           d.name
     };
     for (final d in globalDecls) {
+      if (d.isRefDecl) {
+        _checkRefDecl(d);
+        _globalRefs.add(d.name);
+      }
+    }
+    for (final d in globalDecls) {
       if (globalRecords.contains(d.name) && d.initExpr != null) {
-        if (_isRefSource(d.initExpr!, const {}, const {})) {
+        bool isRef;
+        try {
+          isRef = _isRefSource(d.initExpr!, const {}, const {});
+        } on CompileError catch (e) {
+          throw e.at(d.initExpr!.loc ?? d.loc);
+        }
+        if (isRef) {
           _globalRefs.add(d.name);
         }
       }
@@ -60,13 +72,23 @@ extension _References on CodeGen {
           for (final d in _localRecordDecls(f.body!)) d.name
         };
         final refs = _functionRefs.putIfAbsent(f.name, () => <String>{});
+        // `ref T name;` is a reference from its declaration
+        for (final d in _localRecordDecls(f.body!)) {
+          if (d.isRefDecl) refs.add(d.name);
+        }
         // Give this function's parameters and locals their types while its
         // calls are inspected (the caller restores the type table).
         for (final p in f.params) {
-          types[p.name] = TypeInfo(p.type, p.isPtr, params.contains(p.name));
+          types[p.name] = TypeInfo(p.type, p.isPtr, params.contains(p.name), p.isRefArray);
         }
         for (final d in _localRecordDecls(f.body!)) {
-          types[d.name] = TypeInfo(d.typeName, d.isPtr, refs.contains(d.name));
+          types[d.name] = TypeInfo(d.typeName, d.isPtr, refs.contains(d.name), d.isRefArray);
+        }
+        // An element of an array of references is a reference
+        final allDecls = <VarDeclNode>[];
+        _collectLocalDecls(f.body, allDecls);
+        for (final d in allDecls) {
+          if (d.isRefArray) types[d.name] = TypeInfo(d.typeName, false, false, true);
         }
         final assignments = <(String, AstNode)>[];
         _collectAssignments(f.body!, assignments);
@@ -76,7 +98,13 @@ extension _References on CodeGen {
           localChanged = false;
           final known = {...params, ...refs, ..._globalRefs};
           for (final (target, rhs) in assignments) {
-            if (!_isRefSource(rhs, known, localNames)) continue;
+            bool isRef;
+            try {
+              isRef = _isRefSource(rhs, known, localNames);
+            } on CompileError catch (e) {
+              throw e.at(rhs.loc);
+            }
+            if (!isRef) continue;
             if (localRecords.contains(target)) {
               if (refs.add(target)) localChanged = true;
             } else if (!localNames.contains(target) &&
@@ -89,13 +117,25 @@ extension _References on CodeGen {
     }
   }
 
+  /// `ref T name;` needs a user-defined type: a heap string or array that
+  /// starts empty is declared `string s[];` or `T a[];`.
+  void _checkRefDecl(VarDeclNode d) {
+    if (_isRecordTypeName(d.typeName)) return;
+    final t = cleanName(d.typeName);
+    throw CompileError("'ref $t ${d.name};': a reference needs a user-defined type; "
+            "a heap ${t == 'string' ? 'string' : 'array'} that starts empty is declared "
+            "'${t == 'string' ? 'string' : t} ${d.name}[];'")
+        .at(d.loc);
+  }
+
   /// True if [rhs] produces a record reference.
   bool _isRefSource(AstNode rhs, Set<String> knownRefs, Set<String> localNames) {
     if (rhs is HeapAllocNode) return true;
     if (rhs is IntLitNode && rhs.val == 0) return true;
     if (rhs is VarAccessNode) return knownRefs.contains(rhs.name);
-    if (rhs is MemberAccessNode) {
-      // A 'ref' field holds a reference
+    if (rhs is MemberAccessNode || rhs is ArrayAccessNode) {
+      // A 'ref' field, or an element of an array of references, holds a
+      // reference
       final (t, isPtr) = _getExprType(rhs);
       return isPtr && _isRecordTypeName(t);
     }

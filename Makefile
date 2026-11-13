@@ -24,6 +24,9 @@ PASM_LINT_BIN:= $(TOOL_BIN_DIR)/pasm_lint
 PASM_LSP_BIN := $(TOOL_BIN_DIR)/pasm_lsp
 PASM_BIN     := $(TOOL_BIN_DIR)/pasm
 ACTION_BIN   := $(TOOL_BIN_DIR)/action
+ACTION_LLVM_BIN := $(TOOL_BIN_DIR)/action_llvm
+LLBUILD      := ./llbuild
+LLVM_BUILD_DIR := $(BUILD_DIR)/llvm
 ACTION_LSP_BIN := $(TOOL_BIN_DIR)/action_lsp
 VSCODE_DIR   := apps/tools/vscode
 VSCODE_EXTS  := action particle
@@ -46,9 +49,16 @@ FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWA
 APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
 APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 
-# heap_after_asm_main.act needs its .asm library; compiler-tests builds the pair
-APP_ACT_SRCS  := $(filter-out apps/act/heap_after_asm_main.act,$(wildcard apps/act/*.act))
+APP_ACT_SRCS  := $(wildcard apps/act/*.act)
 APP_ACT_BINS  := $(patsubst apps/act/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
+
+# Multi-file programs: each folder in apps/act/multi is one program. Every
+# .act and .asm file in it is built together into build/<folder>.bin, and a
+# folder whose name starts with test_ is also run by compiler-tests.
+MULTI_ROOT    := apps/act/multi
+MULTI_NAMES   := $(notdir $(patsubst %/,%,$(wildcard $(MULTI_ROOT)/*/)))
+MULTI_BINS    := $(patsubst %,$(BUILD_DIR)/%.bin,$(MULTI_NAMES))
+MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
@@ -74,15 +84,17 @@ help:
 	@echo "  make compiler-tests   - Run Action compiler unit tests and all test suites in psim"
 	@echo "  make action           - Build the Action compiler (build/tools/action)"
 	@echo "  make action-lsp       - Build the Action language server (build/tools/action_lsp)"
+	@echo "  make llvm-tools       - Build the Action compiler for LLVM (build/tools/action_llvm)"
+	@echo "  make llvm-tests       - Build the Action test suites with LLVM and run them on this computer"
 	@echo "  make vscode-ext       - Package the VS Code extensions (build/action.vsix, build/particle.vsix; needs npm)"
 	@echo "  make vscode-install   - Build the language servers and extensions, and install the extensions in VS Code"
 	@echo "  make vscode-remove-old-pasm - Remove the old hand-installed pasm extension"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
-	@echo "  make apps             - Build Action and ASM application binaries"
+	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
 	@echo "  make dot-clean        - Remove macOS ._ metadata files (where dot_clean exists)"
-	@echo "  make hooks    - Install the project's git hooks (apps/tools/git-hooks) into this clone"
+	@echo "  make install-hooks    - Install the project's git hooks (apps/tools/git-hooks) into this clone"
 
 setup:
 	@echo "==> Fetching dependencies for Particle ROHD..."
@@ -154,6 +166,9 @@ ACT_TRAP_TESTS := apps/act/test_dyn_bounds_fail.act \
                   apps/act/test_field_bounds_fail.act \
                   apps/act/test_field_null_fail.act
 ACT_TEST_SRCS := $(filter-out $(ACT_TRAP_TESTS),$(wildcard apps/act/test_*.act))
+# A test whose header has "// Target: llvm" uses what only the LLVM compiler
+# has (such as f32 and f64), and is skipped here
+PARTICLE_SKIP_MARKER := ^// Target: llvm
 
 compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 	@mkdir -p $(BUILD_DIR)
@@ -181,6 +196,7 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 	for src in $(ACT_TEST_SRCS); do \
 		base=$$(basename "$$src" .act); \
 		bin="$(BUILD_DIR)/$${base}.bin"; \
+		if grep -q '$(PARTICLE_SKIP_MARKER)' "$$src"; then echo "Skipping (LLVM only): $$src"; continue; fi; \
 		echo "----------------------------------------------------------------"; \
 		echo "Testing: $$src -> $$bin"; \
 		$(PBUILD) "$$src" -o "$$bin" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
@@ -199,16 +215,16 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 		done; \
 	fi; \
 	if [ $$failed -eq 0 ]; then \
-		echo "----------------------------------------------------------------"; \
-		echo "Testing Multi-File Action: apps/act/multi_file_main.act apps/act/multi_file_math.act -> $(BUILD_DIR)/multi_file_test.bin"; \
-		$(PBUILD) apps/act/multi_file_main.act apps/act/multi_file_math.act -o "$(BUILD_DIR)/multi_file_test.bin" || { echo "[FAIL] Build failed for multi-file Action test"; failed=1; }; \
-		$(PSIM) "$(BUILD_DIR)/multi_file_test.bin" || { code=$$?; echo "[FAIL] multi_file_test.bin failed simulation"; sim_result $$code; failed=1; }; \
-	fi; \
-	if [ $$failed -eq 0 ]; then \
-		echo "----------------------------------------------------------------"; \
-		echo "Testing Action with an assembly library: apps/act/heap_after_asm_main.act apps/act/heap_after_asm_lib.asm -> $(BUILD_DIR)/heap_after_asm_test.bin"; \
-		$(PBUILD) apps/act/heap_after_asm_main.act apps/act/heap_after_asm_lib.asm -o "$(BUILD_DIR)/heap_after_asm_test.bin" || { echo "[FAIL] Build failed for Action with an assembly library"; failed=1; }; \
-		$(PSIM) "$(BUILD_DIR)/heap_after_asm_test.bin" || { code=$$?; echo "[FAIL] heap_after_asm_test.bin failed simulation"; sim_result $$code; failed=1; }; \
+		for name in $(MULTI_TESTS); do \
+			dir="$(MULTI_ROOT)/$$name"; \
+			bin="$(BUILD_DIR)/$$name.bin"; \
+			srcs=$$(ls "$$dir"/*.act "$$dir"/*.asm 2>/dev/null); \
+			echo "----------------------------------------------------------------"; \
+			echo "Testing multi-file program: $$dir -> $$bin"; \
+			echo "  files: "$$srcs; \
+			$(PBUILD) $$srcs -o "$$bin" || { echo "[FAIL] Build failed for $$dir"; failed=1; break; }; \
+			$(PSIM) "$$bin" || { code=$$?; echo "[FAIL] $$bin failed simulation"; sim_result $$code; failed=1; break; }; \
+		done; \
 	fi; \
 	if [ $$failed -ne 0 ]; then \
 		echo "==> [FAIL] Action compiler tests failed."; \
@@ -218,6 +234,57 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) psim
 		$(PYTHON) apps/tools/test_tuple_diagnostics.py || { echo "[FAIL] Negative diagnostic tests failed."; exit 1; }; \
 		echo "==> [PASS] All Action compiler tests passed successfully."; \
 	fi
+	@$(DOT_CLEAN_CMD)
+
+# ------------------------------------------------------------------------------
+# Action through LLVM (action_llvm and llbuild)
+# ------------------------------------------------------------------------------
+# The same test programs, built for this computer with llbuild and run
+# natively: a test passes with exit status 0 (trap(0)); trap(15) and failed
+# run-time checks exit with 15. A test that needs Particle hardware (fixed
+# addresses, FIFOs, trap handlers, inline assembly) has the line
+# "// Target: particle" and is skipped; so is a multi-file program with such
+# a file or an .asm file. Outputs go to build/llvm.
+LLVM_MARKER := ^// Target: particle
+
+llvm-tests: $(ACTION_LLVM_BIN)
+	@mkdir -p $(LLVM_BUILD_DIR)
+	@echo "==> Building and running Action test suites with LLVM ($${CLANG:-clang})..."
+	@passed=0; skipped=0; failed=0; \
+	for src in $(ACT_TEST_SRCS); do \
+		base=$$(basename "$$src" .act); \
+		if grep -q '$(LLVM_MARKER)' "$$src"; then skipped=$$((skipped + 1)); continue; fi; \
+		echo "Testing: $$src -> $(LLVM_BUILD_DIR)/$$base"; \
+		$(LLBUILD) "$$src" -o "$(LLVM_BUILD_DIR)/$$base" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
+		"$(LLVM_BUILD_DIR)/$$base" || { echo "[FAIL] $$base exited with $$?"; failed=1; break; }; \
+		passed=$$((passed + 1)); \
+	done; \
+	if [ $$failed -eq 0 ]; then \
+		for src in $(ACT_TRAP_TESTS); do \
+			base=$$(basename "$$src" .act); \
+			if grep -q '$(LLVM_MARKER)' "$$src"; then skipped=$$((skipped + 1)); continue; fi; \
+			marker=$$(sed -n 's|^// Must stop at: ||p' "$$src" | head -1); \
+			case "$$marker" in *ull*) want="null reference" ;; *) want="is out of range" ;; esac; \
+			echo "Testing (must stop with exit 15: $$want): $$src -> $(LLVM_BUILD_DIR)/$$base"; \
+			$(LLBUILD) "$$src" -o "$(LLVM_BUILD_DIR)/$$base" || { echo "[FAIL] Build failed for $$src"; failed=1; break; }; \
+			msg=$$("$(LLVM_BUILD_DIR)/$$base" 2>&1 > /dev/null); code=$$?; echo "  $$msg"; \
+			if [ $$code -ne 15 ] || ! echo "$$msg" | grep -q "^action: .*$$want"; then \
+				echo "[FAIL] expected exit 15 with '$$want', got exit $$code"; failed=1; break; fi; \
+			passed=$$((passed + 1)); \
+		done; \
+	fi; \
+	if [ $$failed -eq 0 ]; then \
+		for name in $(MULTI_TESTS); do \
+			dir="$(MULTI_ROOT)/$$name"; \
+			if ls "$$dir"/*.asm > /dev/null 2>&1 || grep -qs '$(LLVM_MARKER)' "$$dir"/*.act; then skipped=$$((skipped + 1)); continue; fi; \
+			echo "Testing multi-file program: $$dir -> $(LLVM_BUILD_DIR)/$$name"; \
+			$(LLBUILD) "$$dir"/*.act -o "$(LLVM_BUILD_DIR)/$$name" || { echo "[FAIL] Build failed for $$dir"; failed=1; break; }; \
+			"$(LLVM_BUILD_DIR)/$$name" || { echo "[FAIL] $$name exited with $$?"; failed=1; break; }; \
+			passed=$$((passed + 1)); \
+		done; \
+	fi; \
+	if [ $$failed -ne 0 ]; then echo "==> [FAIL] LLVM tests failed."; exit 1; fi; \
+	echo "==> [PASS] $$passed LLVM tests passed ($$skipped Particle-only tests skipped)."
 	@$(DOT_CLEAN_CMD)
 
 # ------------------------------------------------------------------------------
@@ -254,7 +321,7 @@ $(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
 	@mkdir -p $(dir $@)
 	@$(PBUILD) "$<" -o "$@"
 
-apps: $(APP_ASM_BINS) $(APP_ACT_BINS)
+apps: $(APP_ASM_BINS) $(APP_ACT_BINS) $(MULTI_BINS)
 	@$(DOT_CLEAN_CMD)
 
 $(BUILD_DIR)/branch_suite.bin: apps/asm/branch_suite.asm
@@ -268,6 +335,12 @@ $(BUILD_DIR)/%.bin: apps/asm/%.asm
 $(BUILD_DIR)/%.bin: apps/act/%.act $(ACTION_BIN)
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) "$<" -o "$@" 
+
+# A multi-file program: everything in its folder, rebuilt when any file changes
+.SECONDEXPANSION:
+$(MULTI_BINS): $(BUILD_DIR)/%.bin: $$(wildcard $(MULTI_ROOT)/$$*/*.act $(MULTI_ROOT)/$$*/*.asm) $(ACTION_BIN)
+	@mkdir -p $(BUILD_DIR)
+	@$(PBUILD) $(filter %.act %.asm,$^) -o "$@"
 # Also the recipe of 'build' above (BUILD_DIR is build)
 $(BUILD_DIR):
 	@mkdir -p $@
@@ -284,7 +357,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
-.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean install-hooks
+.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp llvm-tools llvm-tests vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean install-hooks
 
 tools: pasm-lint pasm-lsp pasm psim action action-lsp
 	@$(DOT_CLEAN_CMD)
@@ -321,6 +394,14 @@ $(ACTION_BIN): $(shell find apps/tools/action -name "*.dart" 2>/dev/null) apps/t
 	@echo "==> Compiling action..."
 	@cd apps/tools/action && $(DART) pub get > /dev/null
 	@$(DART) compile exe apps/tools/action/bin/main.dart -o $@
+
+llvm-tools: $(ACTION_LLVM_BIN)
+	@$(DOT_CLEAN_CMD)
+
+$(ACTION_LLVM_BIN): $(shell find apps/tools/action -name "*.dart" 2>/dev/null) apps/tools/action/pubspec.yaml | $(TOOL_BIN_DIR)
+	@echo "==> Compiling action_llvm..."
+	@cd apps/tools/action && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/action/bin/action_llvm.dart -o $@
 
 action-lsp: $(ACTION_LSP_BIN)
 	@$(DOT_CLEAN_CMD)

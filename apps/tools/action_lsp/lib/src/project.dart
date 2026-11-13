@@ -8,20 +8,31 @@
 //     "action": {
 //       "includeDirs": ["lib", "apps/act"],
 //       "defines": { "DEBUG": 1, "BAUD": 115200 },
+//       "target": ["particle", "llvm"],
+//       "programFolders": ["apps/act/multi"],
 //       "programs": [
-//         { "files": ["apps/act/multi_file_main.act", "apps/act/multi_file_math.act"] }
+//         { "files": ["tools/gen_main.act", "tools/gen_tables.act"] }
 //       ]
 //     }
 //   }
 //
-// Paths are relative to the project file. A file named in a program is
+// Paths are relative to the project file. Each folder inside a folder named
+// in "programFolders" is one program: all the .act files in it, found again
+// each time it is checked, so adding a folder or a file needs no change
+// here. "programs" lists other groups file by file. A file in a program is
 // checked together with the rest of that program; any other file is checked
-// on its own, with its imports. Without a project file the include
+// on its own, with its imports.
+//
+// "target" is the compiler programs are checked for: "particle" (the
+// default) or "llvm", or a list of both. With both, an error found for only
+// one of them is shown as a warning that names it. Without a project file the include
 // directories are the workspace root and its `lib` directory (the compiler
 // always searches the importing file's own directory first).
 
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:action/action.dart' show analysisTargets;
 
 import 'documents.dart';
 
@@ -53,11 +64,19 @@ class Project {
   /// Groups of files compiled together, as canonical absolute paths.
   final List<List<String>> programs;
 
+  /// Folders each of whose subfolders is a program, as canonical absolute
+  /// paths.
+  final List<String> programFolders;
+
+  /// The targets programs are checked for, the first one used for types
+  /// and values shown in the editor.
+  final List<String> targets;
+
   /// Set when the project file could not be used; the defaults apply.
   final ProjectError? error;
 
   const Project(this.root, this.file, this.includeDirs, this.defines, this.programs,
-      [this.error]);
+      [this.error, this.programFolders = const [], this.targets = const ['particle']]);
 
   /// The defaults for [root].
   factory Project.defaults(String? root, {String? file, ProjectError? error}) => Project(
@@ -140,7 +159,29 @@ class Project {
         programs.add([for (final f in files) abs(f as String)]);
       }
     }
-    return Project(root, path, includeDirs, defines, programs);
+
+    final folders = <String>[];
+    final pf = section['programFolders'];
+    if (pf != null) {
+      if (pf is! List || pf.any((e) => e is! String)) {
+        throw fail('programFolders', '"programFolders" must be a list of directory names');
+      }
+      folders.addAll([for (final d in pf) abs(d as String)]);
+    }
+
+    var targets = const ['particle'];
+    final tg = section['target'];
+    if (tg != null) {
+      final list = tg is String ? [tg] : (tg is List ? tg : null);
+      if (list == null ||
+          list.isEmpty ||
+          list.any((e) => e is! String || !analysisTargets.contains(e))) {
+        throw fail('target',
+            '"target" must be ${analysisTargets.map((t) => '"$t"').join(' or ')}, or a list of them');
+      }
+      targets = [for (final t in list) t as String];
+    }
+    return Project(root, path, includeDirs, defines, programs, null, folders, targets);
   }
 
   /// The files compiled together with [path] (itself included).
@@ -148,8 +189,33 @@ class Project {
     for (final p in programs) {
       if (p.contains(path)) return p;
     }
-    return [path];
+    return _folderProgram(path) ?? [path];
   }
+
+  /// True when [sources] is a program the project file describes.
+  bool isProgram(List<String> sources) =>
+      programs.any((p) => p.length == sources.length && p.every(sources.contains)) ||
+      (sources.isNotEmpty && _sameList(_folderProgram(sources.first), sources));
+
+  /// The .act files of the program folder [path] is in, when it is in one.
+  List<String>? _folderProgram(String path) {
+    final dir = File(path).parent;
+    if (!programFolders.contains(canonicalPath(dir.parent.path))) return null;
+    final List<String> files;
+    try {
+      files = [
+        for (final e in dir.listSync())
+          if (e is File && e.path.endsWith('.act')) canonicalPath(e.path)
+      ];
+    } on FileSystemException {
+      return null;
+    }
+    if (!files.contains(path)) files.add(path);
+    return files..sort();
+  }
+
+  static bool _sameList(List<String>? a, List<String> b) =>
+      a != null && a.length == b.length && a.every(b.contains);
 
   static int _lineOfOffset(String text, int? offset) {
     if (offset == null) return 0;

@@ -65,7 +65,7 @@ void main() {
 
     // Coroutine resume points above 15
     type pt t;
-    pk_init(t);
+    pkInit(t);
     u32 calls = 0;
     while (calls < 15) {
         stepper(t);

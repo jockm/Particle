@@ -2,19 +2,14 @@
 // Pluggable Backend Architecture
 // ------------------------------------------------------------------------------
 
-/// Abstract code generation backend interface.
-///
-/// The code generator drives a backend: it collects the emitted assembly
-/// lines, hands out unique labels and knows how to materialise immediates and
-/// call the target's heap runtime. A backend also describes the target: its
-/// name, the scalar types it supports natively and the size of a pointer.
-abstract class Backend {
-  /// Assembly lines emitted so far.
-  final List<String> asm = [];
-  int labelCounter = 0;
+import '../scope_resolve.dart' show internalNameMark, sourceName;
 
+/// What the checker needs to know about the machine a program is for: the
+/// size of a pointer, how values align, how many trap vectors there are and
+/// which integer types it has.
+abstract class Target {
   /// Short name used in diagnostics (for example `particle`).
-  String get name => 'base';
+  String get name;
 
   /// Size in bytes of a pointer (an address or reference) on this target.
   int get pointerSize;
@@ -25,25 +20,63 @@ abstract class Backend {
   /// alignment so that arrays of records stay aligned.
   int alignOf(int size);
 
+  /// Number of trap vectors (trap numbers are 0 to vectorCount - 1).
+  int get vectorCount;
+
+  /// Return true if the target supports integer/scalar type [tName].
+  bool supportsType(String tName);
+
+  /// True for a program that runs under an operating system (LLVM): there
+  /// is no Particle hardware (FIFOs, trap vectors, Particle assembly), and
+  /// C functions can be declared `extern`.
+  bool get isHosted;
+
+  /// Width of the values expressions are computed in, at the widest.
+  int get registerBits;
+}
+
+/// Abstract code generation backend interface.
+///
+/// The code generator drives a backend: it collects the emitted assembly
+/// lines, hands out unique labels and knows how to materialise immediates and
+/// call the target's heap runtime. A backend also describes the target: its
+/// name, the scalar types it supports natively and the size of a pointer.
+abstract class Backend implements Target {
+  /// Assembly lines emitted so far.
+  final List<String> asm = [];
+  int labelCounter = 0;
+
+  @override
+  String get name => 'base';
+
   /// Trap vector table: address of vector 0, bytes per vector, and number
   /// of vectors. Vector N starts at `vectorBase + N * vectorStride`.
   int get vectorBase;
   int get vectorStride;
-  int get vectorCount;
 
-  /// Return true if backend natively supports integer/scalar type [tName].
+  @override
   bool supportsType(String tName) => false;
+
+  @override
+  bool get isHosted => false;
+
+  @override
+  int get registerBits => 32;
 
   void emit(String line, [String comment = '']) {
     if (comment.isNotEmpty) {
-      asm.add('    ${line.padRight(24)} ; $comment');
+      asm.add('    ${_label(line).padRight(24)} ; ${sourceName(comment)}');
     } else {
-      asm.add('    $line');
+      asm.add('    ${_label(line)}');
     }
   }
 
+  /// [text] with the internal names of block-scoped symbols made into
+  /// valid labels (`T~3` becomes `T.3`).
+  String _label(String text) => text.replaceAll(internalNameMark, '.');
+
   void emitLabel(String label) {
-    asm.add('$label:');
+    asm.add('${_label(label)}:');
   }
 
   String newLabel([String prefix = 'L']) {

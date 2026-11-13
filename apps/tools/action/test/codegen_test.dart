@@ -164,8 +164,8 @@ void main() {
         const u16 PK_ENDED   = 3;
         type pt { u16 lc; };
         u16 yield(type pt p);
-        u16 wait_until(type pt p, u32 cond);
-        u16 pk_exit(type pt p);
+        u16 waitUntil(type pt p, u32 cond);
+        u16 pkExit(type pt p);
       '''
     };
 
@@ -183,8 +183,8 @@ void main() {
         import "lib/protokernel.act";
         task worker(pt p) {
           yield(p);
-          wait_until(p, 1);
-          pk_exit(p);
+          waitUntil(p, 1);
+          pkExit(p);
         }
         void main() { }
       ''', extraFiles: kernel);
@@ -241,7 +241,7 @@ void main() {
           contains("'x' is read after a pause"));
       expect(taskError('u32 g = 0;\ntask f(pt t) { u32 x; if (g == 1) { x = 1; } yield(t); g = x; }\nvoid main() { }'),
           contains("'x' is read after a pause"));
-      expect(taskError('task f(pt t) { u32 n = 3; wait_until(t, n == 3); }\nvoid main() { }'),
+      expect(taskError('task f(pt t) { u32 n = 3; waitUntil(t, n == 3); }\nvoid main() { }'),
           contains("'n' is read after a pause"));
       // Set again after the pause, or never set: fine
       expect(taskError('task f(pt t) { u32 x = 5; yield(t); x = 6; u32 y = x; }\nvoid main() { }'),
@@ -259,19 +259,19 @@ void main() {
     });
   });
 
-  group('tryreadfifo', () {
+  group('tryReadFifo', () {
     test('reads into the variable through FIFO.TRYR with a register channel', () {
       final asm = compileSource(wrapMain('''
         u32 x = 0;
-        u32 got = tryreadfifo(2, x);
+        u32 got = tryReadFifo(2, x);
       '''));
       expect(asm, contains('FIFO.TRYR R1, R2'));
-      expect(asm, contains('tryreadfifo status'));
+      expect(asm, contains('tryReadFifo status'));
     });
 
     test('channels may be consts but must be constant', () {
-      expect(compileErrorOf('const u32 C = 1;\n${wrapMain('u32 v = readfifo(C);')}'), isNull);
-      expect(compileErrorOf(wrapMain('u32 c = 1; u32 v = readfifo(c);')),
+      expect(compileErrorOf('const u32 C = 1;\n${wrapMain('u32 v = readFifo(C);')}'), isNull);
+      expect(compileErrorOf(wrapMain('u32 c = 1; u32 v = readFifo(c);')),
           contains('must be a constant'));
     });
   });
@@ -601,33 +601,36 @@ void main() {
     const point = 'type P { u32 x; };\n';
     String prog(String body, [String before = '']) => '$point$before${wrapMain(body)}';
 
-    test('a destroyed or unset reference is null', () {
+    test('a destroyed or unset reference is empty', () {
       expect(compileErrorOf(prog('P p = P.create(); p.destroy(); p.x = 1;')),
-          contains("'p' is null here"));
-      expect(compileErrorOf(prog('u32 a[]; a[0] = 1;')), contains("'a' is null here"));
+          contains("'p' is empty here"));
+      expect(compileErrorOf(prog('u32 a[]; a[0] = 1;')), contains("'a' is empty here"));
+      expect(compileErrorOf(prog('ref P p; p.x = 1;')), contains("'p' is empty here"));
+      expect(compileErrorOf(prog('P p = P.create(); ref P q; q = p; q.destroy(); q.unset(); q.x = 1;')),
+          contains("'q' is empty here"));
     });
 
     test('moves are followed through branches', () {
       expect(
           compileErrorOf(
-              prog('P p = P.create(); P q = 0; u32 c = 1; if (c == 1) { q = p; } p.x = 1;')),
+              prog('P p = P.create(); ref P q; u32 c = 1; if (c == 1) { q = p; } p.x = 1;')),
           contains("'p' may have been moved"));
       expect(
           compileErrorOf(prog(
-              'P p = P.create(); P q = 0; u32 c = 1; if (c == 1) { q = p; } else { p.x = 1; }')),
+              'P p = P.create(); ref P q; u32 c = 1; if (c == 1) { q = p; } else { p.x = 1; }')),
           isNull);
       expect(compileErrorOf(prog('u32 a[] = u32.createArray(3); u32 b[] = a; a[0] = 1;')),
           contains("'a' was moved"));
     });
 
     test('exists() narrows a reference', () {
-      const find = 'P find(u32 k) { if (k == 0) { return 0; } return P.create(); }\n';
+      const find = 'P find(u32 k) { if (k == 0) { ref P none; return none; } return P.create(); }\n';
       expect(compileErrorOf(prog('P p = find(1); p.x = 1;', find)),
-          contains("'p' may be null here; check it with 'p.exists()' first"));
+          contains("'p' may be empty here; check it with 'p.exists()' first"));
       expect(compileErrorOf(prog('P p = find(1); if (p.exists()) { p.x = 1; }', find)), isNull);
       expect(compileErrorOf(prog('P p = find(1); if (!p.exists()) { return; } p.x = 1;', find)),
           isNull);
-      expect(compileErrorOf(prog('P p = 0; if (p == 0) { p = P.create(); } p.x = 1;')), isNull);
+      expect(compileErrorOf(prog('ref P p; if (!p.exists()) { p = P.create(); } p.x = 1;')), isNull);
       expect(compileErrorOf(prog('P p = find(1); if (p.exists() && p.x == 0) { p.x = 2; }', find)),
           isNull);
     });
@@ -645,22 +648,22 @@ void main() {
       expect(
           compileErrorOf(prog(
               'u32 a[] = u32.createArray(3); u32 i = 0; while (i < 3) { a[i] = i; if (i == 1) { a.destroyArray(); } i += 1; }')),
-          contains("'a' may be null here"));
+          contains("'a' may be empty here"));
     });
 
-    test('references from globals may be null', () {
+    test('references from globals may be empty', () {
       expect(compileErrorOf('u32 g[];\n${wrapMain('u32 d[] = g; d[0] = 1;')}'),
-          contains("'d' may be null here"));
+          contains("'d' may be empty here"));
     });
 
-    test('a null argument for a record parameter is an error', () {
+    test('0 for a record parameter is an error', () {
       expect(compileErrorOf(prog('use(0);', 'void use(P a) { a.x = 1; }\n')),
-          contains("argument 1 of 'use' is null"));
+          contains("argument 1 of 'use' is 0"));
     });
   });
 
   group('run-time reference checks', () {
-    const prog = 'type P { u32 x; };\nP g = 0;\nu32 arr[];\n'
+    const prog = 'type P { u32 x; };\nref P g;\nu32 arr[];\n'
         'void main() { g.x = 1; arr[0] = 2; u32 n = arr.len; }\n';
 
     test('references in globals are checked before use', () {

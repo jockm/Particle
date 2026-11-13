@@ -1,4 +1,4 @@
-// test_null_global_fail: using a null reference held in a global stops at the run-time reference check
+// test_null_global_fail: using an empty reference held in a global stops at the run-time reference check
 // Must stop at: Null reference trap
 // Passes when the simulator stops with trap 15 at that check; trap(0) at the end means the check is missing.
 
@@ -6,7 +6,7 @@ type Item {
     u32 id;
 };
 
-Item current = 0;
+ref Item current;
 
 void main() {
     current.id = 5;

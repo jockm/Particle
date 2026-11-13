@@ -4,6 +4,7 @@
 // records, the heap, globals, parameters, methods and embedded records.
 // A misaligned access raises trap 14, whose handler fails the test.
 // Passes with trap(0); fails with trap(15).
+// Target: particle (a trap handler, Particle sizes)
 
 type Mixed {
     u8 b;           // offset 0

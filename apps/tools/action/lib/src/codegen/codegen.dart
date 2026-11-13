@@ -1,20 +1,33 @@
 // ------------------------------------------------------------------------------
-// Code Generator (Frontend & AST Lowering)
+// Checker and Particle Code Generator
 // ------------------------------------------------------------------------------
 //
-// Port of the CodeGen class of act16c.py. The class is split over several
-// `part` files to keep each one readable:
+// Port of the CodeGen class of act16c.py, split in two: [Checker] works out
+// what a program means and finds every error in it; [CodeGen] extends it and
+// emits Particle assembly for a program that has passed. The library is
+// split over several `part` files to keep each one readable:
 //
-//   codegen.dart      state, program layout, functions (this file)
+//   checker.dart      Checker: program state, types, layout, program checks
+//   check_walk.dart   Checker: the walk over every function
+//   scopes.dart       function scope and block-scoped local constants
+//   llvm_*.dart       LlvmGen: LLVM IR for a 64-bit host (action_llvm)
 //   types.dart        expression typing, sizes, constant evaluation
-//   statements.dart   statement lowering and conditional branches
-//   expressions.dart  expression lowering, addressing, calls, loads/stores
+//   constants.dart    exact constants (Go rules) and folding
 //   references.dart   record references versus records stored in place
+//   ownership.dart    reference flow analysis
+//   coroutines.dart   task functions and their operations
+//   flow.dart         the flow analysis framework
+//   codegen.dart      CodeGen: program layout and functions (this file)
+//   statements.dart   CodeGen: statements and conditional branches
+//   expressions.dart  CodeGen: expressions, addressing, calls, loads/stores
+
+import 'dart:typed_data';
 
 import '../ast.dart';
 import '../backend/backend.dart';
 import '../backend/particle.dart';
 import '../errors.dart';
+import '../scope_resolve.dart';
 
 part 'types.dart';
 part 'statements.dart';
@@ -23,66 +36,18 @@ part 'references.dart';
 part 'coroutines.dart';
 part 'flow.dart';
 part 'constants.dart';
+part 'initializers.dart';
+part 'readonly.dart';
+part 'floats.dart';
 part 'ownership.dart';
-
-/// Type information recorded for a variable or parameter:
-/// `(type name, is pointer, is reference)`.
-class TypeInfo {
-  /// Usually a type name; for tuple-typed declarations a list of
-  /// [TupleElemType].
-  final Object name;
-  final bool isPtr;
-  final bool isRef;
-  const TypeInfo(this.name, this.isPtr, [this.isRef = false]);
-}
-
-/// Layout of one field of a record type.
-class FieldInfo {
-  final int offset;
-  final String type;
-  final bool isPtr;
-
-  /// `null`, an int dimension or a `List<int>` of dimensions.
-  final Object? dim;
-
-  /// `T name[]`: a reference to a heap array. A field with [isPtr] alone is
-  /// `ref T name`.
-  final bool isArrayRef;
-  const FieldInfo(this.offset, this.type, this.isPtr, this.dim, {this.isArrayRef = false});
-}
-
-/// Layout of a record type: its fields (including promoted fields of
-/// embedded types), total size and embedded types with their offsets.
-class StructInfo {
-  final Map<String, FieldInfo> fields;
-
-  /// Size in bytes, padded to a multiple of [align].
-  final int size;
-  final List<(String, int)> embedded;
-
-  /// Alignment in bytes: that of the most-aligned field.
-  final int align;
-  StructInfo(this.fields, this.size, this.embedded, [this.align = 1]);
-}
-
-/// Parameter signature: `(type, is pointer, is open array)`.
-class ParamSig {
-  final String? type;
-  final bool isPtr;
-  final bool isOpen;
-  const ParamSig(this.type, this.isPtr, this.isOpen);
-}
-
-/// Function signature: return type (a name or a tuple list), whether it
-/// returns a pointer, and the parameter signatures.
-class FuncSig {
-  final Object retType;
-  final bool retPtr;
-  final List<ParamSig> params;
-  const FuncSig(this.retType, this.retPtr, this.params);
-}
-
-const _defaultField = FieldInfo(0, 'u32', false, null);
+part 'checker.dart';
+part 'check_walk.dart';
+part 'scopes.dart';
+part 'llvm_gen.dart';
+part 'llvm_func.dart';
+part 'llvm_stmt.dart';
+part 'llvm_expr.dart';
+part 'llvm_debug.dart';
 
 /// A loop or `switch` enclosing the statement being generated.
 class _FlowContext {
@@ -128,107 +93,34 @@ class _FlowContext {
   String get loopTarget => continueLabel ??= lazyContinue!();
 }
 
-/// Thrown while laying out record types when a constant needs the size of a
-/// type that has not been laid out yet; the type is retried on the next pass.
-class _LayoutDeferred implements Exception {}
-const _signedTypes = ['s8', 's16', 's32'];
 
-class CodeGen {
+class CodeGen extends Checker {
   final bool boundsCheck;
 
   /// Run-time null checks on references held in globals, and on allocation.
   final bool referenceCheck;
   final Backend backend;
-
-  Map<String, String> affineState = {};
-  final Set<String> dynamicArrays = {};
-  final Set<String> borrowedParams = {};
-  Map<String, int> locals = {};
-  final Set<String> globals = {};
-  Map<String, TypeInfo> types = {};
-  final Map<String, StructInfo> structs = {};
-  final Map<String, int> arrayLens = {};
-  final Map<String, int> stringLens = {};
-  final Map<String, List<int>> arrayDims = {};
-  final Map<String, int> boundAddrs = {};
-  final Set<String> volatiles = {};
-  final Map<String, FuncSig> funcSignatures = {};
-  final Map<String, (List<String>, String)> fnTypes = {};
   int stackOffset = 0;
-  String currentFuncName = '';
-  (Object?, bool) currentFuncRet = (null, false);
+
+  /// The bytes of the frame each local has (see [_allocateLocalFrame]).
+  final Map<String, int> _localBytes = {};
   final List<(String, String)> strings = [];
   final List<String> breakStack = [];
 
-  /// Trap handlers (`trap(N) name() { ... }`): they run only as traps.
-  final Set<String> _trapHandlerNames = {};
-
-  /// True while generating a task function.
-  bool currentFuncIsTask = false;
-
-  /// While lowering coroutine operations: the function being lowered, and
-  /// the next resume point number.
-  FuncDeclNode? _loweringFunc;
-  int _nextStep = 1;
-
-  /// Functions declared without a body (prototypes).
-  final Set<String> _prototypeNames = {};
-
   /// Innermost-last stack of loops and switches, for `continue`.
-  final List<_FlowContext> flowStack = [];
-  final Map<String, int> constants = {};
-
-  /// Warnings and information found while generating code, in order.
-  final List<CompileNote> notes = [];
-
-  /// Records a warning or information about the program, located at [at]
-  /// when it has a location.
-  void note(NoteSeverity severity, String message, [AstNode? at]) {
-    final located = CompileError(message).at(at?.loc).message;
-    notes.add(CompileNote(severity, located));
-  }
-
-  /// Declared type of constant [name], or null when it is untyped (an enum
-  /// member, a `-D` value) or not a constant.
-  String? constTypeOf(String name) => _constTypes[name];
-
-  /// Global `const` declarations and enum members not evaluated yet, keyed
-  /// by name. They are evaluated on first use, so constants may refer to
-  /// each other (and to `sizeof`) regardless of declaration order.
-  final Map<String, AstNode> _pendingConsts = {};
-  final Set<String> _constsInProgress = {};
-
-  /// Declared type of each `const` (absent for enum members and `-D`
-  /// values, which are untyped).
-  final Map<String, String?> _constTypes = {};
-
-  /// Exact value and type of each evaluated constant; [constants] holds
-  /// the same values as 32-bit patterns.
-  final Map<String, _ConstVal> _constExactValues = {};
-
-  /// Constants defined on the command line with `-D`. They take precedence
-  /// over a `const` of the same name in the source, which therefore acts as
-  /// a default value.
-  final Map<String, int> predefinedConstants;
-
-  /// Names of all record types declared in the program, laid out or not.
-  final Set<String> _declaredTypes = {};
-
-  /// Record variables that are references, per function, and globally.
-  final Map<String, Set<String>> _functionRefs = {};
-  final Set<String> _globalRefs = {};
-  final Map<String, FuncDeclNode> inlineFuncs = {};
-  final List<(String, int)> inlineReturnStack = [];
-  final Set<String> openArrays = {};
 
   CodeGen(
-      {this.boundsCheck = true,
-      this.referenceCheck = true,
+      {bool boundsCheck = true,
+      bool referenceCheck = true,
       Backend? backend,
       Map<String, int> predefinedConstants = const {}})
-      : backend = backend ?? ParticleAsmBackend(),
-        predefinedConstants = Map.of(predefinedConstants) {
-    this.backend.referenceCheck = referenceCheck;
+      : this._(backend ?? ParticleAsmBackend(), boundsCheck, referenceCheck,
+            predefinedConstants);
+
+  CodeGen._(this.backend, this.boundsCheck, this.referenceCheck,
+      Map<String, int> predefinedConstants)
+      : super(backend, predefinedConstants: predefinedConstants) {
+    backend.referenceCheck = referenceCheck;
   }
 
   List<String> get asm => backend.asm;
@@ -245,32 +137,9 @@ class CodeGen {
   void emitImmediateKeepR14(int reg, int val) =>
       backend.emitImmediateKeepR14(reg, val);
 
-  /// Type information for [name], or [def] when it is unknown.
-  TypeInfo typeOf(String? name, [TypeInfo def = const TypeInfo('u32', false)]) =>
-      types[name] ?? def;
 
-  /// Field layout of [member] in record [sName], or the default
-  /// `(0, 'u32', false, null)` when either is unknown.
-  FieldInfo fieldOf(String sName, String member) =>
-      structs[sName]?.fields[member] ?? _defaultField;
-
-  /// Size of record [sName], or 4 if it is unknown.
-  int structSize(String sName) => structs[sName]?.size ?? 4;
-
-  void _emitStringInit(String name, AstNode initExpr, int? capacity) {
-    if (initExpr is! StringLitNode) {
-      throw CompileError(
-          "String variable '$name' must be initialized with a string literal");
-    }
+  void _emitStringInit(String name, StringLitNode initExpr) {
     final rawStr = initExpr.val;
-    if (capacity == null) {
-      throw CompileError(
-          "'>' not supported between instances of 'int' and 'NoneType'");
-    }
-    if (rawStr.length > capacity) {
-      throw CompileError(
-          'String literal length (${rawStr.length}) exceeds capacity ($capacity) of string $name[$capacity]');
-    }
     stringLens[name] = rawStr.length;
     final lbl = newLabel('str');
     strings.add((lbl, rawStr));
@@ -341,62 +210,6 @@ class CodeGen {
   }
 
 
-  /// Strips legacy `struct ` / `type ` prefixes from a type name. Tuple
-  /// types (lists) are cleaned element by element.
-  Object cleanType(Object? t) {
-    if (t == null) return '';
-    if (t is List) {
-      return [
-        for (final item in t)
-          if (item is TupleElemType)
-            (cleanType(item.$1) as String, item.$2)
-          else
-            cleanType(item)
-      ];
-    }
-    final s = t as String;
-    if (s.isEmpty) return '';
-    return s.replaceAll('struct ', '').replaceAll('type ', '').trim();
-  }
-
-  /// [cleanType] for a type known to be a plain name; tuple types become ''.
-  String cleanName(Object? t) {
-    final c = cleanType(t);
-    return c is String ? c : '';
-  }
-
-  void _validateBackendType(Object tName, [String context = '']) {
-    if (tName is List) {
-      for (final sub in tName) {
-        _validateBackendType((sub as TupleElemType).$1, context);
-      }
-      return;
-    }
-    final clean = cleanName(tName);
-    if (clean == 'u64' || clean == 's64') {
-      if (!backend.supportsType(clean)) {
-        final targetName = backend.name;
-        final ctxStr = context.isNotEmpty ? ' in $context' : '';
-        throw CompileError(
-            "64-bit integer type '$clean' is not supported by target backend '$targetName'$ctxStr");
-      }
-    }
-  }
-
-  (String?, int) _resolveMethod(String structName, String methodName) {
-    final direct = '${structName}_$methodName';
-    if (funcSignatures.containsKey(direct)) {
-      return (direct, 0);
-    }
-    final sInfo = structs[structName];
-    for (final (embedType, embedOffset) in sInfo?.embedded ?? <(String, int)>[]) {
-      final (subFunc, subOff) = _resolveMethod(embedType, methodName);
-      if (subFunc != null) {
-        return (subFunc, embedOffset + subOff);
-      }
-    }
-    return (null, 0);
-  }
 
   String _escapeAsmString(String s) {
     final out = StringBuffer();
@@ -423,190 +236,8 @@ class CodeGen {
     return out.toString();
   }
 
-  /// Lays out every record type, resolving them in dependency order.
-  void _layoutStructs(List<TypeDefNode> structDefs) {
-    var remaining = List<TypeDefNode>.of(structDefs);
-    final maxIters = remaining.length + 1;
-    for (var iter = 0; iter < maxIters; iter++) {
-      var progress = false;
-      final nextRemaining = <TypeDefNode>[];
-      for (final d in remaining) {
-        var canResolve = true;
-        try {
-          for (final f in d.fields) {
-            f.dim = _evalDims(f.dimExprs, "field '${f.name}' of type '${d.name}'");
-          }
-        } on _LayoutDeferred {
-          canResolve = false;
-        }
-        for (final f in d.fields) {
-          if (!canResolve) break;
-          final fType = cleanName(f.type);
-          _validateBackendType(fType, "field '${f.name}' of type '${d.name}'");
-          if (f.isPtr && !f.isArrayRef && !_declaredTypes.contains(fType)) {
-            throw CompileError(
-                    "field '${f.name}' of type '${d.name}': 'ref' needs a user-defined type, not '$fType'")
-                .at(f.loc);
-          }
-          if (!f.isPtr &&
-              !['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'string', 'void']
-                  .contains(fType)) {
-            if (!structs.containsKey(fType)) {
-              canResolve = false;
-              break;
-            }
-          }
-        }
-        if (canResolve) {
-          // Each field is placed at a multiple of its alignment (from the
-          // backend); the record aligns to its most-aligned field
-          var offset = 0;
-          var recordAlign = 1;
-          int alignUp(int v, int a) => (v + a - 1) ~/ a * a;
-          final fields = <String, FieldInfo>{};
-          final embeddedList = <(String, int)>[];
-          for (final f in d.fields) {
-            final fType = cleanName(f.type);
-            final fPtr = f.isPtr;
-            final fName = f.name;
-            final fDim = f.dim;
-            if (f.isEmbedded) {
-              final embedSz = structs[fType]!.size;
-              final embedAlign = structs[fType]!.align;
-              if (embedAlign > recordAlign) recordAlign = embedAlign;
-              offset = alignUp(offset, embedAlign);
-              final embedBaseOff = offset;
-              embeddedList.add((fType, embedBaseOff));
-              fields[fName] = FieldInfo(embedBaseOff, fType, false, null);
-              for (final sub in structs[fType]!.fields.entries) {
-                if (sub.key.startsWith('__')) continue;
-                final sv = sub.value;
-                fields.putIfAbsent(
-                    sub.key,
-                    () => FieldInfo(embedBaseOff + sv.offset, sv.type, sv.isPtr, sv.dim,
-                        isArrayRef: sv.isArrayRef));
-              }
-              offset += embedSz;
-              continue;
-            }
-            int elemSz;
-            if (fPtr) {
-              elemSz = backend.pointerSize;
-            } else if (fType == 'u32' || fType == 's32') {
-              elemSz = 4;
-            } else if (fType == 'u16' || fType == 's16') {
-              elemSz = 2;
-            } else if (structs.containsKey(fType)) {
-              elemSz = structs[fType]!.size;
-            } else if (['u8', 's8', 'bool', 'string'].contains(fType)) {
-              elemSz = 1;
-            } else {
-              elemSz = 4;
-            }
-            int fSize;
-            if (fDim is List<int>) {
-              var totalElems = 1;
-              for (final dm in fDim) {
-                totalElems *= dm;
-              }
-              fSize = elemSz * totalElems;
-            } else if (fDim is int) {
-              fSize = elemSz * fDim;
-            } else {
-              fSize = elemSz;
-            }
-            final fAlign = structs.containsKey(fType) && !fPtr
-                ? structs[fType]!.align
-                : backend.alignOf(elemSz);
-            if (fAlign > recordAlign) recordAlign = fAlign;
-            offset = alignUp(offset, fAlign);
-            fields[fName] = FieldInfo(offset, fType, fPtr, fDim, isArrayRef: f.isArrayRef);
-            offset += fSize;
-          }
-          structs[d.name] =
-              StructInfo(fields, alignUp(offset, recordAlign), embeddedList, recordAlign);
-          progress = true;
-        } else {
-          nextRemaining.add(d);
-        }
-      }
-      remaining = nextRemaining;
-      if (remaining.isEmpty || !progress) break;
-    }
-
-    if (remaining.isNotEmpty) {
-      final unresolved = remaining.map((d) => d.name).join(', ');
-      throw CompileError(
-          'Circular dependency or unknown type in struct/type definition: $unresolved');
-    }
-  }
-
-  /// Every prototype must be either defined in the Action sources or marked
-  /// `asm` (a routine supplied by an .asm file), but not both. The coroutine
-  /// operations of protokernel.act are generated by the compiler.
-  void _checkPrototypes(List<FuncDeclNode> funcs) {
-    final defined = {for (final f in funcs) if (f.body != null) f.name};
-    final asmNames = {for (final f in funcs) if (f.isAsm) f.name};
-    for (final f in funcs) {
-      if (f.body != null || f.isInline) continue;
-      if (f.isAsm) {
-        if (defined.contains(f.name)) {
-          throw CompileError(
-              "'${_displayName(f)}' is declared 'asm' but is also defined in Action").at(f.loc);
-        }
-        continue;
-      }
-      if (_coroutineOps.containsKey(f.name)) continue;
-      if (!defined.contains(f.name) && !asmNames.contains(f.name)) {
-        throw CompileError(
-            "'${_displayName(f)}' is declared but never defined; if it is written in assembly, declare it 'asm'").at(f.loc);
-      }
-    }
-  }
-
-  /// A function's name as written in the source (`Type.method` for methods).
-  String _displayName(FuncDeclNode f) {
-    if (f.params.isNotEmpty && f.params.first.name == 'this') {
-      final t = '${f.params.first.type}';
-      if (f.name.startsWith('${t}_')) {
-        return '$t.${f.name.substring(t.length + 1)}';
-      }
-    }
-    return f.name;
-  }
-
-  /// Checks the trap handlers (`trap(N) name() { ... }`) in [funcs] and returns the handler's
-  /// name for each bound trap number.
-  Map<int, String> _collectTrapHandlers(List<FuncDeclNode> funcs) {
-    final handlers = <int, String>{};
-    for (final f in funcs) {
-      final e = f.trapExpr;
-      if (e == null) continue;
-      int n;
-      try {
-        n = _evalConstExpr(e);
-      } on NotConstantError {
-        throw CompileError("'${f.name}': the trap number must be a constant").at(f.loc);
-      }
-      if (n < 0 || n >= backend.vectorCount) {
-        throw CompileError(
-            "'${f.name}': trap $n is out of range (0-${backend.vectorCount - 1})").at(f.loc);
-      }
-      if (n == 0) {
-        throw CompileError(
-            "'${f.name}': binding trap 0 (reset) is not supported yet; vector 0 runs the startup code").at(f.loc);
-      }
-      final other = handlers[n];
-      if (other != null) {
-        throw CompileError("trap $n is bound to both '$other' and '${f.name}'").at(f.loc);
-      }
-      handlers[n] = f.name;
-      _trapHandlerNames.add(f.name);
-    }
-    return handlers;
-  }
-
-  /// Generates the complete assembly program for [root].
+  /// Checks [root] (throwing the first error) and generates the complete
+  /// assembly program for it.
   String generate(ProgramNode root) {
     asm.add(
         '; ==============================================================================');
@@ -616,64 +247,17 @@ class CodeGen {
         '; ==============================================================================\n');
     asm.add('.include "lib/common.inc"\n');
 
-    // Constants: -D definitions first, then the program's enum members and
-    // global consts, evaluated lazily in any order.
-    constants.addAll(predefinedConstants);
-    for (final d in root.decls) {
-      if (d is EnumDeclNode) {
-        // Process Enum declarations into compile-time constants (zero memory allocated)
-        AstNode next = IntLitNode(0);
-        for (final (mName, mExpr) in d.members) {
-          final valueExpr = mExpr ?? next;
-          if (!predefinedConstants.containsKey(mName)) {
-            _pendingConsts[mName] = valueExpr;
-          }
-          next = BinaryOpNode('+', VarAccessNode(mName), IntLitNode(1));
-        }
-      } else if (d is VarDeclNode && d.isConst) {
-        // Register global constants upfront (before verify evaluation)
-        if (!predefinedConstants.containsKey(d.name)) {
-          _pendingConsts[d.name] = d.initExpr ?? IntLitNode(0);
-          _constTypes[d.name] = cleanName(d.typeName);
-        } else {
-          _typePredefinedConst(d.name, cleanName(d.typeName));
-        }
-      }
-    }
+    // Check the whole program first; then put the program-level state
+    // back as it was before the functions were checked, since code
+    // generation walks them again in the same order
+    _prepare(root);
+    final scope = _ScopeSnapshot(this);
+    _checkProgramBody();
+    scope.restore(this);
+    final funcDecls = _funcDecls;
+    final dataDecls = _dataDecls;
 
-    final typeDefs = root.decls.whereType<TypeDefNode>().toList();
-    _declaredTypes.addAll(typeDefs.map((t) => t.name));
-    _layoutStructs(typeDefs);
-
-    for (final d in root.decls) {
-      try {
-        if (d is FnTypeNode) {
-          fnTypes[d.name] = (d.paramTypes, d.retType);
-        }
-      } on CompileError catch (e) {
-        throw e.at(d.loc);
-      }
-    }
-    final dataDecls = root.decls.whereType<VarDeclNode>().toList();
-    final rawFuncDecls = root.decls.whereType<FuncDeclNode>().toList();
-    for (final f in rawFuncDecls) {
-      _validateBackendType(f.retType, "return type of function '${f.name}'");
-      for (final p in f.params) {
-        _validateBackendType(p.type, "parameter '${p.name}' of function '${f.name}'");
-      }
-      funcSignatures[f.name] = FuncSig(
-          cleanType(f.retType),
-          f.retPtr,
-          [
-            for (final p in f.params)
-              ParamSig(cleanName(p.type), p.isPtr, p.isOpenArr)
-          ]);
-    }
-    final hasMain = rawFuncDecls.any((f) => f.name == 'main');
-    final funcDecls = rawFuncDecls;
-
-    final trapHandlers = _collectTrapHandlers(funcDecls);
-    if (hasMain) {
+    if (_funcDecls.any((f) => f.name == 'main')) {
       asm.add(
           '; ------------------------------------------------------------------------------');
       asm.add('; Direct Stride Vector Table & Startup Code (Auto-generated)');
@@ -692,7 +276,7 @@ class CodeGen {
       for (var v = 1; v < backend.vectorCount; v++) {
         emitLabel(v == 1 ? '_vector_mbox' : '_vector_$v');
         emit('FAST_ENTER_TRAP');
-        final handler = trapHandlers[v];
+        final handler = _trapHandlers[v];
         if (handler != null) {
           emit('RCALL   _$handler', 'Trap $v handler');
         }
@@ -702,78 +286,8 @@ class CodeGen {
       }
     }
 
-    // Evaluate every enum member and global constant (zero memory
-    // allocated); this reports errors in constants nothing refers to.
-    for (final name in List.of(_pendingConsts.keys)) {
-      _constValue(name);
-    }
-
-    // Evaluate top-level verify assertions
-    for (final d in root.decls) {
-      if (d is VerifyNode) {
-        final res = _evalConstExpr(d.cond);
-        if (res == 0) {
-          final tok = d.token;
-          final loc = tok != null ? tok.loc : 'verify';
-          throw CompileError("$loc: Compile-time verification failed: '${d.msg}'");
-        }
-      }
-    }
-
-    // Register global types and dims
-    for (final d in dataDecls) {
-      try {
-        if (d.isConst) continue;
-        _resolveVarDecl(d);
-        _validateBackendType(d.typeName, "global variable '${d.name}'");
-        if (d.isVolatile || d.boundAddr != null) {
-          volatiles.add(d.name);
-        }
-        types[d.name] = TypeInfo(d.typeName, d.isPtr, false);
-        var dims = d.arrayDims;
-        if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
-          dims = [d.arrayDim!];
-        }
-        if (dims != null && dims.isNotEmpty) {
-          arrayDims[d.name] = dims;
-          arrayLens[d.name] = dims[0];
-        }
-        if (d.boundAddr != null) {
-          boundAddrs[d.name] = d.boundAddr!;
-        } else {
-          globals.add(d.name);
-        }
-      } on CompileError catch (e) {
-        throw e.at(d.loc);
-      }
-    }
-
-    // Coroutine operations become statements (see coroutines.dart)
-    _prototypeNames
-      ..clear()
-      ..addAll([for (final f in funcDecls) if (f.body == null && !f.isInline) f.name]);
-    _lowerCoroutineOps(funcDecls);
-    _checkPrototypes(funcDecls);
-
-    // Decide which record variables are references (see references.dart)
-    final savedTypes = Map<String, TypeInfo>.of(types);
-    _classifyReferences(funcDecls, dataDecls);
-    types = savedTypes;
-    // Follow references through every path (see ownership.dart)
-    _checkReferenceFlow(funcDecls);
-    for (final g in _globalRefs) {
-      final t = types[g]!;
-      types[g] = TypeInfo(t.name, t.isPtr, true);
-    }
-
     for (final f in funcDecls) {
-      if (f.isInline) {
-        inlineFuncs[f.name] = f;
-        continue;
-      }
-      if (f.body != null) {
-        genFunc(f);
-      }
+      if (!f.isInline && f.body != null) genFunc(f);
     }
 
     // Emit global variable data section AFTER all code
@@ -787,57 +301,64 @@ class CodeGen {
           '; ------------------------------------------------------------------------------');
       emit('.align  4');
       for (final d in emitGlobals) {
-        try {
-          var dims = d.arrayDims;
-          if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
-            dims = [d.arrayDim!];
+        var dims = d.arrayDims;
+        if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
+          dims = [d.arrayDim!];
+        }
+        if (d.isReadOnly) asm.add("; constant table '${d.name}' (read-only)");
+        emitLabel('_${d.name}');
+        final hasImage = d.initList != null ||
+            (d.initExpr is StringLitNode && dims != null && dims.isNotEmpty);
+        if (hasImage) {
+          final cleanT = cleanName(d.typeName);
+          var size = dims == null || dims.isEmpty
+              ? structs[cleanT]!.size
+              : dims.fold(_getElemSize(d.typeName, false), (a, b) => a * b);
+          final bytes = _initImage(d, size);
+          while (bytes.length % 4 != 0) {
+            bytes.add(0);
           }
-          emitLabel('_${d.name}');
-          if (dims != null && dims.isNotEmpty) {
-            if (d.initExpr != null) {
-              throw CompileError(
-                  "Global array '${d.name}' cannot have an initializer; global arrays start zero-filled");
-            }
-            final gT = cleanName(d.typeName);
-            final elemSz = ['u8', 's8', 'bool', 'string'].contains(gT)
-                ? 1
-                : (['u16', 's16'].contains(gT)
-                    ? 2
-                    : (structs.containsKey(gT) && !d.isPtr ? structs[gT]!.size : 4));
-            var totalElems = 1;
-            for (final dm in dims) {
-              totalElems *= dm;
-            }
-            final totalWords = (elemSz * totalElems + 3) ~/ 4;
-            for (var i = 0; i < totalWords; i++) {
+          for (var i = 0; i < bytes.length; i += 4) {
+            final w = bytes[i] | bytes[i + 1] << 8 | bytes[i + 2] << 16 | bytes[i + 3] << 24;
+            emit('.word   0x${w.toRadixString(16).padLeft(8, '0').toUpperCase()}');
+          }
+          continue;
+        }
+        if (dims != null && dims.isNotEmpty) {
+          final gT = cleanName(d.typeName);
+          final elemSz = d.isRefArray
+              ? backend.pointerSize
+              : ['u8', 's8', 'bool', 'string'].contains(gT)
+              ? 1
+              : (['u16', 's16'].contains(gT)
+                  ? 2
+                  : (structs.containsKey(gT) && !d.isPtr ? structs[gT]!.size : 4));
+          var totalElems = 1;
+          for (final dm in dims) {
+            totalElems *= dm;
+          }
+          final totalWords = (elemSz * totalElems + 3) ~/ 4;
+          for (var i = 0; i < totalWords; i++) {
+            emit('.word   0');
+          }
+        } else {
+          final init = d.initExpr;
+          final cleanT = cleanName(d.typeName);
+          if (structs.containsKey(cleanT) && !d.isPtr && !_globalRefs.contains(d.name)) {
+            // A record stored in place: reserve the whole record
+            final words = (structs[cleanT]!.size + 3) ~/ 4;
+            for (var i = 0; i < words; i++) {
               emit('.word   0');
             }
+            continue;
+          }
+          if (init is IntLitNode) {
+            emit('.word   ${init.val}');
+          } else if (init != null) {
+            emit('.word   ${_evalConstExpr(init)}');
           } else {
-            final init = d.initExpr;
-            final cleanT = cleanName(d.typeName);
-            if (structs.containsKey(cleanT) && !d.isPtr && !_globalRefs.contains(d.name)) {
-              // A record stored in place: reserve the whole record
-              if (init != null) {
-                throw CompileError(
-                    "global '${d.name}' of type '$cleanT' cannot have an initializer unless it is a reference");
-              }
-              final words = (structs[cleanT]!.size + 3) ~/ 4;
-              for (var i = 0; i < words; i++) {
-                emit('.word   0');
-              }
-              continue;
-            }
-            if (init is IntLitNode) {
-              _checkConstFits(init, cleanT, d.isPtr, "global variable '${d.name}'");
-              emit('.word   ${init.val}');
-            } else if (init != null) {
-              emit('.word   ${_globalInitValue(d)}');
-            } else {
-              emit('.word   0');
-            }
+            emit('.word   0');
           }
-        } on CompileError catch (e) {
-          throw e.at(d.loc);
         }
       }
       asm.add('');
@@ -884,50 +405,31 @@ class CodeGen {
   /// below the current stack position, allocates it and zero-fills it.
   /// Used for functions and for each inline expansion. Returns the frame
   /// size in bytes.
-  int _allocateLocalFrame(String funcName, List<VarDeclNode> localDecls) {
+  ///
+  /// A block's locals come after those of the blocks around it, and blocks
+  /// side by side (which never run at the same time) share the same words,
+  /// so the frame is as big as the deepest set of blocks.
+  int _allocateLocalFrame(String funcName, LocalScope? scopes) {
     final funcRefs = _functionRefs[funcName] ?? const <String>{};
-    var totalFrameWords = 0;
-    for (final d in localDecls) {
-      _resolveVarDecl(d);
-      final cleanT = cleanName(d.typeName);
-      final isRecordRef = funcRefs.contains(d.name) &&
-          structs.containsKey(cleanT) &&
-          (d.arrayDims == null || d.arrayDims!.isEmpty);
-      types[d.name] = TypeInfo(d.typeName, d.isPtr, isRecordRef);
-      var elemSize = 4;
-      if (['u8', 's8', 'bool', 'string'].contains(d.typeName)) {
-        elemSize = 1;
-      } else if (['u16', 's16'].contains(d.typeName)) {
-        elemSize = 2;
-      } else if (isRecordRef) {
-        // A record reference holds one address
-        elemSize = backend.pointerSize;
-      } else if (!d.isPtr && structs.containsKey(cleanT)) {
-        elemSize = structs[cleanT]!.size;
+    final base = stackOffset;
+    int layout(LocalScope scope, int start) {
+      var end = start;
+      for (final d in scope.decls) {
+        final words = (_declareLocal(funcRefs, d) + 3) ~/ 4;
+        end += words * 4;
+        locals[d.name] = base + end;
+        _localBytes[d.name] = words * 4;
       }
-
-      var dims = d.arrayDims;
-      if ((dims == null || dims.isEmpty) && d.arrayDim != null && d.arrayDim != 0) {
-        dims = [d.arrayDim!];
+      var deepest = end;
+      for (final c in scope.children) {
+        final e = layout(c, end);
+        if (e > deepest) deepest = e;
       }
-      int varSize;
-      if (dims != null && dims.isNotEmpty) {
-        arrayDims[d.name] = dims;
-        arrayLens[d.name] = dims[0];
-        var totalElems = 1;
-        for (final dm in dims) {
-          totalElems *= dm;
-        }
-        varSize = elemSize * totalElems;
-      } else {
-        varSize = elemSize;
-      }
-
-      final words = (varSize + 3) ~/ 4;
-      stackOffset += words * 4;
-      locals[d.name] = stackOffset;
-      totalFrameWords += words;
+      return deepest;
     }
+
+    final totalFrameWords = scopes == null ? 0 : layout(scopes, 0) ~/ 4;
+    stackOffset += totalFrameWords * 4;
 
     if (totalFrameWords > 0) {
       final frameBytes = totalFrameWords * 4;
@@ -960,15 +462,31 @@ class CodeGen {
     return totalFrameWords * 4;
   }
 
-  void genFunc(FuncDeclNode func) {
-    try {
-      _genFunc(func);
-    } on CompileError catch (e) {
-      throw e.at(func.loc);
+  /// Clears the words of local [name] (a declaration in an inner block).
+  void _clearLocal(String name) {
+    final words = (_localBytes[name] ?? 4) ~/ 4;
+    final offset = stackOffset - locals[name]!;
+    emitImmediate(14, offset);
+    emit('ADD     R14, R15', "Clear '$name'");
+    if (words <= 4) {
+      for (var w = 0; w < words; w++) {
+        if (w > 0) emit('ADD     R14, 4');
+        emit('ST32    (R14), R0');
+      }
+    } else {
+      final lbl = newLabel('local_clr');
+      emitImmediate(13, words);
+      emitLabel(lbl);
+      emit('ST32    (R14), R0', 'Clear word');
+      emit('ADD     R14, 4');
+      emit('SUB     R13, 1');
+      emit('BBRA.NZ R13, $lbl');
     }
   }
 
-  void _genFunc(FuncDeclNode func) {
+  void genFunc(FuncDeclNode func) {
+    // Every function starts from the program's global scope
+    _globalScope?.restore(this);
     currentFuncName = func.name;
     currentFuncRet = (cleanType(func.retType), func.retPtr);
     asm.add(
@@ -986,6 +504,11 @@ class CodeGen {
       emit('PUSH8   R14, 0');
       emit('PUSH8   R14, 0');
       emit('LD      R15, R14', 'Initialize Stack Pointer (SP = 0x00010000)');
+      if (func.params.isNotEmpty) {
+        // There is no command line: 'args' is empty
+        emit('LD      R1, 0', 'args: no strings');
+        emit('LD      R2, 0', 'args.len = 0');
+      }
     } else {
       emit('PUSH32  R14', 'Preserve return address link');
       stackOffset = 4;
@@ -994,6 +517,7 @@ class CodeGen {
     openArrays.clear();
     dynamicArrays.clear();
     borrowedParams.clear();
+    openRanks.clear();
     affineState = {};
     var rIdx = 1;
     for (final p in func.params) {
@@ -1003,7 +527,7 @@ class CodeGen {
       final isOpenArr = p.isOpenArr;
       final cleanPt = cleanName(pType);
       final isRef = (structs.containsKey(cleanPt) && !pPtr) || isOpenArr;
-      types[pName] = TypeInfo(pType, pPtr, isRef);
+      types[pName] = TypeInfo(pType, pPtr, isRef, p.isRefArray);
       borrowedParams.add(pName);
       if (isOpenArr) {
         openArrays.add(pName);
@@ -1011,24 +535,22 @@ class CodeGen {
         rIdx++;
         _bindParamSlot(rIdx, '${pName}__len', "Spill open array len '$pName'");
         rIdx++;
+        if (p.openRank > 1) openRanks[pName] = p.openRank;
+        for (var k = 1; k < p.openRank; k++) {
+          _bindParamSlot(rIdx, '${pName}__len$k', "Spill open array len $k of '$pName'");
+          rIdx++;
+        }
       } else {
         _bindParamSlot(rIdx, pName, "Spill param '$pName'");
         rIdx++;
       }
     }
 
-    // Local constants may size local arrays, so register them first
-    if (func.body != null) {
-      _preRegisterLocalConsts(func.body);
-    }
+    // Local constants may size local arrays: work the dimensions out first
+    _enterFunctionScope(func);
 
-    // Pre-scan and allocate function-level local stack frame
-    final localDecls = <VarDeclNode>[];
-    if (func.body != null) {
-      _collectLocalDecls(func.body, localDecls);
-    }
-
-    _allocateLocalFrame(func.name, localDecls);
+    // Allocate the function's local stack frame
+    _allocateLocalFrame(func.name, func.scopes);
 
     final coroSteps = <(int, AstNode)>[];
     if (func.body != null) {
@@ -1037,9 +559,6 @@ class CodeGen {
 
     // A task dispatches on its state's continuation counter
     currentFuncIsTask = func.isTask;
-    if (func.isTask) {
-      _checkTask(func);
-    }
     if (func.isTask) {
       emit('; Coroutine entry continuation dispatch');
       final taskRef = VarAccessNode(func.params.first.name);
@@ -1103,133 +622,13 @@ class CodeGen {
   }
 
   void genBlock(BlockNode block) {
+    _enterBlock();
     for (final stmt in block.stmts) {
       genStmt(stmt);
     }
+    _leaveBlock();
   }
 
-  void _collectLocalDecls(AstNode? node, List<VarDeclNode> decls) {
-    if (node == null) return;
-    if (node is BlockNode) {
-      for (final s in node.stmts) {
-        _collectLocalDecls(s, decls);
-      }
-    } else if (node is IfNode) {
-      _collectLocalDecls(node.thenBody, decls);
-      if (node.elseBody != null) {
-        _collectLocalDecls(node.elseBody, decls);
-      }
-    } else if (node is WhileNode) {
-      _collectLocalDecls(node.body, decls);
-    } else if (node is ForRangeNode) {
-      decls.add(VarDeclNode(node.varType, false, node.varName, null));
-      decls.add(VarDeclNode('u32', false, '${node.varName}__end', null));
-      _collectLocalDecls(node.body, decls);
-    } else if (node is SwitchNode) {
-      _collectLocalDecls(node.body, decls);
-    } else if (node is VarDeclNode) {
-      if (!node.isConst && node.boundAddrExpr == null) {
-        decls.add(node);
-      }
-    } else if (node is TupleAssignNode) {
-      for (final t in node.targets) {
-        if (!t.isWildcard && t.typeName != null) {
-          decls.add(VarDeclNode(t.typeName!, t.isPtr, t.name!));
-        }
-      }
-    }
-  }
-
-  void _collectCoroutineSteps(AstNode node, List<(int, AstNode)> steps) {
-    if (node is YieldNode) {
-      steps.add((node.stepConst, node.taskRef));
-    } else if (node is WaitUntilNode) {
-      steps.add((node.stepConst, node.taskRef));
-    } else if (node is BlockNode) {
-      for (final s in node.stmts) {
-        _collectCoroutineSteps(s, steps);
-      }
-    } else if (node is IfNode) {
-      _collectCoroutineSteps(node.thenBody, steps);
-      if (node.elseBody != null) {
-        _collectCoroutineSteps(node.elseBody!, steps);
-      }
-    } else if (node is WhileNode) {
-      _collectCoroutineSteps(node.body, steps);
-    } else if (node is ForRangeNode) {
-      _collectCoroutineSteps(node.body, steps);
-    } else if (node is SwitchNode) {
-      _collectCoroutineSteps(node.body, steps);
-    }
-  }
-
-  /// Registers the function's local `const` declarations, in order.
-  void _preRegisterLocalConsts(AstNode? node) {
-    if (node is BlockNode) {
-      for (final s in node.stmts) {
-        _preRegisterLocalConsts(s);
-      }
-    } else if (node is IfNode) {
-      _preRegisterLocalConsts(node.thenBody);
-      _preRegisterLocalConsts(node.elseBody);
-    } else if (node is WhileNode) {
-      _preRegisterLocalConsts(node.body);
-    } else if (node is ForRangeNode) {
-      _preRegisterLocalConsts(node.body);
-    } else if (node is SwitchNode) {
-      _preRegisterLocalConsts(node.body);
-    } else if (node is VarDeclNode && node.isConst) {
-      _defineLocalConst(node);
-    }
-  }
-
-  /// Evaluates the array dimensions and `@` address of [d].
-  void _resolveVarDecl(VarDeclNode d) {
-    if (d.dimExprs.isNotEmpty && d.arrayDims == null) {
-      final dims = [
-        for (final e in d.dimExprs) _evalConstIn(e, "array dimension of '${d.name}'")
-      ];
-      d.arrayDims = dims;
-      d.arrayDim = dims[0];
-    }
-    if (d.boundAddrExpr != null && d.boundAddr == null) {
-      d.boundAddr = _evalConstIn(d.boundAddrExpr!, "address of '${d.name}'");
-    }
-  }
-
-  /// Evaluates field dimensions: `null`, one int, or a list of ints.
-  Object? _evalDims(List<AstNode> exprs, String what) {
-    if (exprs.isEmpty) return null;
-    final dims = [for (final e in exprs) _evalConstIn(e, 'array dimension of $what')];
-    return dims.length > 1 ? dims : dims[0];
-  }
-
-  /// Evaluates [e] as a constant, naming [what] in the error if it is not.
-  int _evalConstIn(AstNode e, String what) {
-    try {
-      return _evalConstExpr(e);
-    } on NotConstantError catch (err) {
-      throw CompileError('The $what must be a constant expression: ${err.message}');
-    }
-  }
-
-  /// Value of a global scalar's initializer, which must be constant.
-  int _globalInitValue(VarDeclNode d) {
-    _checkConstFits(d.initExpr, cleanName(d.typeName), d.isPtr, "global variable '${d.name}'");
-    try {
-      return _evalConstExpr(d.initExpr);
-    } on NotConstantError catch (err) {
-      throw CompileError(
-          "The initializer of global variable '${d.name}' must be a constant expression: ${err.message}");
-    }
-  }
-
-  /// Value of the named constant (as a 32-bit pattern), evaluating it now
-  /// if it is still pending.
-  int? _constValue(String name) {
-    final c = _constInfo(name);
-    return c == null ? null : constants[name];
-  }
 
 
   void _collectSwitchLabels(AstNode node, List<(int, String)> cases,

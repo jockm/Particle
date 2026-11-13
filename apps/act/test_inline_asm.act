@@ -1,5 +1,6 @@
 // test_inline_asm: inline assembly is emitted verbatim; a function can return a value set in R1
 // Passes with trap(0); fails with trap(15).
+// Target: particle (inline assembly)
 
 u32 seven() {
     asm("LD      R1, 7");

@@ -224,3 +224,22 @@ String compile(List<String> sources,
     notes?.addAll(cg.notes);
   }
 }
+
+/// Compiles [sources] to LLVM IR text for a 64-bit host (action_llvm).
+String compileLlvm(List<String> sources,
+    {CompileOptions options = const CompileOptions(),
+    bool debugInfo = true,
+    List<CompileNote>? notes}) {
+  final predefined = parseDefines(options.defines);
+  final mergedAst = loadProgram(sources, options);
+  final gen = LlvmGen(
+      boundsCheck: options.boundsCheck,
+      referenceCheck: options.referenceCheck,
+      debugInfo: debugInfo,
+      predefinedConstants: predefined);
+  try {
+    return gen.generate(mergedAst);
+  } finally {
+    notes?.addAll(gen.notes);
+  }
+}

@@ -12,7 +12,7 @@ type Node {
 };
 
 void test_point_alloc() {
-    Point p = 0;
+    ref Point p;
     if (p.exists() != 0) {
         trap(15);
     }

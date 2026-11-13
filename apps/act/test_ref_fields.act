@@ -14,13 +14,20 @@ u32 sum(u32 a[]) {
     return t;
 }
 
+// One reference: sizeof(Ref) is the size of a reference on this target
+type Ref {
+    ref Node r;
+};
+
 u32 getval(Node n) { return n.val; }
 
 void Node.bump() { this.val += 1; }
 
 void main() {
     u32 ok = 1;
-    if (sizeof(Node) != 16) ok = 0;
+    // A u32 padded to a reference, then three references: 16 bytes on
+    // Particle (4-byte references), 32 on a 64-bit computer
+    if (sizeof(Node) != 4 * sizeof(Ref)) ok = 0;
     Node a = Node.create();
     if (a.next.exists()) ok = 0;
     if (a.data.exists()) ok = 0;

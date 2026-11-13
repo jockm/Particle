@@ -1,3 +1,5 @@
+import 'scope_resolve.dart' show sourceName;
+
 /// Error raised for any problem in the user's program: syntax errors, type
 /// errors, failed `verify` assertions, missing files and so on.
 ///
@@ -7,7 +9,9 @@
 class CompileError implements Exception {
   final String message;
 
-  CompileError(this.message);
+  /// Internal names of block-scoped locals (see scope_resolve.dart) are
+  /// shown as the source writes them.
+  CompileError(String message) : message = sourceName(message);
 
   static final _locPrefix = RegExp(r'^\S+:\d+:\d+: ');
 
@@ -36,7 +40,7 @@ enum NoteSeverity { warning, info }
 class CompileNote {
   final NoteSeverity severity;
   final String message;
-  const CompileNote(this.severity, this.message);
+  CompileNote(this.severity, String message) : message = sourceName(message);
 
   /// How the command line prints it: `action: warning: …`.
   String format(String tool) => '$tool: ${severity.name}: $message';

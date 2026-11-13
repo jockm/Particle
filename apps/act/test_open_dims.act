@@ -1,0 +1,95 @@
+// test_open_dims: open array parameters of more than one dimension
+// Passes with trap(0); fails with trap(15).
+
+type Board {
+    u8 cells[2][3];
+};
+
+u32 total(u32 m[][]) {
+    u32 t = 0;
+    for (u32 i : 0..m.len) {
+        for (u32 j : 0..m[i].len) {
+            t += m[i][j];
+        }
+    }
+    return t;
+}
+
+void fill(u32 m[][], u32 v) {
+    for (u32 i : 0..m.len) {
+        for (u32 j : 0..m[0].len) {
+            m[i][j] = v + i * 10 + j;
+        }
+    }
+}
+
+// Passing one on keeps its lengths
+u32 viaTotal(u32 m[][]) {
+    return total(m);
+}
+
+u32 rowSum(u32 xs[]) {
+    u32 t = 0;
+    for (u32 i : 0..xs.len) {
+        t += xs[i];
+    }
+    return t;
+}
+
+u32 lastRow(u32 m[][]) {
+    return rowSum(m[m.len - 1]);
+}
+
+u32 nameLen(string s) {
+    return s.len;
+}
+
+u32 longest(string names[][]) {
+    u32 best = 0;
+    for (u32 i : 0..names.len) {
+        if (names[i].len > best) best = names[i].len;
+    }
+    return best + names[0].capacity * 100;
+}
+
+void shout(string names[][]) {
+    names[1][0] = 'B';
+}
+
+u32 cube(u16 c[][][]) {
+    return c[1][2][3] + c.len * 1000 + c[0].len * 100 + c[0][0].len * 10;
+}
+
+u32 cellsOf(u8 b[][]) {
+    return b[1][2] + b.len * 10 + b[0].len * 100;
+}
+
+void main() {
+    u32 ok = 1;
+
+    u32 grid[3][4];
+    fill(grid, 1);
+    if (grid[2][3] != 24 || grid[0][0] != 1) ok = 0;
+    if (total(grid) != 150 || viaTotal(grid) != 150) ok = 0;
+    // A row passed to a one-dimensional parameter
+    if (lastRow(grid) != 4 * 21 + 6 || rowSum(grid[0]) != 10) ok = 0;
+
+    string names[3][8] = {"ann", "bob", "carolyn"};
+    if (longest(names) != 807 || nameLen(names[2]) != 7) ok = 0;
+    shout(names);
+    if (names[1][0] != 'B' || names[1][1] != 'o') ok = 0;
+
+    u16 c[2][3][4];
+    c[1][2][3] = 7;
+    if (cube(c) != 2347) ok = 0;
+
+    Board b = Board.create();
+    b.cells[1][2] = 5;
+    if (cellsOf(b.cells) != 325) ok = 0;
+    b.destroy();
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

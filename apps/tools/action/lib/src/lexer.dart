@@ -17,12 +17,17 @@ import 'errors.dart';
 /// that matches at a position wins, exactly as with Python's `re` alternation.
 const List<(String, String)> tokenTypes = [
   ('COMMENT', r'//[^\n]*|/\*[\s\S]*?\*/'),
-  ('HEX', r'0x[0-9a-fA-F]+'),
-  ('INT', r'\d+'),
+  // Numbers take every letter, digit and '_' that follows, so that a
+  // malformed one (0b102, 0xFG, 12ab) is reported as a whole
+  ('HEX', r'0x\w*'),
+  ('BIN', r'0b\w*'),
+  // 1.5, 2.0, 1e-3, 6.02e23: a digit on both sides of the point
+  ('FLOAT', r'\d(?:_?\d)*(?:\.\d(?:_?\d)*(?:[eE][+-]?\d+)?|[eE][+-]?\d+)(?![\w.])'),
+  ('INT', r'\d\w*'),
   ('STRING', r'"(?:\\.|[^"\\])*"'),
   ('CHAR', r"'(?:\\x[0-9a-fA-F]{2}|\\.|[^'\\])'"),
   ('KEYWORD',
-      r'\b(?:ref|true|false|bool|string|u8|s8|u16|s16|u32|s32|u64|s64|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|import|enum|verify|volatile|sizeof)\b'),
+      r'\b(?:ref|true|false|bool|string|u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|import|enum|verify|volatile|sizeof|extern)\b'),
   ('IDENT', r'[a-zA-Z_]\w*'),
   ('OP_ARROW', r'->'),
   ('OP_EQ', r'=='),
@@ -34,6 +39,7 @@ const List<(String, String)> tokenTypes = [
   ('OP_SHR', r'>>'),
   ('OP_AND', r'&&'),
   ('OP_OR', r'\|\|'),
+  ('OP_ELLIPSIS', r'\.\.\.'),
   ('OP_RANGE', r'\.\.'),
   ('OP', r'[+\-*/%&|^~<>=!]'),
   ('PUNCT', r'[:;,(){}\[\]@.]'),
@@ -110,10 +116,22 @@ List<Token> tokenize(String sourceText, {String fname = '<stdin>'}) {
   return tokens;
 }
 
-/// Equivalent of Python's `int(text, 0)`: decimal or `0x` hexadecimal, with an
-/// optional leading minus sign. Like Python, a decimal literal with a leading
-/// zero (other than zero itself) is rejected.
+/// Equivalent of Python's `int(text, 0)`: decimal, `0x` hexadecimal or `0b`
+/// binary, with an optional leading minus sign and `_` between digits. Like
+/// Python, a decimal literal with a leading zero (other than zero itself) is
+/// rejected.
 int parseIntAuto(String text) {
+  final digits = RegExp(r'^[+-]?(0x[0-9a-fA-F](_?[0-9a-fA-F])*|0b[01](_?[01])*|\d(_?\d)*)$');
+  if (!digits.hasMatch(text.trim())) {
+    final t = text.trim();
+    final why = t.startsWith('0x')
+        ? 'a hexadecimal number has the digits 0-9 and a-f'
+        : t.startsWith('0b')
+            ? 'a binary number has the digits 0 and 1'
+            : 'a number has the digits 0-9';
+    throw CompileError("invalid number '$t': $why, and '_' may only be put between two digits");
+  }
+  text = text.replaceAll('_', '');
   var s = text.trim();
   var neg = false;
   if (s.startsWith('-')) {
@@ -125,6 +143,8 @@ int parseIntAuto(String text) {
   int? v;
   if (s.startsWith('0x') || s.startsWith('0X')) {
     v = int.tryParse(s.substring(2), radix: 16);
+  } else if (s.startsWith('0b')) {
+    v = int.tryParse(s.substring(2), radix: 2);
   } else if (RegExp(r'^\d+$').hasMatch(s) &&
       !(s.length > 1 && s.startsWith('0') && RegExp(r'[1-9]').hasMatch(s))) {
     v = int.tryParse(s);

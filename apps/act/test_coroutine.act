@@ -1,6 +1,6 @@
-// test_coroutine: task functions with yield, wait_until and pk_exit from
+// test_coroutine: task functions with yield, waitUntil and pkExit from
 // lib/protokernel.act. Checks the returned status values, resuming at the
-// right point, pk_exit restarting the task, resuming inside while and switch
+// right point, pkExit restarting the task, resuming inside while and switch
 // bodies, 'return;' ending a task, tasks as function values, and a task
 // with a parameter besides its state.
 // Passes with trap(0); fails with trap(15).
@@ -15,10 +15,10 @@ task steps(type pt p) {
     g_trace = g_trace * 10 + 1;
     yield(p);
     g_trace = g_trace * 10 + 2;
-    wait_until(p, g_ready == 1);
+    waitUntil(p, g_ready == 1);
     g_trace = g_trace * 10 + 3;
     if (g_mode == 1) {
-        pk_exit(p);
+        pkExit(p);
     }
     g_trace = g_trace * 10 + 4;
 }
@@ -71,7 +71,7 @@ task in_switch(type pt p) {
 void main() {
     u32 ok = 1;
     type pt t;
-    pk_init(t);
+    pkInit(t);
 
     if (steps(t) != PK_YIELDED) ok = 0;      // trace 1
     if (steps(t) != PK_WAITING) ok = 0;      // trace 12
@@ -81,7 +81,7 @@ void main() {
     if (g_trace != 1234) ok = 0;
     if (t.lc != 0) ok = 0;
 
-    // pk_exit: the next call starts again from the top
+    // pkExit: the next call starts again from the top
     g_trace = 0;
     g_mode = 1;
     steps(t);                                // 1
@@ -101,17 +101,17 @@ void main() {
     // 'return;' ends the task
     g_trace = 0;
     g_mode = 2;
-    pk_init(t);
+    pkInit(t);
     if (early(t) != PK_YIELDED) ok = 0;      // 1
     if (early(t) != PK_ENDED) ok = 0;        // returned
     if (g_trace != 1 || t.lc != 0) ok = 0;
 
     // A task held in a function value, with a parameter
     g_trace = 0;
-    pk_init(t);
+    pkInit(t);
     Task run = early;
     if (run(t) != PK_YIELDED) ok = 0;
-    pk_init(t);
+    pkInit(t);
     if (adder(t, 3) != PK_YIELDED) ok = 0;   // +3
     if (adder(t, 5) != PK_ENDED) ok = 0;     // +50
     if (g_trace != 1 + 3 + 50) ok = 0;
@@ -119,7 +119,7 @@ void main() {
     // Resume inside a switch case
     g_trace = 0;
     g_mode = 7;
-    pk_init(t);
+    pkInit(t);
     if (in_switch(t) != PK_YIELDED) ok = 0;  // 7
     if (in_switch(t) != PK_ENDED) ok = 0;    // 78 (implicit break)
     if (g_trace != 78) ok = 0;

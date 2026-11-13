@@ -195,17 +195,13 @@ _check_hazard:
 ._check_rs2:
     ; --- Test Rs2 dependency ---
     LD      R5, 0
-    FBRA.Z  R7, ._skip_rs2_test
-
-    ; Only OP (0x33), STORE (0x23), BRANCH (0x63) use Rs2 (bit 5 must be 1, bit 2 must be 0)
+    ; Only OP (0x33), STORE (0x23), BRANCH (0x63) have inst[5]==1 and inst[2]==0
     LD      R4, R12
-    LOAD16  R14, 0x20
-    AND     R4, R14
-    FBRA.Z  R4, ._skip_rs2_test
-
-    LD      R4, R12
-    AND     R4, 4
+    SHIFTR  R4, 2
+    AND     R4, 9
+    SUB     R4, 8
     FBRA.NZ R4, ._skip_rs2_test
+    FBRA.Z  R7, ._skip_rs2_test
 
     ; Rs2 valid: test (scoreboard & (1 << Rs2))
     LD      R5, 1

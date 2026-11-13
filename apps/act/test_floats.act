@@ -1,0 +1,93 @@
+// test_floats: f32 and f64 values, literals, conversions, constants,
+// arrays, records, functions and C's printf
+// Target: llvm
+// Passes with exit status 0; fails with 15.
+
+extern s32 snprintf(string buf, u64 n, string fmt, ...);
+
+const f64 PI = 3.141_592_653_589_793;
+const f32 HALF = 0.5;
+const f64 TAU = PI * 2.0;
+const u32 TRUNCATED = u32(2.75);
+
+f64 g_scale = 1.5e2;
+f32 g_table[3] = {1.0, 2.5, -0.25};
+
+type Vec {
+    f32 x;
+    f32 y;
+};
+
+f64 area(f64 r) {
+    return PI * r * r;
+}
+
+f32 dot(Vec a, Vec b) {
+    return a.x * b.x + a.y * b.y;
+}
+
+f64 mean(f64 xs[]) {
+    f64 t = 0.0;
+    for (u32 i : 0..xs.len) {
+        t += xs[i];
+    }
+    return t / f64(xs.len);
+}
+
+u32 main() {
+    u32 ok = 1;
+
+    // Arithmetic, and constants that take the other side's type
+    f64 a = 1.0 / 3.0;
+    if (a * 3.0 != 1.0) ok = 0;
+    f32 b = 0.1;
+    f32 c = b * 3;
+    if (c < 0.29 || c > 0.31) ok = 0;
+    if (-b >= 0.0) ok = 0;
+    if (TAU < 6.28 || TAU > 6.29) ok = 0;
+    if (HALF + HALF != 1.0 || TRUNCATED != 2) ok = 0;
+    if (area(2.0) < 12.56 || area(2.0) > 12.57) ok = 0;
+
+    // Conversions: to an integer toward zero, by the operand's signedness
+    s32 n = -7;
+    f64 nf = f64(n);
+    if (nf != -7.0) ok = 0;
+    if (s32(-2.9) != -2 || u32(f64(4000000000)) != 4000000000) ok = 0;
+    f32 wide = 300.7;
+    if (u8(wide) != 44) ok = 0;
+    if (f32(a) == 0.0 || f64(f32(0.1)) == 0.1) ok = 0;
+    u32 big = 4000000000;
+    if (f64(big) != 4000000000.0) ok = 0;
+    if (bool(0.0) || !bool(0.5)) ok = 0;
+
+    // Division by zero gives infinity, as IEEE 754 defines
+    f64 zero = 0.0;
+    f64 inf = 1.0 / zero;
+    if (inf <= 1.0e308) ok = 0;
+    f64 nan = zero / zero;
+    if (nan == nan) ok = 0;
+
+    // Arrays, records and globals
+    f64 xs[4] = {1.0, 2.0, 3.0, 6.0};
+    if (mean(xs) != 3.0) ok = 0;
+    if (g_table[1] != 2.5 || g_table[2] != -0.25 || g_scale != 150.0) ok = 0;
+    Vec u = {x: 1.5, y: 2.0};
+    Vec v = Vec.create(x: 2.0, y: -1.0);
+    if (dot(u, v) != 1.0) ok = 0;
+    v.x += 0.5;
+    if (v.x != 2.5) ok = 0;
+    v.destroy();
+
+    // An f32 goes to C's printf as a double
+    string buf[32];
+    snprintf(buf, 32, "%.2f %.1f", b, PI);
+    string expect[16] = "0.10 3.1";
+    for (u32 i : 0..9) {
+        if (buf[i] != expect[i]) ok = 0;
+    }
+
+    if (ok == 1) {
+        return 0;
+    }
+    return 15;
+}

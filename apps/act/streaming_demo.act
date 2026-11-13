@@ -1,4 +1,4 @@
 void main() {
-    u32 data = readfifo(0);
-    writefifo(1, data);
+    u32 data = readFifo(0);
+    writeFifo(1, data);
 }

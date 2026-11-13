@@ -1,8 +1,7 @@
 {
   "action": {
     "includeDirs": ["lib"],
-    "programs": [
-      { "files": ["apps/act/multi_file_main.act", "apps/act/multi_file_math.act"] }
-    ]
+    "target": ["particle", "llvm"],
+    "programFolders": ["apps/act/multi"]
   }
 }

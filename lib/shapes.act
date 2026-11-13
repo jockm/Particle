@@ -4,5 +4,5 @@ type Point {
 };
 
 void Point.move(u32 dx, u32 dy);
-u32 Point.get_x();
-u32 Point.get_y();
+u32 Point.getX();
+u32 Point.getY();

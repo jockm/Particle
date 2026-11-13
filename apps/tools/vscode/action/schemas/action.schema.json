@@ -18,6 +18,18 @@
           "type": "object",
           "additionalProperties": { "type": ["integer", "boolean", "string"] }
         },
+        "target": {
+          "description": "The compiler programs are checked for: \"particle\" (the default) or \"llvm\", or a list of both. With both, an error found for only one of them is shown as a warning naming it. A file whose header comment has '// Target: particle' (or llvm) is checked for that target only.",
+          "oneOf": [
+            { "enum": ["particle", "llvm"] },
+            { "type": "array", "minItems": 1, "items": { "enum": ["particle", "llvm"] } }
+          ]
+        },
+        "programFolders": {
+          "description": "Folders whose subfolders are each one program: all the .act files in a subfolder are checked together. Adding a folder or a file needs no change here.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "programs": {
           "description": "Groups of files compiled together (as on the compiler's command line). A file listed here is checked with the rest of its group; any other file is checked on its own, with its imports.",
           "type": "array",

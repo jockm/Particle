@@ -24,10 +24,19 @@ While the current text does not parse, hover, definition, completion and the
 outline use the last version that did.
 
 The compiler's warnings and information are published with those
-severities. A file checked on its own (not in a program listed in
-`action.json`) may be compiled with files the server cannot see, so the
+severities. A file checked on its own (not in a program folder or a program
+listed in `action.json`) may be compiled with files the server cannot see, so the
 errors "is not declared" and "is declared but never defined" are shown as
 information for it.
+
+## Targets
+
+A program is checked for the targets `action.json` names (`"target"`:
+`"particle"` by default, `"llvm"`, or both). With both, each is checked, and
+an error found for only one of them is published as a warning prefixed with
+its name (`for llvm: ...`); an error found for both is an error. A file whose
+header comment has `// Target: particle` (or `llvm`) is checked for that
+target only. Hover and the other features use the first target's types.
 
 ## Which files form a program
 

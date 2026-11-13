@@ -29,7 +29,7 @@ final BigInt _mask32 = BigInt.from(0xFFFFFFFF);
 /// or s32.
 final BigInt _min32 = BigInt.from(-0x80000000);
 
-extension _ConstRules on CodeGen {
+extension _ConstRules on Checker {
   /// The 32-bit pattern of an exact constant (its value modulo 2^32).
   int _bits32(BigInt v) => (v & _mask32).toInt();
 
@@ -59,8 +59,34 @@ extension _ConstRules on CodeGen {
       }
       throw NotConstantError(
           "Constant expression references non-constant symbol '${expr.name}'");
+    } else if (expr is ConvertNode && !_isFloatName(expr.typeName)) {
+      final f = _tryFloatConst(expr.expr);
+      if (f != null) {
+        // A floating-point constant to an integer: truncated toward zero
+        // (to a bool: whether it is non-zero)
+        if (expr.typeName == 'bool') return _ConstVal(f.$1 != 0 ? BigInt.one : BigInt.zero, 'bool');
+        final v = BigInt.from(f.$1.truncate());
+        if (!_fitsType(v, expr.typeName)) {
+          throw CompileError("${expr.typeName}(...): the constant ${f.$1} does not fit in ${expr.typeName}");
+        }
+        return _ConstVal(v, expr.typeName);
+      }
+      final c = _constExact(expr.expr, arrayNames: arrayNames);
+      final t = expr.typeName;
+      if (t == 'bool') {
+        return _ConstVal(c.value == BigInt.zero ? BigInt.zero : BigInt.one, 'bool');
+      }
+      if (!_fitsType(c.value, t)) {
+        throw CompileError("$t(...): the constant ${c.value} does not fit in $t");
+      }
+      return _ConstVal(c.value, t);
     } else if (expr is SizeofNode) {
-      return _ConstVal(BigInt.from(_sizeofValue(expr)), null);
+      try {
+        return _ConstVal(BigInt.from(_sizeofValue(expr)), null);
+      } on CompileError catch (e) {
+        if (e is NotConstantError) rethrow;
+        throw e.at(expr.loc);
+      }
     } else if (expr is UnaryOpNode) {
       final c = _constExact(expr.operand, arrayNames: arrayNames);
       final t = c.type;
@@ -138,6 +164,15 @@ extension _ConstRules on CodeGen {
           return _bool(lv != BigInt.zero || rv != BigInt.zero);
       }
     }
+    if (expr is MemberAccessNode && (expr.member == 'len' || expr.member == 'capacity')) {
+      final base = expr.expr;
+      if (base is VarAccessNode && !locals.containsKey(base.name)) {
+        final text = _stringConsts[base.name];
+        if (text != null) {
+          return _ConstVal(BigInt.from(expr.member == 'len' ? text.length : text.length + 1), null);
+        }
+      }
+    }
     throw NotConstantError(
         'Expression cannot be evaluated as constant: ${_pyClassName(expr)}');
   }
@@ -161,7 +196,9 @@ extension _ConstRules on CodeGen {
       return lt;
     }
     if (cleanName(lt) == cleanName(rt)) return lt;
-    return (_isSignedName(cleanName(lt)) || _isSignedName(cleanName(rt))) ? 's32' : 'u32';
+    final signed = _isSignedName(cleanName(lt)) || _isSignedName(cleanName(rt));
+    if (_is64Name(lt) || _is64Name(rt)) return signed ? 's64' : 'u64';
+    return signed ? 's32' : 'u32';
   }
 
   /// A result of [type]; a typed result must fit its type.
@@ -195,7 +232,15 @@ extension _ConstRules on CodeGen {
   /// type it is used as. [isPtr] targets (references, pointers) and
   /// non-integer types take any value, as before.
   void _checkConstFits(AstNode? expr, Object? type, bool isPtr, String what) {
-    if (expr == null || type == null || isPtr) return;
+    if (expr == null || type == null) return;
+    if (type is! List) {
+      try {
+        _checkFloatTarget(type, isPtr, expr, what);
+      } on CompileError catch (e) {
+        throw e.at(expr.loc);
+      }
+    }
+    if (isPtr) return;
     if (!_intRanges.containsKey(cleanName(type))) return;
     final c = _tryConst(expr);
     if (c == null || c.type != null) return;
@@ -211,7 +256,8 @@ extension _ConstRules on CodeGen {
   /// operator result the 32-bit type the operation is done in.
   Object _operandType(AstNode expr) {
     if (expr is BinaryOpNode || expr is UnaryOpNode) {
-      return _isSignedOperand(expr) ? 's32' : 'u32';
+      final wide = _is64Operand(expr);
+      return _isSignedOperand(expr) ? (wide ? 's64' : 's32') : (wide ? 'u64' : 'u32');
     }
     final (t, isPtr) = _getExprType(expr);
     return isPtr ? 'u32' : t;
@@ -243,23 +289,14 @@ extension _ConstRules on CodeGen {
     }
   }
 
-  /// Emits [expr] as an immediate when it is a constant operation (unary or
-  /// binary), evaluated exactly. Returns false when it is not one.
-  bool _emitFoldedConst(AstNode expr, int targetReg) {
-    if (expr is! UnaryOpNode && !(expr is BinaryOpNode && expr.op != '=')) {
-      return false;
-    }
-    final c = _tryConst(expr);
-    if (c == null) return false;
-    _requireRegisterValue(c.value);
-    emitImmediate(targetReg, _bits32(c.value));
-    return true;
-  }
-
-  /// A constant loaded into a 32-bit register must fit u32 or s32.
+  /// A constant loaded into a register must fit its width: u32 or s32 on
+  /// Particle, u64 or s64 on a 64-bit target.
   void _requireRegisterValue(BigInt v) {
-    if (v < _min32 || v > _mask32) {
-      throw CompileError('the constant $v does not fit in 32 bits');
+    final bits = target.registerBits;
+    final min = -(BigInt.one << (bits - 1));
+    final max = (BigInt.one << bits) - BigInt.one;
+    if (v < min || v > max) {
+      throw CompileError('the constant $v does not fit in $bits bits');
     }
   }
 
@@ -328,6 +365,11 @@ extension _ConstRules on CodeGen {
   /// Defines local `const` [d] (or applies its type to a `-D` value).
   void _defineLocalConst(VarDeclNode d) {
     final type = cleanName(d.typeName);
+    if (_isFloatName(type)) {
+      _validateBackendType(type, "constant '${d.name}'");
+      _defineFloatConst(d);
+      return;
+    }
     if (predefinedConstants.containsKey(d.name)) {
       _typePredefinedConst(d.name, type);
       return;
@@ -409,6 +451,25 @@ extension _ConstRules on CodeGen {
     if (c != null) return c.value == BigInt.zero || c.value == BigInt.one;
     final (t, isPtr) = _getExprType(e);
     return !isPtr && cleanName(t) == 'bool';
+  }
+
+}
+
+/// Code generation for constants and `bool` values.
+extension _ConstEmit on CodeGen {
+  /// Emits [expr] as an immediate when it is a constant operation (unary or
+  /// binary), evaluated exactly. Returns false when it is not one.
+  bool _emitFoldedConst(AstNode expr, int targetReg) {
+    if (expr is! UnaryOpNode &&
+        expr is! ConvertNode &&
+        expr is! MemberAccessNode &&
+        !(expr is BinaryOpNode && expr.op != '=')) {
+      return false;
+    }
+    final c = _tryConst(expr);
+    if (c == null) return false;
+    emitImmediate(targetReg, _bits32(c.value));
+    return true;
   }
 
   /// Before a value from [rhs] in register [reg] is stored as a `bool`

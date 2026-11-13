@@ -9,7 +9,7 @@ import 'symbols.dart';
 
 const _keywords = [
   'asm', 'break', 'case', 'const', 'continue', 'default', 'else', 'enum',
-  'fn', 'for', 'if', 'import', 'inline', 'ref', 'return', 'sizeof',
+  'extern', 'fn', 'for', 'if', 'import', 'inline', 'ref', 'return', 'sizeof',
   'switch', 'task', 'type', 'verify', 'void', 'volatile', 'while',
 ];
 
@@ -20,6 +20,10 @@ const _builtinTypes = {
   's16': '2 bytes, signed: -32768 to 32767',
   'u32': '4 bytes, unsigned: 0 to 4294967295',
   's32': '4 bytes, signed: -2147483648 to 2147483647',
+  'u64': '8 bytes, unsigned: 0 to 18446744073709551615 (LLVM compiler only)',
+  's64': '8 bytes, signed: -9223372036854775808 to 9223372036854775807 (LLVM compiler only)',
+  'f32': '4 bytes, IEEE 754 single precision (LLVM compiler only)',
+  'f64': '8 bytes, IEEE 754 double precision (LLVM compiler only)',
   'bool': '1 byte: 0 (false) or 1 (true); other values are stored as 1',
   'string': 'null-terminated bytes: a fixed buffer `string s[N]`, or a heap string',
   'void': 'no value',
@@ -27,12 +31,19 @@ const _builtinTypes = {
 
 const _builtinFunctions = {
   'trap': ('trap(N)', 'Executes `TRAP N` (N is a constant from 0 to 15).'),
-  'readfifo': ('u32 readfifo(CH)', 'Blocking read of a word from FIFO channel `CH` (a constant).'),
-  'writefifo': ('writefifo(CH, value)', 'Writes `value` to FIFO channel `CH` (a constant).'),
-  'tryreadfifo': (
-    'u32 tryreadfifo(CH, x)',
+  'readFifo': ('u32 readFifo(CH)', 'Blocking read of a word from FIFO channel `CH` (a constant).'),
+  'writeFifo': ('writeFifo(CH, value)', 'Writes `value` to FIFO channel `CH` (a constant).'),
+  'tryReadFifo': (
+    'u32 tryReadFifo(CH, x)',
     'Non-blocking read: if channel `CH` has data, stores it in `x` and gives 1; otherwise gives 0.'
   ),
+  'peek8': ('u8 peek8(addr)', 'Reads the byte at address `addr`, which may be computed at run time.'),
+  'peek16': ('u16 peek16(addr)', 'Reads the halfword at address `addr`, which may be computed at run time.'),
+  'peek32': ('u32 peek32(addr)', 'Reads the word at address `addr`, which may be computed at run time.'),
+  'poke8': ('poke8(addr, value)', 'Writes the low byte of `value` at address `addr`.'),
+  'poke16': ('poke16(addr, value)', 'Writes the low halfword of `value` at address `addr`.'),
+  'poke32': ('poke32(addr, value)', 'Writes the word `value` at address `addr`.'),
+  'callAddr': ('u32 callAddr(addr)', 'Calls the code at address `addr` and gives what it returns in R1.'),
   'sizeof': ('sizeof(T)', 'Size in bytes of a type, variable or expression, at compile time.'),
 };
 
@@ -41,10 +52,13 @@ const _builtinMembers = {
   'capacity': 'Capacity: elements of an array, or bytes of a string buffer.',
   'create': 'Allocates a zeroed value on the heap and gives a reference to it.',
   'createArray': 'Allocates a zeroed heap array of N elements: `T.createArray(N)`.',
-  'destroy': 'Frees the value and sets the reference to 0.',
-  'destroyArray': 'Frees the heap array and sets the reference to 0.',
+  'destroy': 'Frees the value and leaves the reference empty.',
+  'destroyArray': 'Frees the heap array and leaves the reference empty.',
   'resize': 'Resizes the heap array, keeping its contents: `a.resize(N)`.',
-  'exists': '1 if the reference is not null, else 0.',
+  'exists': '1 if the reference has a value, 0 if it is empty.',
+  'sameAs': '1 if two references are to the same value: `a.sameAs(b)`.',
+  'unset': 'Empties the reference (it must not still own its value): `r.unset()`.',
+  'copyFrom': 'Copies the fields of another value of the same type (one without references): `a.copyFrom(b)`.',
 };
 
 /// The part of an expression before the word at the cursor: names joined
@@ -134,7 +148,9 @@ class Features {
       Sym? found;
       for (final s in fn.$2) {
         if (s.name != name) continue;
-        // Locals are function-scoped; prefer the declaration before the use
+        // Locals are block-scoped: skip those whose block has ended, and
+        // prefer the nearest declaration before the use
+        if (s.visibleUntil != null && s.visibleUntil! < pos) continue;
         if (found == null || (s.at != null && s.at!.start <= pos)) found = s;
       }
       if (found != null) return found;

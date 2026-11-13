@@ -140,6 +140,56 @@ void main() {
       await c.close();
     });
 
+    test('each folder in a program folder is a program', () async {
+      final c = await TestClient.start({
+        'action.json': '{ "action": { "programFolders": ["multi"] } }',
+        'multi/one/use.act': useAct,
+        'multi/one/math.act': mathAct,
+        'multi/two/main.act': 'void main() { u32 x = add(1, 2); }\n',
+      });
+      expect(await c.open('multi/one/use.act'), isEmpty);
+      // Another folder is another program: 'add' is not in it, and that is
+      // an error, not information
+      final d = asMap((await c.open('multi/two/main.act')).first);
+      expect(d['severity'], equals(1));
+      expect(d['message'] as String, contains("'add' is not declared"));
+      await c.close();
+    });
+
+    test('the target decides what is allowed', () async {
+      const src = 'void main() { u64 big = 1; }\n';
+      final p = await TestClient.start({'main.act': src});
+      expect(asMap((await p.open('main.act')).first)['message'] as String, contains("'u64'"));
+      await p.close();
+      final l = await TestClient.start({
+        'action.json': '{ "action": { "target": "llvm" } }',
+        'main.act': src,
+      });
+      expect(await l.open('main.act'), isEmpty);
+      await l.close();
+    });
+
+    test('with both targets, what one of them lacks is a warning naming it', () async {
+      final c = await TestClient.start({
+        'action.json': '{ "action": { "target": ["particle", "llvm"] } }',
+        'fifo.act': 'void main() { u32 v = readFifo(0); }\n',
+        'c.act': 'extern s32 puts(string s);\nvoid main() { puts("hi"); }\n',
+        'bad.act': 'void main() { u32 v = zz; }\n',
+      });
+      final f = asMap((await c.open('fifo.act')).first);
+      expect(f['severity'], equals(2));
+      expect(f['message'] as String, startsWith('for llvm: '));
+      final e = asMap((await c.open('c.act')).first);
+      expect(e['severity'], equals(2));
+      expect(e['message'] as String, startsWith('for particle: '));
+      // A file that says it is for one target is checked for that one
+      expect(await c.open('only.act', '// Target: particle\nvoid main() { u32 v = readFifo(0); }\n'), isEmpty);
+      final b = asMap((await c.open('bad.act')).first);
+      expect(b['severity'], equals(1));
+      expect(b['message'] as String, startsWith("undefined identifier 'zz'"));
+      await c.close();
+    });
+
     test('defines from the project file', () async {
       final c = await TestClient.start({
         'action.json': '{ "action": { "defines": { "SIZE": 4 } } }',
@@ -158,6 +208,14 @@ void main() {
       expect(asMap(asMap(first['range'])['start'])['line'], equals(2));
       await c.close();
     });
+
+    test('an unknown target is reported', () async {
+      final c = await TestClient.start({'action.json': '{ "action": { "target": "arm" } }'});
+      expect(await c.open('main.act', 'void main() { }\n'), isEmpty);
+      final d = c.lastDiagnostics('action.json')!;
+      expect(asMap(d.first)['message'] as String, contains('"target" must be "particle" or "llvm", or a list of them'));
+      await c.close();
+    });
   });
 
   group('features', () {
@@ -174,6 +232,21 @@ void main() {
       final v = asMap(h['contents'])['value'] as String;
       expect(v, contains('u32 n'));
       expect(v, contains('Local variable of `count`'));
+      await c.close();
+    });
+
+    test('hover follows block scopes', () async {
+      const src = 'void main() {\n    u32 x = 1;\n    {\n        u8 x = 2;\n        x += 1;\n    }\n    x += 5;\n}\n';
+      final c = await TestClient.start({'scoped.act': src});
+      await c.open('scoped.act');
+      Future<String> hoverAt(String what) async {
+        final (l, ch) = find(src, what);
+        final h = asMap(await c.result('textDocument/hover', c.at('scoped.act', l, ch)));
+        return asMap(h['contents'])['value'] as String;
+      }
+
+      expect(await hoverAt('x += 1'), contains('u8 x'));
+      expect(await hoverAt('x += 5'), contains('u32 x'));
       await c.close();
     });
 

@@ -1,3 +1,6 @@
+// test_enum_verify: enum values and type sizes checked at compile time with verify
+// Passes with trap(0); fails with trap(15).
+
 enum Status {
     OK = 0,
     BUSY,
@@ -26,8 +29,8 @@ void main() {
     u32 cur_status = TIMEOUT;
     if (cur_status == 10) {
         // Success quit trap 0
-        asm("TRAP 0");
+        trap(0);
     }
     // Failure quit trap 15
-    asm("TRAP 15");
+    trap(15);
 }

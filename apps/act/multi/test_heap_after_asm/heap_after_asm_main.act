@@ -1,0 +1,47 @@
+// heap_after_asm_main: the heap starts after everything assembled,
+// including .asm files given after the program on the command line.
+// Built with heap_after_asm_lib.asm:
+//   pbuild apps/act/multi/test_heap_after_asm/heap_after_asm_main.act apps/act/multi/test_heap_after_asm/heap_after_asm_lib.asm
+// (make apps and make compiler-tests build every file in this folder together)
+// Passes with trap(0); fails with trap(15).
+// Target: particle (an assembly library)
+
+// Implemented in heap_after_asm_lib.asm
+asm u32 lib_table_sum();
+asm u32 lib_end_addr();
+
+// The array's address: it arrives in R1 and is returned unchanged.
+u32 addr_of(u32 a[]) {
+    asm("    ; R1 already holds the address");
+}
+
+void main() {
+    u32 ok = 1;
+    if (lib_table_sum() != 36) ok = 0;
+    u32 lib_end = lib_end_addr();
+
+    // 256 bytes: more than the whole library, so a heap that started before
+    // it would overwrite its code and table
+    u32 a[] = u32.createArray(64);
+    if (addr_of(a) < lib_end) ok = 0;
+    for (u32 i : 0..64) {
+        a[i] = 0xDEADBEEF;
+    }
+    u32 b[] = u32.createArray(16);
+    if (addr_of(b) < lib_end) ok = 0;
+    for (u32 i : 0..16) {
+        b[i] = 0xFFFFFFFF;
+    }
+
+    // The library's code and data are intact
+    if (lib_table_sum() != 36) ok = 0;
+    if (lib_end_addr() != lib_end) ok = 0;
+    a.destroyArray();
+    b.destroyArray();
+
+    if (ok == 1) {
+        trap(0);
+    } else {
+        trap(15);
+    }
+}

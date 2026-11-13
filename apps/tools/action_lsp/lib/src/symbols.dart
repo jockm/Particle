@@ -2,7 +2,7 @@
 // Declarations in a checked program
 // ------------------------------------------------------------------------------
 //
-// Built from the syntax tree the compiler produced and what code generation
+// Built from the syntax tree the compiler produced and what the checker
 // worked out (type layouts, constant values, function signatures). The
 // compiler records where each declaration starts; the position of its name
 // is found by looking for the name from there in the source text.
@@ -74,6 +74,10 @@ class Sym {
   final String? doc;
 
   final List<Sym> children = [];
+
+  /// For a local: the end of the block that declares it (null when it is
+  /// the function's outermost block).
+  Pos? visibleUntil;
 
   Sym(this.name, this.kind,
       {this.at,
@@ -215,6 +219,8 @@ class ProgramIndex {
       bool isHeapRef = false,
       Object? decl,
       String? searchFor}) {
+    // Block-scoped locals carry internal names; show the source's
+    name = sourceName(name);
     final start = parseLoc(loc);
     SrcLoc? at;
     SrcLoc? declStart;
@@ -279,36 +285,48 @@ class ProgramIndex {
             isArray: p.isOpenArr || p.isPtr,
             decl: p));
       }
-      _collectLocals(f.body, f.name, locals);
+      for (final s in f.body?.stmts ?? const <AstNode>[]) {
+        _collectLocals(s, f.name, locals, null);
+      }
       bodies.add((s, locals));
       s.children.addAll(locals);
     }
     return [s];
   }
 
-  void _collectLocals(AstNode? n, String fn, List<Sym> out) {
+  /// The locals [n] declares; [until] is where the block around it ends.
+  void _collectLocals(AstNode? n, String fn, List<Sym> out, Pos? until) {
     if (n == null) return;
+    Pos? endOf(AstNode b) {
+      if (b is! BlockNode) return until;
+      final e = parseLoc(b.endLoc);
+      return e?.$2 ?? until;
+    }
+
+    void add(Sym s) => out.add(s..visibleUntil = until);
     if (n is BlockNode) {
+      final end = endOf(n);
       for (final s in n.stmts) {
-        _collectLocals(s, fn, out);
+        _collectLocals(s, fn, out, end);
       }
     } else if (n is IfNode) {
-      _collectLocals(n.thenBody, fn, out);
-      _collectLocals(n.elseBody, fn, out);
+      _collectLocals(n.thenBody, fn, out, endOf(n.thenBody));
+      if (n.elseBody != null) _collectLocals(n.elseBody, fn, out, endOf(n.elseBody!));
     } else if (n is WhileNode) {
-      _collectLocals(n.body, fn, out);
+      _collectLocals(n.body, fn, out, endOf(n.body));
     } else if (n is ForRangeNode) {
+      final end = endOf(n.body);
       out.add(_sym(n.varName, SymKind.local, n.loc,
-          container: fn, type: n.varType, decl: n));
-      _collectLocals(n.body, fn, out);
+          container: fn, type: n.varType, decl: n)..visibleUntil = end);
+      _collectLocals(n.body, fn, out, end);
     } else if (n is SwitchNode) {
-      _collectLocals(n.body, fn, out);
+      _collectLocals(n.body, fn, out, endOf(n.body));
     } else if (n is VarDeclNode) {
-      out.add(_variable(n, n.isConst ? SymKind.localConstant : SymKind.local, fn));
+      add(_variable(n, n.isConst ? SymKind.localConstant : SymKind.local, fn));
     } else if (n is TupleAssignNode) {
       for (final t in n.targets) {
         if (t.isWildcard || t.typeName == null || t.name == null) continue;
-        out.add(_sym(t.name!, SymKind.local, n.loc,
+        add(_sym(t.name!, SymKind.local, n.loc,
             container: fn, type: t.typeName, isArray: t.isPtr, decl: n));
       }
     }

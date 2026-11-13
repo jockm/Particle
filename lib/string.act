@@ -6,7 +6,7 @@
 // =============================================================================
 
 // Copy null-terminated payload from src into dst, respecting dst.capacity.
-void string_copy(string dst[], string src) {
+void stringCopy(string dst[], string src) {
     // No room even for the terminator (capacity - 1 would wrap around)
     if (dst.capacity == 0) {
         return;
@@ -25,7 +25,7 @@ void string_copy(string dst[], string src) {
 }
 
 // Append null-terminated payload from src to dst, respecting dst.capacity.
-void string_concat(string dst[], string src) {
+void stringConcat(string dst[], string src) {
     // No room even for the terminator (capacity - 1 would wrap around)
     if (dst.capacity == 0) {
         return;
@@ -47,7 +47,7 @@ void string_concat(string dst[], string src) {
 
 // Lexicographical comparison of two null-terminated strings.
 // Returns 0 if identical, -1 if s1 < s2, 1 if s1 > s2.
-s32 string_compare(string s1, string s2) {
+s32 stringCompare(string s1, string s2) {
     u32 i = 0;
     while (1) {
         u8 c1 = s1[i];
@@ -67,7 +67,7 @@ s32 string_compare(string s1, string s2) {
 }
 
 // Boolean equality check. Returns 1 if s1 == s2, 0 otherwise.
-u32 string_equals(string s1, string s2) {
+u32 stringEquals(string s1, string s2) {
     u32 i = 0;
     while (1) {
         u8 c1 = s1[i];
@@ -85,7 +85,7 @@ u32 string_equals(string s1, string s2) {
 
 // Search for the first occurrence of byte ch in string s.
 // Returns 0-based index if found, -1 if not found.
-s32 string_find(string s, u8 ch) {
+s32 stringFind(string s, u8 ch) {
     u32 i = 0;
     while (1) {
         u8 c = s[i];

@@ -50,7 +50,6 @@ void main() {
         trap(15);
     }
 
-    // Pass: Signal completion via Trap 0 with code 0xCAFE
-    asm("LOAD32 R1, 0x0000CAFE");
+    // Pass
     trap(0);
 }

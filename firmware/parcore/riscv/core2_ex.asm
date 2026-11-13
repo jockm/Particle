@@ -859,27 +859,30 @@ _route_rem:
 
 _do_andn:
     LD      R15, R11
-    NOT     R4, R12
+    LD      R4, R12
+    NOT     R4
     AND     R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_orn:
     LD      R15, R11
-    NOT     R4, R12
+    LD      R4, R12
+    NOT     R4
     OR      R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_xnor:
-    LD      R4, R11
-    XOR     R4, R12
-    NOT     R15, R4
+    LD      R15, R11
+    XOR     R15, R12
+    NOT     R15
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_clz:
-    CLZ     R15, R11
+    LD      R15, R11
+    CLZ     R15
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -891,9 +894,11 @@ _do_ctz:
 _calc_ctz:
     LD      R4, R11
     SUB     R4, 1
-    NOT     R5, R11
+    LD      R5, R11
+    NOT     R5
     AND     R4, R5
-    CLZ     R5, R4
+    LD      R5, R4
+    CLZ     R5
     LOAD16  R6, 31
     LD      R15, R6
     SUB     R15, R5
@@ -919,7 +924,7 @@ _do_cpop:
     LOAD32  R5, 0x0F0F0F0F
     AND     R6, R5
     LOAD32  R5, 0x01010101
-    MULL    R6, R6, R5
+    MULL    R6, R5
     LD      R15, R6
     SHIFTR  R15, 12
     SHIFTR  R15, 12
@@ -975,12 +980,14 @@ _minu_take_a:
     JMP     R14, R0
 
 _do_sext_b:
-    SEXT8   R15, R11
+    LD      R15, R11
+    SEXT8   R15
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_sext_h:
-    SEXT16  R15, R11
+    LD      R15, R11
+    SEXT16  R15
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -1217,7 +1224,7 @@ _dispatch_system:
 
 ._try_csrrc:
     LD      R8, R11             ; CSRRC
-    NOT     R8, R8
+    NOT     R8
     LD      R4, R15
     AND     R4, R8
 

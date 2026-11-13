@@ -1,5 +1,6 @@
 // test_bound_address: @-bound variables and arrays access fixed memory addresses (assumes RAM at 0x8000)
 // Passes with trap(0); fails with trap(15).
+// Target: particle (fixed addresses)
 
 u32 SCRATCH @ 0x00008000;
 u8 BYTES[8] @ 0x00008010;

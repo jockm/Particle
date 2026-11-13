@@ -4,7 +4,7 @@
 //
 // Runs the compiler's checks without writing any output and returns what an
 // editor needs: the program's syntax tree, the first error (with its
-// location taken apart), and what code generation learned about types,
+// location taken apart), and what the checker learned about types,
 // constants and functions.
 
 import 'ast.dart';
@@ -69,9 +69,9 @@ class AnalysisResult {
   const AnalysisResult(this.program, this.error, this.info, [this.notes = const []]);
 }
 
-/// Read-only view of what code generation worked out.
+/// Read-only view of what checking worked out.
 class ProgramInfo {
-  final CodeGen _cg;
+  final Checker _cg;
   ProgramInfo(this._cg);
 
   /// Layout of each user-defined type.
@@ -92,10 +92,14 @@ class ProgramInfo {
   Map<String, (List<String>, String)> get functionTypes => _cg.fnTypes;
 }
 
-/// Checks [sources] (and what they import) as the compiler would, without
-/// producing assembly.
+/// The targets a program can be checked for: Particle (the `action`
+/// compiler) and LLVM (`action_llvm`).
+const analysisTargets = ['particle', 'llvm'];
+
+/// Checks [sources] (and what they import) as the compiler for [target]
+/// (one of [analysisTargets]) would, without producing code.
 AnalysisResult analyze(List<String> sources,
-    {CompileOptions options = const CompileOptions()}) {
+    {CompileOptions options = const CompileOptions(), String target = 'particle'}) {
   final ProgramNode program;
   final Map<String, int> defines;
   try {
@@ -104,14 +108,11 @@ AnalysisResult analyze(List<String> sources,
   } on CompileError catch (e) {
     return AnalysisResult(null, Diagnostic.fromError(e), null);
   }
-  final cg = CodeGen(
-      boundsCheck: options.boundsCheck,
-      referenceCheck: options.referenceCheck,
-      backend: ParticleAsmBackend(),
+  final cg = Checker(target == 'llvm' ? LlvmTarget() : ParticleAsmBackend(),
       predefinedConstants: defines);
   Diagnostic? error;
   try {
-    cg.generate(program);
+    cg.check(program);
   } on CompileError catch (e) {
     error = Diagnostic.fromError(e);
   }

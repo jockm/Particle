@@ -1,3 +1,4 @@
+// Target: particle (fixed addresses)
 import "lib/protokernel.act";
 
 // 1. Unified 'type' keyword for struct definition

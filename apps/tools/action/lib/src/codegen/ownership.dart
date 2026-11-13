@@ -7,7 +7,7 @@ part of 'codegen.dart';
 // The references held in a function's own variables (its record references,
 // array references `T x[]`, heap strings, and its record parameters) are
 // followed through every path of the function. At each point a reference is
-// known to be valid, null (set to 0, destroyed, or never given a value), or
+// known to be valid, empty (unset(), destroyed, or never given a value), or
 // moved (assigned to another variable), or it may be any mix of these when
 // paths with different outcomes meet. Using a reference that is not
 // definitely valid is an error: reading a field or element, `.len`, calling a
@@ -59,7 +59,7 @@ class _RefFacts extends FlowFacts<_RefFacts> {
   }
 }
 
-extension _Ownership on CodeGen {
+extension _Ownership on Checker {
   /// The field [e] names when it is a reference field (`ref T f` or
   /// `T f[]`), else null.
   FieldInfo? _refField(AstNode e) {
@@ -67,12 +67,6 @@ extension _Ownership on CodeGen {
     final (bt, _) = _getExprType(e.expr);
     final f = structs[cleanName(bt)]?.fields[e.member];
     return (f != null && f.isPtr) ? f : null;
-  }
-
-  /// With `-freference-check`, traps if the reference in [reg], read from
-  /// field [field], is null.
-  void _checkFieldRef(String field, int reg) {
-    if (referenceCheck) backend.genNullTrap(reg, "field '$field'");
   }
 
   /// `n.f = rhs` for a reference field: the value must be a reference.
@@ -103,17 +97,9 @@ extension _Ownership on CodeGen {
     }
   }
 
-  /// With `-freference-check`, traps if [base], a reference held in a
-  /// global (which the flow analysis does not follow), is null; its value
-  /// is in [reg].
-  void _checkGlobalRef(AstNode base, int reg) {
-    if (!referenceCheck) return;
-    if (base is VarAccessNode &&
-        globals.contains(base.name) &&
-        !locals.containsKey(base.name)) {
-      backend.genNullTrap(reg, "global '${base.name}'");
-    }
-  }
+  /// True when an element of a tuple result is a reference.
+  bool _tupleElemIsReference(TupleElemType e) =>
+      e.$2 || _isRecordTypeName(e.$1) || cleanName(e.$1) == 'string';
 
   /// True when [sig] returns a single reference (record, array or string).
   bool _returnsReference(FuncSig sig) {
@@ -145,7 +131,13 @@ extension _Ownership on CodeGen {
     final summaries = <String, bool>{
       for (final f in bodies)
         if (funcSignatures[f.name] != null && _returnsReference(funcSignatures[f.name]!))
-          f.name: true
+          f.name: true,
+      // Each reference of a tuple result, as 'name#index'
+      for (final f in bodies)
+        if (f.retType is List)
+          for (var i = 0; i < (f.retType as List).length; i++)
+            if (_tupleElemIsReference((f.retType as List)[i] as TupleElemType))
+              '${f.name}#$i': true
     };
     final saved = Map<String, TypeInfo>.of(types);
     try {
@@ -153,11 +145,22 @@ extension _Ownership on CodeGen {
       while (changed) {
         changed = false;
         for (final f in bodies) {
-          if (summaries[f.name] != true) continue;
+          final keys = [
+            if (summaries[f.name] == true) f.name,
+            for (final k in summaries.keys)
+              if (k.startsWith('${f.name}#') && summaries[k] == true) k
+          ];
+          if (keys.isEmpty) continue;
           final a = _analyzeReferences(f, summaries);
-          if (!a.returnsValid) {
+          if (!a.returnsValid && summaries[f.name] == true) {
             summaries[f.name] = false;
             changed = true;
+          }
+          for (final i in a.tupleInvalid) {
+            if (summaries['${f.name}#$i'] == true) {
+              summaries['${f.name}#$i'] = false;
+              changed = true;
+            }
           }
         }
       }
@@ -177,7 +180,7 @@ extension _Ownership on CodeGen {
     final params = <String>{};
     for (final p in f.params) {
       final isRecordRef = _isRecordTypeName(p.type) && !p.isPtr && !p.isOpenArr;
-      types[p.name] = TypeInfo(p.type, p.isPtr, isRecordRef || p.isOpenArr);
+      types[p.name] = TypeInfo(p.type, p.isPtr, isRecordRef || p.isOpenArr, p.isRefArray);
       params.add(p.name);
       if (isRecordRef) {
         tracked.add(p.name);
@@ -188,7 +191,7 @@ extension _Ownership on CodeGen {
     _collectLocalDecls(f.body, decls);
     for (final d in decls) {
       final isRecordRef = _isRecordTypeName(d.typeName) && refs.contains(d.name);
-      types[d.name] = TypeInfo(d.typeName, d.isPtr, isRecordRef);
+      types[d.name] = TypeInfo(d.typeName, d.isPtr, isRecordRef, d.isRefArray);
       if (d.dimExprs.isNotEmpty) continue;
       if (isRecordRef || d.isPtr || (cleanName(d.typeName) == 'string')) {
         tracked.add(d.name);
@@ -199,13 +202,18 @@ extension _Ownership on CodeGen {
     final sig = funcSignatures[f.name];
     final a = _RefAnalysis(this, f, tracked, params, summaries,
         sig != null && _returnsReference(sig));
-    FlowWalker<_RefFacts>(a).stmt(f.body!, _RefFacts(start));
+    try {
+      FlowWalker<_RefFacts>(a).stmt(f.body!, _RefFacts(start));
+    } on CompileError catch (e) {
+      // An error in typing an expression: place it where the walk was
+      throw e.at(a._here ?? f.loc);
+    }
     return a;
   }
 }
 
 class _RefAnalysis extends FlowAnalysis<_RefFacts> {
-  final CodeGen g;
+  final Checker g;
   final FuncDeclNode func;
   final Set<String> tracked;
   final Set<String> params;
@@ -215,6 +223,10 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
 
   /// False once a `return` gives a reference that may not be valid.
   bool returnsValid = true;
+
+  /// The positions of a tuple result some `return` gives a reference that
+  /// may be empty.
+  final Set<int> tupleInvalid = {};
 
   _RefAnalysis(this.g, this.func, this.tracked, this.params, this.summaries,
       this.returnsRef);
@@ -249,9 +261,9 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
       return;
     }
     if (st == _refNull) {
-      _error("'$name' is null here (it was set to 0, destroyed, or never given a value)");
+      _error("'$name' is empty here (it was emptied with unset(), destroyed, or never given a value)");
     } else {
-      _error("'$name' may be null here; check it with '$name.exists()' first");
+      _error("'$name' may be empty here; check it with '$name.exists()' first");
     }
   }
 
@@ -271,9 +283,13 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
     }
     if (stmt is TupleAssignNode) {
       var cur = _ev(stmt.expr, s);
-      for (final t in stmt.targets) {
+      final call = stmt.expr;
+      final callee = call is CallNode ? g._calleeName(call) : null;
+      for (var i = 0; i < stmt.targets.length; i++) {
+        final t = stmt.targets[i];
         if (!t.isWildcard && t.name != null && tracked.contains(t.name)) {
-          cur = cur.withState(t.name!, _refMaybeNull);
+          final valid = callee != null && summaries['$callee#$i'] == true;
+          cur = cur.withState(t.name!, valid ? _refValid : _refMaybeNull);
         }
       }
       return cur;
@@ -311,7 +327,12 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
   @override
   void onTupleReturn(TupleReturnNode ret, _RefFacts s) {
     var cur = s;
-    for (final e in ret.exprs) {
+    for (var i = 0; i < ret.exprs.length; i++) {
+      final e = ret.exprs[i];
+      if (summaries.containsKey('${func.name}#$i')) {
+        final (st, _) = _refValue(e, cur);
+        if (st != _refValid) tupleInvalid.add(i);
+      }
       if (_isTracked(e)) {
         _valueUse((e as VarAccessNode).name, cur);
       } else {
@@ -440,6 +461,16 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
     if (e is BinaryOpNode) {
       switch (e.op) {
         case '=':
+          if (e.isUnset) {
+            final t = e.left;
+            if (t is VarAccessNode &&
+                tracked.contains(t.name) &&
+                !params.contains(t.name) &&
+                (s.states[t.name] ?? _refValid) == _refValid) {
+              _error("'${t.name}' still owns its value; destroy it, or move it to another "
+                  'variable or field, before unset()');
+            }
+          }
           return _assign(e.left, e.right, s);
         case '&&' || '||':
           final (t, f) = cond(e, s);
@@ -466,9 +497,16 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
     if (e is HeapArrayAllocNode) return _ev(e.countExpr, s);
     if (e is HeapStringAllocNode) return _ev(e.capExpr, s);
     if (e is HeapAllocNode) {
+      // A reference given to a field of the new value moves into it
       var cur = s;
       for (final a in e.args) {
-        cur = _ev(a, cur);
+        if (_isTracked(a)) {
+          final name = (a as VarAccessNode).name;
+          _valueUse(name, cur);
+          cur = cur.withState(name, _refMoved);
+        } else {
+          cur = _ev(a, cur);
+        }
       }
       return cur;
     }
@@ -482,6 +520,7 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
       return after;
     }
     if (e is HeapArrayResizeNode) return _ev(e.newLenExpr, _ev(e.expr, s));
+    if (e is ConvertNode) return _ev(e.expr, s);
     if (e is ExistsNode) {
       if (_isTracked(e.expr)) {
         _valueUse((e.expr as VarAccessNode).name, s);
@@ -502,8 +541,9 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
     if (_isTracked(right)) {
       final name = (right as VarAccessNode).name;
       _valueUse(name, cur);
-      // A whole variable (a global) or a reference field takes it over
-      if (left is VarAccessNode || g._refField(left) != null) {
+      // A whole variable (a global), a reference field or an element of an
+      // array of references takes it over
+      if (left is VarAccessNode || g._refField(left) != null || g._isRefElement(left)) {
         cur = cur.withState(name, _refMoved);
       }
     } else {
@@ -532,11 +572,41 @@ class _RefAnalysis extends FlowAnalysis<_RefFacts> {
         final takesRecord = g._isRecordTypeName(p.type) && !p.isPtr && !p.isOpen;
         final k = g._tryConst(arg);
         if (takesRecord && k != null && k.value == BigInt.zero) {
-          _error("argument ${i + 1} of '$callee' is null; an argument of a user-defined type must be a valid reference");
+          _error("argument ${i + 1} of '$callee' is 0; an argument of a user-defined type must be a reference that has a value");
         }
       }
       cur = _ev(arg, cur);
     }
     return cur;
+  }
+}
+
+/// The run-time null checks code generation emits for references the flow
+/// analysis does not follow.
+extension _RefTraps on CodeGen {
+  /// With `-freference-check`, traps if the stored reference [e] (a `ref`
+  /// field or an element of an array of references), whose value is in
+  /// [reg], is null.
+  void _checkStoredRef(AstNode e, int reg) {
+    final what = _storedRefName(e);
+    if (what != null && referenceCheck) backend.genNullTrap(reg, what);
+  }
+
+  /// With `-freference-check`, traps if the reference in [reg], read from
+  /// field [field], is null.
+  void _checkFieldRef(String field, int reg) {
+    if (referenceCheck) backend.genNullTrap(reg, "field '$field'");
+  }
+
+  /// With `-freference-check`, traps if [base], a reference held in a
+  /// global (which the flow analysis does not follow), is null; its value
+  /// is in [reg].
+  void _checkGlobalRef(AstNode base, int reg) {
+    if (!referenceCheck) return;
+    if (base is VarAccessNode &&
+        globals.contains(base.name) &&
+        !locals.containsKey(base.name)) {
+      backend.genNullTrap(reg, "global '${base.name}'");
+    }
   }
 }

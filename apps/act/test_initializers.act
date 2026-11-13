@@ -1,0 +1,71 @@
+// test_initializers: brace initializers for arrays, string arrays and
+// records, global strings, and constant tables
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    s16 x;
+    s16 y;
+};
+
+type Shape {
+    u8 kind;
+    Point corners[2];
+    string label[8];
+};
+
+const u32 SQUARES[5] = {0, 1, 4, 9, 16};
+const u8 FONT[2][3] = {{0x1F, 0x11, 0x1F}, {0x00, 0b1111_1111}};
+u16 g_table[4] = {10, 20, 30};
+string g_greeting[16] = "hello";
+string g_names[3][6] = {"ann", "bob"};
+Point g_origin = {x: -1, y: 2};
+Shape g_shape = {kind: 3, corners: {{x: 1, y: 2}, {x: 3, y: 4}}, label: "box"};
+
+u32 sum(u32 xs[]) {
+    u32 t = 0;
+    for (u32 i : 0..xs.len) {
+        t += xs[i];
+    }
+    return t;
+}
+
+void main() {
+    u32 ok = 1;
+
+    // Constant tables and initialized globals
+    if (SQUARES[3] != 9 || SQUARES.len != 5) ok = 0;
+    if (FONT[0][2] != 0x1F || FONT[1][1] != 0xFF || FONT[1][2] != 0) ok = 0;
+    if (g_table[1] != 20 || g_table[3] != 0) ok = 0;
+    if (g_greeting.len != 5 || g_greeting[4] != 'o') ok = 0;
+    if (g_names[1][0] != 'b' || g_names[2].len != 0) ok = 0;
+    if (g_origin.x != -1 || g_origin.y != 2) ok = 0;
+    if (g_shape.kind != 3 || g_shape.corners[1].y != 4 || g_shape.label[2] != 'x') ok = 0;
+
+    // Locals, with values computed at run time
+    u32 base = 100;
+    u32 a[4] = {base, base + 1, 7};
+    if (a[0] != 100 || a[1] != 101 || a[2] != 7 || a[3] != 0) ok = 0;
+    if (sum(a) != 208) ok = 0;
+    u8 grid[2][2] = {{1, 2}, {3}};
+    if (grid[0][1] != 2 || grid[1][0] != 3 || grid[1][1] != 0) ok = 0;
+    string words[3][8] = {"one", "two"};
+    if (words[1][2] != 'o' || words[2].len != 0) ok = 0;
+    Point p = {x: 5};
+    if (p.x != 5 || p.y != 0) ok = 0;
+    Shape s = {kind: 1, corners: {{x: 7}}, label: "tri"};
+    if (s.corners[0].x != 7 || s.label.len != 3) ok = 0;
+
+    // In a loop, a local with an initializer starts afresh on every pass
+    u32 total = 0;
+    for (u32 i : 0..3) {
+        u32 b[3] = {i};
+        b[1] += 1;
+        total += b[0] + b[1] + b[2];
+    }
+    if (total != 6) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

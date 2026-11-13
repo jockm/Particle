@@ -1,0 +1,101 @@
+// test_ref_arrays: arrays of references to records and to strings
+// Passes with trap(0); fails with trap(15).
+
+type Node {
+    u32 val;
+    ref Node next;
+};
+
+void Node.bump() {
+    this.val += 1;
+}
+
+u32 total(ref Node xs[]) {
+    u32 t = 0;
+    for (u32 i : 0..xs.len) {
+        if (xs[i].exists()) {
+            t += xs[i].val;
+        }
+    }
+    return t;
+}
+
+u32 getval(Node n) {
+    return n.val;
+}
+
+u32 lengths(ref string ss[]) {
+    u32 t = 0;
+    for (u32 i : 0..ss.len) {
+        t += ss[i].len;
+    }
+    return t;
+}
+
+ref Node g_nodes[2];
+
+void main() {
+    u32 ok = 1;
+    ref Node nodes[4];
+    if (nodes.len != 4) ok = 0;
+    if (sizeof(nodes) != 4 * sizeof(Ref)) ok = 0;
+    for (u32 i : 0..4) {
+        if (nodes[i].exists()) ok = 0;   // they start null
+    }
+    nodes[0] = Node.create();
+    nodes[0].val = 10;
+    nodes[2] = Node.create();
+    nodes[2].val = 5;
+    nodes[2].bump();
+    if (nodes[2].val != 6) ok = 0;
+    if (getval(nodes[0]) != 10) ok = 0;
+    if (total(nodes) != 16) ok = 0;
+
+    // A variable given to an element is moved into it
+    Node n = Node.create();
+    n.val = 7;
+    nodes[1] = n;
+    if (total(nodes) != 23) ok = 0;
+
+    // An element read into a variable is a reference to the same record
+    // (which may be null, so it is checked)
+    Node m = nodes[0];
+    if (m.exists()) {
+        m.val = 11;
+    }
+    if (nodes[0].val != 11) ok = 0;
+
+    nodes[2].destroy();
+    if (nodes[2].exists()) ok = 0;
+    if (total(nodes) != 18) ok = 0;
+    nodes[0].destroy();
+    nodes[1].destroy();
+
+    g_nodes[1] = Node.create();
+    g_nodes[1].val = 3;
+    if (total(g_nodes) != 3) ok = 0;
+    g_nodes[1].destroy();
+
+    // References to strings: literals and heap strings
+    ref string words[3];
+    words[0] = "one";
+    words[1] = "three";
+    string h[] = string.create(8);
+    h[0] = 'h';
+    words[2] = h;
+    if (words[1].len != 5) ok = 0;
+    if (words[1][2] != 'r') ok = 0;
+    if (lengths(words) != 9) ok = 0;
+    words[2][1] = 'i';
+    if (words[2][1] != 'i') ok = 0;
+    words[2].destroy();
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}
+
+type Ref {
+    ref Node r;
+};

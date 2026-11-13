@@ -36,7 +36,7 @@ task task_producer(type pt p) {
 
 task task_consumer(type pt p) {
     while (g_consumer_count < 4) {
-        wait_until(p, g_mailbox_ready == 1);
+        waitUntil(p, g_mailbox_ready == 1);
 
         g_checksum += g_shared_mailbox;
         g_mailbox_ready = 0;
@@ -50,8 +50,8 @@ void main() {
     type pt pt_prod;
     type pt pt_cons;
 
-    pk_init(pt_prod);
-    pk_init(pt_cons);
+    pkInit(pt_prod);
+    pkInit(pt_cons);
 
     while (g_consumer_count < 4) {
         task_producer(pt_prod);

@@ -8,6 +8,8 @@
 //   action [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR]
 //          [-fbounds-check] [-fno-bounds-check]
 //          [-freference-check] [-fno-reference-check] sources [sources ...]
+//
+// action_llvm takes the same options, and -g / -g0 for debug information.
 
 import 'dart:io';
 
@@ -16,6 +18,7 @@ import 'errors.dart';
 import 'paths.dart' as p;
 
 const String toolName = 'action';
+const String llvmToolName = 'action_llvm';
 
 const String usageLine =
     'usage: $toolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-fbounds-check]\n'
@@ -40,6 +43,32 @@ options:
   -freference-check     Enable runtime null reference checking (default)
   -fno-reference-check  Disable runtime null reference checking''';
 
+const String llvmUsageLine =
+    'usage: $llvmToolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-g] [-g0]\n'
+    '              [-fbounds-check] [-fno-bounds-check] [-freference-check]\n'
+    '              [-fno-reference-check] sources [sources ...]';
+
+const String llvmHelpText = '''$llvmUsageLine
+
+Action Systems Language Compiler for LLVM: writes LLVM IR (.ll) for a 64-bit
+host. Use llbuild to compile and link it.
+
+positional arguments:
+  sources               Input Action source file(s) (.act)
+
+options:
+  -h, --help            show this help message and exit
+  -o, --output OUTPUT   Output LLVM IR file (.ll)
+  -D, --define DEFINE   Predefine symbol (KEY[=VALUE])
+  -I, --include-dir INCLUDE_DIR
+                        Add include search directory
+  -g                    Emit debug information (default)
+  -g0                   Emit no debug information
+  -fbounds-check        Enable runtime array bounds checking (default)
+  -fno-bounds-check     Disable runtime array bounds checking
+  -freference-check     Enable runtime null reference checking (default)
+  -fno-reference-check  Disable runtime null reference checking''';
+
 /// argparse-style option names used in error messages.
 const _displayName = {
   'output': '-o/--output',
@@ -55,6 +84,7 @@ class CliArgs {
   final List<String> includeDirs = [];
   bool boundsCheck = true;
   bool referenceCheck = true;
+  bool debugInfo = true;
   bool help = false;
 }
 
@@ -66,7 +96,7 @@ class UsageError implements Exception {
 
 /// Parses [argv]. Options may be given as `-o FILE`, `-oFILE`,
 /// `--output FILE` or `--output=FILE`; `--` ends option parsing.
-CliArgs parseArgs(List<String> argv) {
+CliArgs parseArgs(List<String> argv, {bool llvm = false}) {
   final a = CliArgs();
   var i = 0;
   var optionsDone = false;
@@ -117,6 +147,10 @@ CliArgs parseArgs(List<String> argv) {
       a.referenceCheck = true;
     } else if (arg == '-fno-reference-check') {
       a.referenceCheck = false;
+    } else if (llvm && arg == '-g') {
+      a.debugInfo = true;
+    } else if (llvm && arg == '-g0') {
+      a.debugInfo = false;
     } else if (arg.startsWith('--')) {
       final eq = arg.indexOf('=');
       final name = eq < 0 ? arg : arg.substring(0, eq);
@@ -149,25 +183,27 @@ CliArgs parseArgs(List<String> argv) {
   return a;
 }
 
-/// Runs the compiler with [argv] and returns the process exit code.
-int runCli(List<String> argv) {
+/// Runs the compiler with [argv] and returns the process exit code. With
+/// [llvm], it is action_llvm and writes LLVM IR.
+int runCli(List<String> argv, {bool llvm = false}) {
+  final tool = llvm ? llvmToolName : toolName;
   final CliArgs args;
   try {
-    args = parseArgs(argv);
+    args = parseArgs(argv, llvm: llvm);
   } on UsageError catch (e) {
-    stderr.writeln(usageLine);
-    stderr.writeln('$toolName: error: ${e.message}');
+    stderr.writeln(llvm ? llvmUsageLine : usageLine);
+    stderr.writeln('$tool: error: ${e.message}');
     return 2;
   }
   if (args.help) {
-    stdout.writeln(helpText);
+    stdout.writeln(llvm ? llvmHelpText : helpText);
     return 0;
   }
 
   var output = args.output;
   if (output == null || output.isEmpty) {
     final base = p.withoutExtension(p.basename(args.sources[0]));
-    output = p.join('build', '$base.asm');
+    output = llvm ? p.join('build', 'llvm', '$base.ll') : p.join('build', '$base.asm');
   }
 
   final outDir = p.dirname(output);
@@ -176,28 +212,29 @@ int runCli(List<String> argv) {
   }
 
   final notes = <CompileNote>[];
+  final options = CompileOptions(
+      includeDirs: args.includeDirs,
+      defines: args.defines,
+      boundsCheck: args.boundsCheck,
+      referenceCheck: args.referenceCheck);
   try {
-    final asmCode = compile(args.sources,
-        notes: notes,
-        options: CompileOptions(
-            includeDirs: args.includeDirs,
-            defines: args.defines,
-            boundsCheck: args.boundsCheck,
-            referenceCheck: args.referenceCheck));
-    File(output).writeAsStringSync(asmCode);
+    final code = llvm
+        ? compileLlvm(args.sources, notes: notes, options: options, debugInfo: args.debugInfo)
+        : compile(args.sources, notes: notes, options: options);
+    File(output).writeAsStringSync(code);
   } on CompileError catch (e) {
-    _printNotes(notes);
-    stderr.writeln('$toolName: error: ${e.message}');
+    _printNotes(notes, tool);
+    stderr.writeln('$tool: error: ${e.message}');
     return 1;
   }
-  _printNotes(notes);
+  _printNotes(notes, tool);
   return 0;
 }
 
 /// Warnings and information go to stderr; they do not change the exit
 /// status.
-void _printNotes(List<CompileNote> notes) {
+void _printNotes(List<CompileNote> notes, String tool) {
   for (final n in notes) {
-    stderr.writeln(n.format(toolName));
+    stderr.writeln(n.format(tool));
   }
 }

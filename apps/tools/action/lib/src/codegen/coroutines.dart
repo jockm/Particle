@@ -6,7 +6,7 @@ part of 'codegen.dart';
 //
 // A task is declared `task name(State t, ...) { ... }`. It returns its status
 // (a u16) and is the only kind of function that may pause, with `yield(t)`,
-// `wait_until(t, cond)` and `pk_exit(t)`. These are declared as prototypes in
+// `waitUntil(t, cond)` and `pkExit(t)`. These are declared as prototypes in
 // lib/protokernel.act and look like ordinary calls, but the compiler generates
 // them in place: they store into the task's continuation counter `t.lc` and
 // return from the task, and a task's entry dispatches on `t.lc` to the point
@@ -23,9 +23,9 @@ part of 'codegen.dart';
 // set again, is an error, and so is a `for` loop whose body pauses.
 
 /// Names of the coroutine operations and their argument counts.
-const Map<String, int> _coroutineOps = {'yield': 1, 'wait_until': 2, 'pk_exit': 1};
+const Map<String, int> _coroutineOps = {'yield': 1, 'waitUntil': 2, 'pkExit': 1};
 
-extension _Coroutines on CodeGen {
+extension _Coroutines on Checker {
   /// True when [name] is a coroutine operation the program has declared.
   bool _isCoroutineOp(String name) =>
       _coroutineOps.containsKey(name) && _prototypeNames.contains(name);
@@ -100,7 +100,7 @@ extension _Coroutines on CodeGen {
     switch (call.name) {
       case 'yield':
         return YieldNode(taskArg)..stepConst = _nextStep++;
-      case 'wait_until':
+      case 'waitUntil':
         return WaitUntilNode(taskArg, call.args[1])..stepConst = _nextStep++;
       default:
         return PkExitNode(taskArg);

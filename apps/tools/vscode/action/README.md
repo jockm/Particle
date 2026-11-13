@@ -47,15 +47,26 @@ the workspace root:
   "action": {
     "includeDirs": ["lib", "apps/act"],
     "defines": { "DEBUG": 1, "BAUD": 115200 },
+    "target": ["particle", "llvm"],
+    "programFolders": ["apps/act/multi"],
     "programs": [
-      { "files": ["apps/act/multi_file_main.act", "apps/act/multi_file_math.act"] }
+      { "files": ["tools/gen_main.act", "tools/gen_tables.act"] }
     ]
   }
 }
 ```
 
-Paths are relative to `action.json`. A file listed in a program is checked
-together with the rest of it.
+Paths are relative to `action.json`. Each subfolder of a folder in
+`programFolders` is one program: all the `.act` files in it are checked
+together, and adding a folder or a file needs no change to `action.json`.
+`programs` lists other groups file by file. A file in a program is checked
+together with the rest of it; any other file is checked on its own.
+
+`target` is the compiler programs are checked for: `"particle"` (the
+default), `"llvm"`, or both as a list. With both, an error found for only one
+of them is shown as a warning that names it (`for llvm: ...`). A file whose
+header comment has the line `// Target: particle` (or `llvm`) is checked for
+that target only.
 
 ## Developing the extension
 

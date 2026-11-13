@@ -8,7 +8,7 @@
 .org 0x00000100
 _reset_vector:
     LOAD16  R10, 0x0500         ; Guest RV32 PC (Base at 0x00000500)
-    LD      R0, 0               ; R0 = 0 (Channel 0: FTDI Console UART)
+    ; LD      R0, 0               ; R0 = 0 (Channel 0: FTDI Console UART)
     LD      R1, 1               ; R1 = 1 (Channel 1: Core 1 ID Stage Queue)
 
 ; ==============================================================================

@@ -5,6 +5,8 @@
 // Description: Interactive Dual-UART Memory Monitor & Debugger.
 //              Provides memory inspection, modification, jump-to-address,
 //              MMIO baud prescaler configuration, and aux UART transmission.
+//              Memory at addresses typed in at run time is reached with the
+//              built-ins peek32, poke32, poke16 and callAddr.
 // =============================================================================
 
 // Target hardware channels & MMIO addresses
@@ -18,21 +20,21 @@ const u16 DEFAULT_AUX_DIVISOR = 217;        // ~115200 baud @ 25 MHz
 // -----------------------------------------------------------------------------
 
 void con_putc(u8 ch) {
-    writefifo(CONSOLE_CHAN, (u32)ch);
+    writeFifo(CONSOLE_CHAN, ch);
 }
 
-u8 con_getc(void) {
-    return (u8)readfifo(CONSOLE_CHAN);
+u8 con_getc() {
+    return readFifo(CONSOLE_CHAN);
 }
 
 void aux_putc(u8 ch) {
-    writefifo(AUX_CHAN, (u32)ch);
+    writeFifo(AUX_CHAN, ch);
 }
 
-void con_puts(u8* str) {
-    u16 i = 0;
-    while (*(str + i) != 0) {
-        con_putc(*(str + i));
+void con_puts(string str) {
+    u32 i = 0;
+    while (str[i] != 0) {
+        con_putc(str[i]);
         i = i + 1;
     }
 }
@@ -56,20 +58,20 @@ void con_put_hex8(u8 val) {
 }
 
 void con_put_hex16(u16 val) {
-    con_put_hex8((u8)(val >> 8));
-    con_put_hex8((u8)val);
+    con_put_hex8((val >> 8) & 0xFF);
+    con_put_hex8(val & 0xFF);
 }
 
 void con_put_hex32(u32 val) {
-    con_put_hex16((u16)(val >> 16));
-    con_put_hex16((u16)val);
+    con_put_hex16(val >> 16);
+    con_put_hex16(val & 0xFFFF);
 }
 
 // -----------------------------------------------------------------------------
 // Console Parsing Routines
 // -----------------------------------------------------------------------------
 
-u8 con_read_token(void) {
+u8 con_read_token() {
     u8 ch = 0;
     // Skip leading whitespace / CR / LF
     while (1) {
@@ -81,7 +83,7 @@ u8 con_read_token(void) {
     return 0;
 }
 
-u32 con_read_hex(void) {
+u32 con_read_hex() {
     u32 result = 0;
     u8 ch = 0;
 
@@ -101,11 +103,11 @@ u32 con_read_hex(void) {
 
         u32 digit = 0xFF;
         if (ch >= 0x30 && ch <= 0x39) {
-            digit = (u32)(ch - 0x30);
+            digit = ch - 0x30;
         } else if (ch >= 0x41 && ch <= 0x46) {
-            digit = (u32)(ch - 0x37);
+            digit = ch - 0x37;
         } else if (ch >= 0x61 && ch <= 0x66) {
-            digit = (u32)(ch - 0x57);
+            digit = ch - 0x57;
         }
 
         if (digit != 0xFF) {
@@ -123,100 +125,94 @@ u32 con_read_hex(void) {
 // -----------------------------------------------------------------------------
 
 // 'D' <addr> <count>: Dump 32-bit words
-void cmd_dump(void) {
-    u32 raw_addr = con_read_hex();
+void cmd_dump() {
+    u32 addr = con_read_hex();
     u32 count = con_read_hex();
 
     // Enforce 4-byte alignment
-    raw_addr = raw_addr & 0xFFFFFFFC;
-    u32* ptr = (u32*)raw_addr;
+    addr = addr & 0xFFFFFFFC;
 
     while (count > 0) {
         // Line address prefix
-        con_put_hex32((u32)ptr);
-        con_puts((u8*)": ");
+        con_put_hex32(addr);
+        con_puts(": ");
 
         // Print up to 4 words per row
         u8 words_in_line = 4;
         while (words_in_line > 0 && count > 0) {
-            con_put_hex32(*ptr);
+            con_put_hex32(peek32(addr));
             con_putc(0x20);
 
-            ptr = ptr + 1; // Scaled automatically by 4 bytes
+            addr = addr + 4;
             count = count - 1;
             words_in_line = words_in_line - 1;
         }
 
-        con_puts((u8*)"\r\n");
+        con_puts("\r\n");
     }
 }
 
 // 'W' <addr> <val>: Write a 32-bit word to memory
-void cmd_write(void) {
-    u32 raw_addr = con_read_hex();
+void cmd_write() {
+    u32 addr = con_read_hex();
     u32 val = con_read_hex();
 
-    raw_addr = raw_addr & 0xFFFFFFFC;
-    u32* ptr = (u32*)raw_addr;
-    *ptr = val;
+    poke32(addr & 0xFFFFFFFC, val);
 
-    con_puts((u8*)"OK\r\n");
+    con_puts("OK\r\n");
 }
 
 // 'G' <addr>: Run code at specific address
-void cmd_go(void) {
+void cmd_go() {
     u32 target_pc = con_read_hex();
     target_pc = target_pc & 0xFFFFFFFE; // Align to 2 bytes
 
-    con_puts((u8*)"Running...\r\n");
+    con_puts("Running...\r\n");
 
-    // Execute target function via function pointer cast
-    void (*exec_target)(void) = (void (*)(void))target_pc;
-    exec_target();
+    // Call the code there; it returns with RRET
+    callAddr(target_pc);
 
-    con_puts((u8*)"Returned.\r\n");
+    con_puts("Returned.\r\n");
 }
 
 // 'B' <hex_divisor>: Program the MMIO baud rate prescaler for Aux UART
-void cmd_baud(void) {
-    u32 divisor = con_read_hex();
+void cmd_baud() {
+    u32 divisor = con_read_hex() & 0xFFFF;
 
-    u16* baud_reg = (u16*)MMIO_AUX_BAUD_ADDR;
-    *baud_reg = (u16)divisor;
+    poke16(MMIO_AUX_BAUD_ADDR, divisor);
 
-    con_puts((u8*)"Aux UART Baud Divisor set to 0x");
-    con_put_hex16((u16)divisor);
-    con_puts((u8*)"\r\n");
+    con_puts("Aux UART Baud Divisor set to 0x");
+    con_put_hex16(divisor);
+    con_puts("\r\n");
 }
 
 // 'T' <hex_byte>: Transmit test byte out of Aux GPIO UART (FIFO 1)
-void cmd_tx_aux(void) {
+void cmd_tx_aux() {
     u32 byte_val = con_read_hex();
-    aux_putc((u8)byte_val);
-    con_puts((u8*)"OK\r\n");
+    aux_putc(byte_val & 0xFF);
+    con_puts("OK\r\n");
 }
 
 // -----------------------------------------------------------------------------
 // Main Monitor Shell Loop
 // -----------------------------------------------------------------------------
 
-void main(void) {
+void main() {
     // 1. Initialize Aux UART baud rate prescaler via MMIO
-    u16* baud_reg = (u16*)MMIO_AUX_BAUD_ADDR;
-    *baud_reg = DEFAULT_AUX_DIVISOR;
+    poke16(MMIO_AUX_BAUD_ADDR, DEFAULT_AUX_DIVISOR);
 
     // 2. Banner display
-    con_puts((u8*)"\r\n=== Particle Action Dual-UART Monitor ===\r\n");
-    con_puts((u8*)"Commands:\r\n");
-    con_puts((u8*)"  D <addr> <len>   : Dump memory words\r\n");
-    con_puts((u8*)"  W <addr> <val>   : Write memory word\r\n");
-    con_puts((u8*)"  G <addr>         : Jump & run code\r\n");
-    con_puts((u8*)"  B <hex_div>      : Set MMIO baud prescaler (0xF0000010)\r\n");
-    con_puts((u8*)"  T <hex_byte>     : Send test byte on Aux UART\r\n");
+    con_puts("\r\n=== Particle Action Dual-UART Monitor ===\r\n");
+    con_puts("Commands:\r\n");
+    con_puts("  D <addr> <len>   : Dump memory words\r\n");
+    con_puts("  W <addr> <val>   : Write memory word\r\n");
+    con_puts("  G <addr>         : Jump & run code\r\n");
+    con_puts("  B <hex_div>      : Set MMIO baud prescaler (0xF0000010)\r\n");
+    con_puts("  T <hex_byte>     : Send test byte on Aux UART\r\n");
 
     // 3. Command interpreter loop
     while (1) {
-        con_puts((u8*)"Action-MON> ");
+        con_puts("Action-MON> ");
         u8 cmd = con_read_token();
 
         if (cmd == 0x44 || cmd == 0x64) {          // 'D' / 'd'
@@ -230,7 +226,7 @@ void main(void) {
         } else if (cmd == 0x54 || cmd == 0x74) {   // 'T' / 't'
             cmd_tx_aux();
         } else {
-            con_puts((u8*)"? SYNTAX ERROR\r\n");
+            con_puts("? SYNTAX ERROR\r\n");
         }
     }
 }

@@ -48,8 +48,8 @@ void main() {
       });
     });
 
-    test('yield and wait_until parse as ordinary calls', () {
-      final prog = parse('u16 t(pt p) { yield(p, 1); wait_until(p, 2, 1); }');
+    test('yield and waitUntil parse as ordinary calls', () {
+      final prog = parse('u16 t(pt p) { yield(p, 1); waitUntil(p, 2, 1); }');
       final f = prog.decls.single as FuncDeclNode;
       final stmts = f.body!.stmts;
       expect(stmts[0], isA<ExprStmtNode>());

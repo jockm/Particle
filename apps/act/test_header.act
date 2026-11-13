@@ -5,11 +5,11 @@ void Point.move(u32 dx, u32 dy) {
     this.y = this.y + dy;
 }
 
-u32 Point.get_x() {
+u32 Point.getX() {
     return this.x;
 }
 
-u32 Point.get_y() {
+u32 Point.getY() {
     return this.y;
 }
 
@@ -20,8 +20,8 @@ void main() {
 
     pt.move(25, 50);
 
-    u32 px = pt.get_x();
-    u32 py = pt.get_y();
+    u32 px = pt.getX();
+    u32 py = pt.getY();
 
     if (px == 125 && py == 250) {
         trap(0);

@@ -296,17 +296,20 @@ class ActionLanguageServer {
   }
 
   void _check(_ProgramState st) {
-    final result = analyze(st.sources,
-        options: CompileOptions(
-            includeDirs: _project.includeDirs,
-            defines: _project.defines,
-            overlays: _texts.overlays));
+    final options = CompileOptions(
+        includeDirs: _project.includeDirs,
+        defines: _project.defines,
+        overlays: _texts.overlays);
+    final targets = _targetsOf(st.sources);
+    final results = [for (final t in targets) analyze(st.sources, options: options, target: t)];
+    // The first target's types and values are shown in the editor
+    final result = results.first;
     st.result = result;
     final program = result.program;
     if (program != null) st.index = ProgramIndex(program, result.info, _texts);
 
     final byFile = <String, List<Map<String, Object?>>>{};
-    void add(Diagnostic d, int severity, [String suffix = '']) {
+    void add(Diagnostic d, int severity, [String suffix = '', String prefix = '']) {
       final path = d.path == null ? st.sources.first : canonicalPath(d.path!);
       final lines = _texts.lines(path) ?? const <String>[];
       final line = (d.line - 1).clamp(0, lines.isEmpty ? 0 : lines.length - 1);
@@ -318,22 +321,37 @@ class ActionLanguageServer {
         'range': rangeJson(Pos(line, col), Pos(line, end)),
         'severity': severity,
         'source': 'action',
-        'message': '${d.message}$suffix',
+        'message': '$prefix${d.message}$suffix',
       });
     }
 
     for (final n in result.notes) {
       add(n, n.severity == DiagnosticSeverity.warning ? 2 : 3);
     }
-    final err = result.error;
-    if (err != null) {
-      if (!_isListedProgram(st.sources) && _mayBeElsewhere(err.message)) {
+    void addError(Diagnostic err, int severity, [String prefix = '']) {
+      if (!_project.isProgram(st.sources) && _mayBeElsewhere(err.message)) {
         // Checked without the rest of its program: the definition may be
         // in a file named only on the command line
         add(err, 3,
-            ' (this file is checked on its own; list its program in $projectFileName to check it with the rest)');
+            ' (this file is checked on its own; put its program in a program folder or list it in $projectFileName to check it with the rest)',
+            prefix);
       } else {
-        add(err, 1);
+        add(err, severity, '', prefix);
+      }
+    }
+
+    final errors = [for (final r in results) r.error];
+    final first = errors.first;
+    final same = errors.every((e) => _sameDiagnostic(e, first));
+    if (same) {
+      if (first != null) addError(first, 1);
+    } else {
+      // Found for some targets only: a warning naming the target, unless
+      // the program fails for every target
+      final allFail = errors.every((e) => e != null);
+      for (var i = 0; i < targets.length; i++) {
+        final e = errors[i];
+        if (e != null) addError(e, allFail ? 1 : 2, 'for ${targets[i]}: ');
       }
     }
     final toPublish = {...st.sources, ...byFile.keys, ...st.published};
@@ -348,9 +366,29 @@ class ActionLanguageServer {
     }
   }
 
-  /// True when [sources] is a program named in the project file.
-  bool _isListedProgram(List<String> sources) =>
-      _project.programs.any((p) => p.length == sources.length && p.every(sources.contains));
+  /// The targets [sources] are checked for: those of the project file,
+  /// unless a file's header comment says `// Target: particle` (or llvm),
+  /// as the test programs do.
+  List<String> _targetsOf(List<String> sources) {
+    for (final path in sources) {
+      final lines = _texts.lines(path) ?? const <String>[];
+      for (final line in lines) {
+        if (!line.startsWith('//')) break;
+        final m = RegExp(r'^// Target: (\w+)').firstMatch(line);
+        if (m != null && analysisTargets.contains(m.group(1))) return [m.group(1)!];
+      }
+    }
+    return _project.targets;
+  }
+
+  static bool _sameDiagnostic(Diagnostic? a, Diagnostic? b) =>
+      (a == null && b == null) ||
+      (a != null &&
+          b != null &&
+          a.path == b.path &&
+          a.line == b.line &&
+          a.column == b.column &&
+          a.message == b.message);
 
   /// Errors about a definition that another file of the program may supply.
   static bool _mayBeElsewhere(String message) =>

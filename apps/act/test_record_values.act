@@ -1,0 +1,62 @@
+// test_record_values: record literals, T.create(field: value, ...) and
+// copyFrom
+// Passes with trap(0); fails with trap(15).
+
+type Point {
+    s16 x;
+    s16 y;
+};
+
+type Tag {
+    u8 kind;
+    bool on;
+    string name[6];
+    u16 marks[3];
+    Point at;
+};
+
+type Node {
+    u32 v;
+    ref Node next;
+};
+
+Node chain(u32 n) {
+    Node tail = Node.create(v: n);
+    return Node.create(v: n + 1, next: tail);
+}
+
+void main() {
+    u32 ok = 1;
+
+    // A record stored in place, with some fields given
+    Point p = {x: 3};
+    if (p.x != 3 || p.y != 0) ok = 0;
+
+    // A record on the heap, with nested values
+    Tag t = Tag.create(kind: 2, on: true, name: "ab", marks: {4, 5}, at: {y: -6});
+    if (t.kind != 2 || t.on != 1 || t.name.len != 2 || t.name[1] != 'b') ok = 0;
+    if (t.marks[1] != 5 || t.marks[2] != 0 || t.at.y != -6 || t.at.x != 0) ok = 0;
+
+    // A reference given to a field moves into it
+    Node c = chain(10);
+    if (c.v != 11 || c.next.v != 10) ok = 0;
+    c.next.destroy();
+    c.destroy();
+
+    // copyFrom copies a record's bytes, between values and references
+    Point q;
+    q.copyFrom(p);
+    if (q.x != 3) ok = 0;
+    Tag u = Tag.create();
+    u.copyFrom(t);
+    t.destroy();
+    if (u.marks[0] != 4 || u.name[0] != 'a' || u.at.y != -6) ok = 0;
+    q.copyFrom(u.at);
+    if (q.y != -6) ok = 0;
+    u.destroy();
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

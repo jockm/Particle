@@ -1,0 +1,4 @@
+# Local sandbox only (pub.dev is unreachable here); not part of the deliverable.
+dependency_overrides:
+  test:
+    path: /home/claude/testshim

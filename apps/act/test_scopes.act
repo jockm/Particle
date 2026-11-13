@@ -1,0 +1,72 @@
+// test_scopes: each function starts from the global scope; local constants are block scoped;
+// an inline function's body has its own scope
+// Passes with trap(0); fails with trap(15).
+
+u8 count;
+u32 total;
+const u8 SMALL = 3;
+
+inline u32 pair(u32 x, u32 y) {
+    return x * 10 + y;
+}
+
+inline void add_total(u32 v) {
+    total += v;                 // the global, even where a caller has a local 'total'
+}
+
+u32 a() {
+    u32 count = 70000;          // a local of the same name as the u8 global
+    const u32 N = 4;
+    u32 x[N];
+    x[N - 1] = count;
+    {
+        const u32 M = N * 2;
+        u32 y[M];
+        y[M - 1] = 1;
+        return x[3] + y[7];
+    }
+}
+
+u32 b() {
+    const u32 N = 8;            // a's N is gone: this is another constant
+    u32 z[N];
+    return sizeof(z);
+}
+
+void main() {
+    u32 ok = 1;
+    if (a() != 70001) ok = 0;
+    if (b() != 32) ok = 0;
+    // The global is still a u8 after a() declared a u32 'count'
+    count = 255;
+    count += 1;
+    if (count != 0) ok = 0;
+    { const u32 K = 3; if (K != 3) ok = 0; }
+    { const u32 K = 5; if (K != 5) ok = 0; }
+    {
+        const u32 J = 1;
+        { const u32 J = 2; if (J != 2) ok = 0; }   // hides the outer J
+        if (J != 1) ok = 0;
+    }
+    // Arguments are evaluated in the caller's scope: the second is main's x
+    u32 x = 5;
+    if (pair(1, x) != 15) ok = 0;
+    if (shadow_total() != 9) ok = 0;
+    if (total != 7) ok = 0;
+    if (sizeof(SMALL) != 1) ok = 0;
+    if (twice(4) != 8) ok = 0;   // inline function declared below
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}
+
+u32 shadow_total() {
+    u32 total = 9;
+    add_total(7);
+    return total;
+}
+
+inline u32 twice(u32 v) {
+    return v + v;
+}

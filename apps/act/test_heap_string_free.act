@@ -2,6 +2,7 @@
 // capacity header included, so the allocator hands the same block out
 // again for the next request of that size.
 // Passes with trap(0); fails with trap(15).
+// Target: particle (Particle's allocator, inline assembly)
 
 // The string's address: it arrives in R1 and is returned unchanged.
 u32 addr_of(string s) {

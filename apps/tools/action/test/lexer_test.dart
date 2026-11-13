@@ -14,8 +14,8 @@ void main() {
       expect(kinds('while foo'), ['KEYWORD', 'IDENT']);
     });
 
-    test('yield and wait_until are identifiers, not keywords', () {
-      expect(kinds('yield wait_until pk_exit'), ['IDENT', 'IDENT', 'IDENT']);
+    test('yield and waitUntil are identifiers, not keywords', () {
+      expect(kinds('yield waitUntil pkExit'), ['IDENT', 'IDENT', 'IDENT']);
     });
 
     test('continue is a keyword', () {

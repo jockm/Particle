@@ -45,3 +45,49 @@ hdl/parcore/*.bit
 
 # Stage kernel binary builds
 build/parcore/
+
+
+######################################
+# Everything for NodeJS
+
+# Dependencies
+node_modules/
+
+# Build & compilation outputs
+dist/
+build/
+.next/
+.nuxt/
+out/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Caches & temporary files
+.npm
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+.pnp.*
+.eslintcache
+.stylelintcache
+.cache/
+.parcel-cache/
+.turbo/
+
+# Test coverage
+coverage/
+.nyc_output/

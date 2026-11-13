@@ -1,0 +1,107 @@
+// test_block_scopes: local variables are block-scoped, as in Go
+// Passes with trap(0); fails with trap(15).
+
+type Pair {
+    u32 a;
+    u32 b;
+};
+
+u32 g_count = 7;
+
+u32 shadow_param(u32 n) {
+    u32 r = n;
+    if (n > 1) {
+        u32 n = 100;             // an inner block may reuse a parameter's name
+        r += n;
+    }
+    return r + n;
+}
+
+void main() {
+    u32 ok = 1;
+
+    // An inner block's x is a variable of its own
+    u32 x = 1;
+    if (x == 1) {
+        u8 x = 200;
+        x += 1;
+        if (x != 201) ok = 0;
+    }
+    if (x != 1) ok = 0;
+
+    // The initializer reads the outer x
+    {
+        u32 x = x + 10;
+        if (x != 11) ok = 0;
+    }
+
+    // Blocks side by side may use the same name, with different types
+    {
+        u32 a = 0x11223344;
+        if (a != 0x11223344) ok = 0;
+    }
+    {
+        u16 a;                   // cleared, though the block above used its words
+        if (a != 0) ok = 0;
+        u32 buf[4];
+        if (buf[0] != 0 || buf[3] != 0) ok = 0;
+    }
+
+    // A declaration without a value is zero on every pass of a loop
+    u32 s = 0;
+    for (u32 i : 0..3) {
+        u32 t;
+        t += 1;
+        s += t;
+        Pair p;
+        p.a += i;
+        if (p.a != i || p.b != 0) ok = 0;
+        p.b = 9;
+    }
+    if (s != 3) ok = 0;
+
+    // Each for loop has its own i, which may hide an outer one
+    u32 i = 50;
+    for (u32 i : 0..2) {
+        if (i > 1) ok = 0;
+    }
+    for (u8 i : 3..5) {
+        if (i < 3) ok = 0;
+    }
+    if (i != 50) ok = 0;
+
+    // A local hides a global until its block ends
+    if (g_count == 7) {
+        u32 g_count = 1;
+        g_count += 1;
+        if (g_count != 2) ok = 0;
+    }
+    if (g_count != 7) ok = 0;
+
+    // Each switch case is a block of its own
+    u32 k = 0;
+    for (u32 c : 0..3) {
+        switch (c) {
+            case 0:
+                u32 v = 5;
+                k += v;
+                break;
+            case 1:
+                u32 v;
+                k += v + 1;
+                break;
+            default:
+                u32 v = 10;
+                k += v;
+        }
+    }
+    if (k != 16) ok = 0;
+
+    if (shadow_param(2) != 104) ok = 0;
+    if (shadow_param(1) != 2) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

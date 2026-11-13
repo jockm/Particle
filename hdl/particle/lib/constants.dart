@@ -225,8 +225,8 @@ abstract class ParticleOpcodes {
   // 4.12 Hardware Streaming FIFOs & Mailbox (0xE0 - 0xE9)
   static const int fifoR = 0xE0;
   static const int fifoW = 0xE1;
-  static const int fifoStat = 0xE2;
-  static const int fifoTryR = 0xE3;
-  static const int fifoTryW = 0xE4;
+  static const int fifoStat = 0xE4;
   static const int mbox = 0xE5;
+  static const int fifoTryR = 0xE6;
+  static const int fifoTryW = 0xE7;
 }

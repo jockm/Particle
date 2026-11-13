@@ -5,10 +5,11 @@ type Item {
     u32 id;
 };
 
-// Some returns give 0, so the result may be null
+// Some returns give an empty reference, so the result may be empty
 Item find(u32 id) {
     if (id == 0) {
-        return 0;
+        ref Item none;
+        return none;
     }
     Item it = Item.create();
     it.id = id;
@@ -45,7 +46,7 @@ void main() {
     b.id = 9;
 
     // A move on one branch only: the other branch still owns 'b'
-    Item kept = 0;
+    ref Item kept;
     if (ok == 1) {
         kept = b;
     } else {

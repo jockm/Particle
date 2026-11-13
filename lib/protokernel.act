@@ -16,7 +16,7 @@ type pt {
 };
 
 // Inline lifecycle initializer
-inline void pk_init(type pt p) {
+inline void pkInit(type pt p) {
     p.lc = 0;
 }
 
@@ -34,8 +34,8 @@ u16 yield(type pt p);
 
 // If `cond` is false, return PK_WAITING; the next call re-tests `cond` here.
 // Continue once it is true.
-u16 wait_until(type pt p, u32 cond);
+u16 waitUntil(type pt p, u32 cond);
 
 // Reset the continuation and return PK_EXITED. The next call starts the task
 // from the beginning.
-u16 pk_exit(type pt p);
+u16 pkExit(type pt p);

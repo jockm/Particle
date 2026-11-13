@@ -37,7 +37,7 @@ bool _sameFacts<T extends FlowFacts<T>>(T? a, T? b) {
 abstract class FlowAnalysis<T extends FlowFacts<T>> {
   /// A statement without control flow of its own (declaration, expression,
   /// assignment, coroutine operation, asm, verify, tuple assignment).
-  /// Returns null if control does not continue (e.g. `pk_exit`).
+  /// Returns null if control does not continue (e.g. `pkExit`).
   T? simpleStmt(AstNode stmt, T s);
 
   /// Evaluates [expr] for its effects on the facts.
@@ -247,6 +247,7 @@ T walkExpr<T extends FlowFacts<T>>(
   if (e is HeapArrayFreeNode) return leaf(e, sub(e.expr, s));
   if (e is HeapArrayResizeNode) return leaf(e, sub(e.newLenExpr, sub(e.expr, s)));
   if (e is ExistsNode) return leaf(e, sub(e.expr, s));
+  if (e is ConvertNode) return leaf(e, sub(e.expr, s));
   if (e is SizeofNode) return s; // not evaluated
   return leaf(e, s);
 }

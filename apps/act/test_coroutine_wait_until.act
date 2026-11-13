@@ -1,4 +1,4 @@
-// test_coroutine_wait_until: wait_until returns status 0 until its condition becomes true
+// test_coroutine_wait_until: waitUntil returns status 0 until its condition becomes true
 // Passes with trap(0); fails with trap(15).
 
 import "lib/protokernel.act";
@@ -11,7 +11,7 @@ type Waiter {
 u32 ready = 0;
 
 task waiter(Waiter w) {
-    wait_until(w, ready == 1);
+    waitUntil(w, ready == 1);
     w.done = 1;
 }
 

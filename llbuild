@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# llbuild - build an Action program for this computer, through LLVM
+# ==============================================================================
+#
+# Compiles Action (.act) sources to LLVM IR with build/tools/action_llvm, then
+# compiles and links that with clang (LLVM 15 or later), together with any C
+# sources, objects and libraries given. Set CLANG to use another clang.
+set -euo pipefail
+
+SELF_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SELF_SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
+    SELF_SOURCE="$(readlink "$SELF_SOURCE")"
+    [[ "$SELF_SOURCE" != /* ]] && SELF_SOURCE="$DIR/$SELF_SOURCE"
+done
+PROJECT_ROOT="$(cd -P "$(dirname "$SELF_SOURCE")" >/dev/null 2>&1 && pwd)"
+
+# macOS writes ._ metadata files on non-Apple file systems (such as exFAT).
+# When llbuild is run directly (not from make) and dot_clean exists, remove
+# them on the way out. The exit status is not changed.
+if [ -z "${MAKELEVEL:-}" ] && command -v dot_clean > /dev/null 2>&1; then
+    trap 'dot_clean "$PROJECT_ROOT" > /dev/null 2>&1 || true' EXIT
+fi
+
+ACTION_LLVM="${PROJECT_ROOT}/build/tools/action_llvm"
+CLANG="${CLANG:-clang}"
+LIB_DIR="${PROJECT_ROOT}/lib"
+MIN_LLVM=15
+
+print_usage() {
+    cat << "HELP_TEXT"
+Usage: llbuild [options] <source-file> [source-files...] [-- program arguments]
+
+Builds an Action program for this computer: action_llvm compiles the Action
+sources to LLVM IR (.ll), and clang compiles and links it.
+
+Sources:
+  file.act               Action source (all of them form one program)
+  file.c, file.o, file.a, file.so, file.dylib
+                         C source, object or library, linked in
+
+Options:
+  -o, --output <file>    Output program (default: build/llvm/<name>)
+  -I, --include <dir>    Additional include search directory (repeatable)
+  -D, --define <sym>     Predefine symbol (NAME or NAME=VALUE; repeatable)
+  -l <lib>               Link with library <lib> (repeatable)
+  -L <dir>               Search <dir> for libraries (repeatable)
+  -O0, -O1, -O2, -O3, -Os
+                         Optimization level (default -O0)
+  -g                     Debug information (default)
+  -g0                    No debug information
+      --bounds-check, -fbounds-check
+                         Enable array bounds checking (default)
+      --no-bounds-check, -fno-bounds-check
+                         Disable array bounds checking
+      --reference-check, -freference-check
+                         Enable null reference checking (default)
+      --no-reference-check, -fno-reference-check
+                         Disable null reference checking
+      --emit-llvm        Stop after writing the .ll file
+      --run              Run the program after building it; arguments after
+                         '--' are passed to it, and llbuild exits with its
+                         exit status
+  -v, --verbose          Show the commands run
+  -h, --help             Show this help message and exit
+
+The .ll file is written next to the program (build/llvm/<name>.ll).
+
+Environment:
+  CLANG                  The clang to use (default: clang; LLVM 15 or later)
+
+Tools: build/tools/action_llvm (build it with 'make llvm-tools').
+HELP_TEXT
+}
+
+ACT_INPUTS=()
+LINK_INPUTS=()
+INCLUDES=()
+DEFINES=()
+ACT_FLAGS=()
+LINK_FLAGS=()
+OUTPUT=""
+OPT="-O0"
+DEBUG=1
+EMIT_ONLY=0
+RUN=0
+VERBOSE=0
+RUN_ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) print_usage; exit 0 ;;
+        -o|--output) OUTPUT="${2:?missing value for $1}"; shift 2 ;;
+        -I|--include) INCLUDES+=("-I" "${2:?missing value for $1}"); shift 2 ;;
+        -I*) INCLUDES+=("-I" "${1#-I}"); shift ;;
+        -D|--define) DEFINES+=("-D" "${2:?missing value for $1}"); shift 2 ;;
+        -D*) DEFINES+=("-D" "${1#-D}"); shift ;;
+        -l) LINK_FLAGS+=("-l${2:?missing value for -l}"); shift 2 ;;
+        -l*) LINK_FLAGS+=("$1"); shift ;;
+        -L) LINK_FLAGS+=("-L${2:?missing value for -L}"); shift 2 ;;
+        -L*) LINK_FLAGS+=("$1"); shift ;;
+        -O0|-O1|-O2|-O3|-Os) OPT="$1"; shift ;;
+        -g) DEBUG=1; shift ;;
+        -g0) DEBUG=0; shift ;;
+        --bounds-check|-fbounds-check) ACT_FLAGS+=("-fbounds-check"); shift ;;
+        --no-bounds-check|-fno-bounds-check) ACT_FLAGS+=("-fno-bounds-check"); shift ;;
+        --reference-check|-freference-check) ACT_FLAGS+=("-freference-check"); shift ;;
+        --no-reference-check|-fno-reference-check) ACT_FLAGS+=("-fno-reference-check"); shift ;;
+        --emit-llvm) EMIT_ONLY=1; shift ;;
+        --run) RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        --) shift; RUN_ARGS=("$@"); break ;;
+        -*) echo "llbuild: unknown option '$1' (see llbuild --help)" >&2; exit 2 ;;
+        *.act) ACT_INPUTS+=("$1"); shift ;;
+        *.c|*.o|*.a|*.so|*.dylib) LINK_INPUTS+=("$1"); shift ;;
+        *) echo "llbuild: '$1' is not an Action source (.act), C source (.c), object or library" >&2; exit 2 ;;
+    esac
+done
+
+if [ ${#ACT_INPUTS[@]} -eq 0 ]; then
+    echo "llbuild: no Action sources given (see llbuild --help)" >&2
+    exit 2
+fi
+if [ ! -x "$ACTION_LLVM" ]; then
+    echo "Error: action_llvm not found at '$ACTION_LLVM'. Build it with 'make llvm-tools'." >&2
+    exit 1
+fi
+if ! command -v "$CLANG" > /dev/null 2>&1; then
+    echo "Error: clang not found ('$CLANG'). Install LLVM $MIN_LLVM or later, or set CLANG." >&2
+    exit 1
+fi
+CLANG_MAJOR="$("$CLANG" --version 2>/dev/null | sed -n 's/.*clang version \([0-9][0-9]*\).*/\1/p' | head -1)"
+if [ -n "$CLANG_MAJOR" ] && [ "$CLANG_MAJOR" -lt "$MIN_LLVM" ]; then
+    echo "Error: $CLANG is LLVM $CLANG_MAJOR; LLVM $MIN_LLVM or later is needed (set CLANG to another clang)." >&2
+    exit 1
+fi
+
+if [ -z "$OUTPUT" ]; then
+    base="$(basename "${ACT_INPUTS[0]}" .act)"
+    OUTPUT="${PROJECT_ROOT}/build/llvm/${base}"
+fi
+mkdir -p "$(dirname "$OUTPUT")"
+# The .ll file goes next to the program (with --emit-llvm, -o names it)
+if [ $EMIT_ONLY -eq 1 ] && [[ "$OUTPUT" == *.ll ]]; then
+    LL="$OUTPUT"
+else
+    LL="${OUTPUT}.ll"
+fi
+
+run_step() {
+    if [ $VERBOSE -eq 1 ]; then echo "+ $*" >&2; fi
+    "$@"
+}
+
+GFLAG=()
+[ $DEBUG -eq 1 ] && GFLAG=("-g") || ACT_FLAGS+=("-g0")
+
+run_step "$ACTION_LLVM" "${ACT_INPUTS[@]}" -o "$LL" -I "$LIB_DIR" \
+    ${INCLUDES[@]+"${INCLUDES[@]}"} ${DEFINES[@]+"${DEFINES[@]}"} ${ACT_FLAGS[@]+"${ACT_FLAGS[@]}"}
+if [ $EMIT_ONLY -eq 1 ]; then
+    exit 0
+fi
+
+# -Wno-override-module: the .ll has no target triple; clang compiles it for
+# this computer
+run_step "$CLANG" -Wno-override-module "$OPT" ${GFLAG[@]+"${GFLAG[@]}"} "$LL" \
+    ${LINK_INPUTS[@]+"${LINK_INPUTS[@]}"} ${LINK_FLAGS[@]+"${LINK_FLAGS[@]}"} -o "$OUTPUT"
+
+if [ $RUN -eq 1 ]; then
+    set +e
+    run_step "$OUTPUT" ${RUN_ARGS[@]+"${RUN_ARGS[@]}"}
+    exit $?
+fi

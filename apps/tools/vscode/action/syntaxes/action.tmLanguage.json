@@ -37,8 +37,10 @@
     },
     "numbers": {
       "patterns": [
-        { "name": "constant.numeric.hex.action", "match": "\\b0x[0-9A-Fa-f]+\\b" },
-        { "name": "constant.numeric.decimal.action", "match": "\\b\\d+\\b" }
+        { "name": "constant.numeric.float.action", "match": "\\b\\d(_?\\d)*(\\.\\d(_?\\d)*([eE][+-]?\\d+)?|[eE][+-]?\\d+)\\b" },
+        { "name": "constant.numeric.hex.action", "match": "\\b0x[0-9A-Fa-f](_?[0-9A-Fa-f])*\\b" },
+        { "name": "constant.numeric.binary.action", "match": "\\b0b[01](_?[01])*\\b" },
+        { "name": "constant.numeric.decimal.action", "match": "\\b\\d(_?\\d)*\\b" }
       ]
     },
     "type-declaration": {
@@ -63,7 +65,7 @@
         },
         {
           "name": "storage.modifier.action",
-          "match": "\\b(const|volatile|inline|asm|ref)\\b"
+          "match": "\\b(const|volatile|inline|asm|extern|ref)\\b"
         },
         {
           "name": "storage.type.action",
@@ -77,7 +79,7 @@
     },
     "types": {
       "name": "support.type.primitive.action",
-      "match": "\\b(u8|s8|u16|s16|u32|s32|bool|string|void)\\b"
+      "match": "\\b(u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|bool|string|void)\\b"
     },
     "constants": {
       "name": "constant.language.action",
@@ -88,7 +90,7 @@
         { "name": "variable.language.this.action", "match": "\\bthis\\b" },
         {
           "name": "support.function.builtin.action",
-          "match": "\\b(trap|readfifo|writefifo|tryreadfifo|yield|wait_until|pk_exit)\\b(?=\\s*\\()"
+          "match": "\\b(trap|readFifo|writeFifo|tryReadFifo|peek8|peek16|peek32|poke8|poke16|poke32|callAddr|yield|waitUntil|pkExit)\\b(?=\\s*\\()"
         },
         {
           "name": "support.function.builtin.action",
