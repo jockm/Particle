@@ -1,0 +1,43 @@
+/////////////////////////////
+// Parcore Conductor
+//
+// The Parcore Conductor is a software component that manages the execution of tasks and coordinates 
+//   - System bringup
+//   - Firmware initialization
+//   - Firmware updates
+//   - System monitoring
+//   - Watchdog management
+//   - System debugging
+//   - System shutdown
+//
+// Its actions are independant of what CPU architecture is being implmented, or task being performed by the Parcore
+// system.  For example the job of the conductor is the same whether the Parcore is running on a RISC-V CPU or an 
+// x86-64 CPU, I/O processor, data acquisition task or a signal processing task.  The conductor is an independant 
+// software component.
+/////////////////////////////
+
+import "lib/protokernel.act";
+
+const bool NotDone = true;
+
+type Task {
+    u16 lc;
+    bool ok;
+};
+
+task watchdog(task t) {
+    t.ok = true;
+}
+
+Task watchdogTask;
+
+void main() {
+    watchdogTask.ok = true;
+
+    while(NotDone) {
+        u32 status =watchdog(watchdogTask);    
+        if (status != 0) {
+            watchdogTask.ok = false;
+        }
+    }
+}
