@@ -34,6 +34,8 @@ On macOS, if `code` is not found, open VS Code's Command Palette and run
 **Shell Command: Install 'code' command in PATH**. The Makefile also checks
 the standard macOS VS Code application location.
 
+**Note:** Be sure to see the README.md file note about git submodules
+
 ## RISC-V development tools
 
 Parcore guest software targets RV32IM_Zbb. Install the bare-metal RISC-V

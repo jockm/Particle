@@ -66,6 +66,19 @@ For complete setup instructions, VS Code installation, and test commands, see
 * **Dart SDK** `>= 3.0.0 < 4.0.0` (the hardware uses `rohd: ^0.5.0`)
 * **clang** (LLVM 15 or later), only to build Action programs for your computer
 
+### 0. Clone this project
+```bash
+git clone https://github.com/jockm/Particle.git
+cd Particle
+git submodule update --init
+```
+
+If you have cloned some other way, or neglected to do the submodule update, then make sure you do:
+
+```bash
+git submodule update --init third_party/riscv-tests
+```
+
 ### 1. Build the Tools
 ```bash
 make tools                             # compiler, assembler, linter, simulator, language servers
