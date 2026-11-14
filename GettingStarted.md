@@ -11,6 +11,8 @@ commands below from the repository root unless a step says otherwise.
 - **Visual Studio Code** to install and use the extensions.
 - **Python 3.8 or later** for Python-based project tools and test scripts.
 - **Git** to clone the repository.
+- **RISC-V bare-metal toolchain** for building and inspecting Parcore guest
+  RV32IM_Zbb code (see [RISC-V development tools](#risc-v-development-tools)).
 - **clang** (LLVM 15 or later), only to build Action programs for your own
   computer with the LLVM compiler (see [Building for your computer](#building-for-your-computer-llvm)).
   On macOS it comes with the Xcode Command Line Tools
@@ -31,6 +33,43 @@ clang --version      # only for the LLVM compiler
 On macOS, if `code` is not found, open VS Code's Command Palette and run
 **Shell Command: Install 'code' command in PATH**. The Makefile also checks
 the standard macOS VS Code application location.
+
+## RISC-V development tools
+
+Parcore guest software targets RV32IM_Zbb. Install the bare-metal RISC-V
+compiler, binutils, and debugger before building or inspecting guest RISC-V
+programs. On macOS, [install Homebrew](https://brew.sh/) if needed, then run:
+
+```sh
+brew install riscv64-elf-gcc riscv64-elf-binutils riscv64-elf-gdb
+```
+
+These packages provide the `riscv64-elf-` commands. Although the tool names
+contain `riscv64`, the compiler can target the Parcore 32-bit ISA when given
+`-march=rv32im_zbb -mabi=ilp32`. Check that the tools are installed:
+
+```sh
+riscv64-elf-gcc --version
+riscv64-elf-as --version
+riscv64-elf-objdump --version
+riscv64-elf-gdb --version
+```
+
+Verify that GCC accepts Parcore's target by compiling a small freestanding
+object and disassembling it:
+
+```sh
+printf 'int add(int a, int b) { return a + b; }\n' | \
+  riscv64-elf-gcc -march=rv32im_zbb -mabi=ilp32 -ffreestanding \
+  -x c -c -o /tmp/parcore-rv32-check.o -
+riscv64-elf-objdump -d -M no-aliases,numeric /tmp/parcore-rv32-check.o
+```
+
+Use the same `-march` and `-mabi` options when compiling Parcore guest
+programs. `riscv64-elf-objdump -d -M no-aliases,numeric program.elf` is useful
+for checking the generated instructions. `riscv64-elf-gdb program.elf` opens
+the program with its symbols; stepping through execution additionally
+requires a compatible RISC-V emulator or debug target.
 
 ## Build and install VS Code support
 
