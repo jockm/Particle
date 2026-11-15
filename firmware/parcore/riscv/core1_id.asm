@@ -7,6 +7,7 @@
 
 .define REG_BASE        0x0800  ; Local TCM base for x0..x31 (32 words = 128 bytes)
 .define SCOREBOARD_MASK 0x0880  ; Local TCM address for 32-bit in-flight bitmask
+.define BRANCH_SAVED_MASK 0x0884  ; Scoreboard snapshot before latest branch/jump
 
 .org 0x00000100
 _reset_vector:
@@ -25,8 +26,10 @@ _init_rf_loop:
     SUB     R6, 1
     BBRA.NZ R6, _init_rf_loop
 
-    ; Clear Scoreboard mask (no registers in flight)
+    ; Clear Scoreboard mask & branch snapshot (no registers in flight)
     LOAD16  R4, SCOREBOARD_MASK
+    ST32    (R4), R5
+    LOAD16  R4, BRANCH_SAVED_MASK
     ST32    (R4), R5
 
     LOAD16  R14, _id_main_loop
@@ -38,9 +41,10 @@ _init_rf_loop:
 ; ==============================================================================
 .org 0x00000140
 _branch_flush_handler:
-    ; Reset Scoreboard mask to clear in-flight locks for discarded speculative instructions
+    ; Restore Scoreboard mask to pre-branch snapshot (preserves older in-flight instructions)
+    LOAD16  R4, BRANCH_SAVED_MASK
+    LD32    R5, (R4)
     LOAD16  R4, SCOREBOARD_MASK
-    LD      R5, 0
     ST32    (R4), R5
 
     ; Jump back to main decode loop
@@ -76,11 +80,15 @@ _do_wb_read:
     ST32      (R6), R5          ; Store committed value
 
 _clear_wb_scoreboard:
-    ; Clear bit in scoreboard: mask &= ~(1 << Rd)
+    ; Clear bit in scoreboard & branch snapshot: mask &= ~(1 << Rd)
     LD      R7, 1
     SHIFTL  R7, R4              ; R7 = 1 << Rd
-    NOT     R7              ; R7 = ~(1 << Rd)
+    NOT     R7                  ; R7 = ~(1 << Rd)
     LOAD16  R6, SCOREBOARD_MASK
+    LD32    R8, (R6)
+    AND     R8, R7
+    ST32    (R6), R8
+    LOAD16  R6, BRANCH_SAVED_MASK
     LD32    R8, (R6)
     AND     R8, R7
     ST32    (R6), R8
@@ -219,9 +227,12 @@ _evaluate_stall:
     JMP     R14, R0
 
 _do_stall_wait:
-    ; RAW Hazard detected: Wait for retiring writeback to resolve dependency
-    FIFO.R  R4, R3              ; Blocking wait for Rd from WB
-    FIFO.R  R5, R3              ; Blocking wait for committed data
+    ; RAW Hazard detected: Poll WB FIFO without popping until writeback arrives (MBOX-safe)
+    FIFO.STAT R4, R3
+    AND       R4, 1
+    BBRA.NZ   R4, _do_stall_wait
+    FIFO.R    R4, R3            ; Pop Rd from WB
+    FIFO.R    R5, R3            ; Pop committed data
 
     FBRA.Z  R4, _clear_stalled_bit
     LOAD16  R6, REG_BASE
@@ -235,6 +246,10 @@ _clear_stalled_bit:
     SHIFTL  R8, R4
     NOT     R8
     LOAD16  R6, SCOREBOARD_MASK
+    LD32    R9, (R6)
+    AND     R9, R8
+    ST32    (R6), R9
+    LOAD16  R6, BRANCH_SAVED_MASK
     LD32    R9, (R6)
     AND     R9, R8
     ST32    (R6), R9
@@ -360,12 +375,12 @@ _check_jalr:
     JMP     R14, R0
 
 _check_fence:
-    ; FENCE (0x0F): in-order memory drain
+    ; FENCE / FENCE.I (0x0F)
     LOAD16  R14, 0x0F
     LD      R4, R12
     SUB     R4, R14
     FBRA.NZ R4, _check_system
-    LOAD16  R14, _id_main_loop
+    LOAD16  R14, _emit_fence_i
     JMP     R14, R0
 
 _check_system:
@@ -389,10 +404,87 @@ _emit_op_imm:
     LD      R4, R11
     SHIFTR  R4, 12
     AND     R4, 7
-    ; Check if SRAI (funct3 == 5 and inst[30] == 1)
+    ; Extract imm12 = inst[31:20] into R7
+    LD      R7, R11
+    SHIFTR  R7, 15
+    SHIFTR  R7, 5
+    LOAD16  R8, 0x0FFF
+    AND     R7, R8
+
+    ; Check funct3 == 1 (SLLI / Zbb unary: CLZ, CTZ, CPOP, SEXT.B, SEXT.H)
+    LD      R8, R4
+    SUB     R8, 1
+    FBRA.Z  R8, ._imm_do_f1
+    LOAD16  R14, ._imm_chk_f5
+    JMP     R14, R0
+._imm_do_f1:
+    LOAD16  R8, 0x600
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_f1_ctz
+    LOAD16  R4, 0x53            ; CLZ
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f1_ctz:
+    LOAD16  R8, 0x601
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_f1_cpop
+    LOAD16  R4, 0x54            ; CTZ
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f1_cpop:
+    LOAD16  R8, 0x602
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_f1_sextb
+    LOAD16  R4, 0x55            ; CPOP
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f1_sextb:
+    LOAD16  R8, 0x604
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_f1_sexth
+    LOAD16  R4, 0x5A            ; SEXT.B
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f1_sexth:
+    LOAD16  R8, 0x605
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_to_pack
+    LOAD16  R4, 0x5B            ; SEXT.H
+._imm_to_pack:
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+
+._imm_chk_f5:
+    ; Check funct3 == 5 (SRLI / SRAI / RORI / ORC.B / REV8)
     LD      R8, R4
     SUB     R8, 5
-    FBRA.NZ R8, _pack_imm_ctrl
+    FBRA.Z  R8, ._imm_do_f5
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_do_f5:
+    LOAD16  R8, 0x287
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_f5_rev8
+    LOAD16  R4, 0x5F            ; ORC.B
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f5_rev8:
+    LOAD16  R8, 0x698
+    SUB     R8, R7
+    FBRA.NZ R8, ._imm_f5_rori
+    LOAD16  R4, 0x60            ; REV8
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f5_rori:
+    LD      R8, R7
+    SHIFTR  R8, 5               ; funct7
+    LOAD16  R14, 0x30
+    SUB     R8, R14
+    FBRA.NZ R8, ._imm_f5_srai
+    LOAD16  R4, 0x5E            ; RORI
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f5_srai:
     LD      R8, R11
     SHIFTR  R8, 15
     SHIFTR  R8, 15              ; R8 = inst[31:30]
@@ -448,11 +540,102 @@ _emit_op_reg:
     LOAD16  R9, _pack_reg_ctrl
     JMP     R9, R0
 _std_op:
-    LOAD16  R9, 0x20
-    AND     R9, R8              ; Check funct7 bit 5 (SUB / SRA / Zbb bit ops)
-    FBRA.Z  R9, _pack_reg_ctrl
-    LOAD16  R9, 0x10            ; Alternate operation flag (e.g. SUB / SRA)
+    ; Check funct7 == 0x20 (SUB, SRA, ANDN, ORN, XNOR)
+    LD      R9, R8
+    LOAD16  R14, 0x20
+    SUB     R9, R14
+    FBRA.Z  R9, ._reg_do_20
+    LOAD16  R14, ._reg_chk_30
+    JMP     R14, R0
+._reg_do_20:
+    LD      R9, R4
+    SUB     R9, 7
+    FBRA.NZ R9, ._reg_20_orn
+    LOAD16  R4, 0x50            ; ANDN
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_20_orn:
+    LD      R9, R4
+    SUB     R9, 6
+    FBRA.NZ R9, ._reg_20_xnor
+    LOAD16  R4, 0x51            ; ORN
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_20_xnor:
+    LD      R9, R4
+    SUB     R9, 4
+    FBRA.NZ R9, ._reg_20_sub_sra
+    LOAD16  R4, 0x52            ; XNOR
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_20_sub_sra:
+    LOAD16  R9, 0x10            ; SUB / SRA
     OR      R4, R9
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+
+._reg_chk_30:
+    ; Check funct7 == 0x30 (ROL, ROR)
+    LD      R9, R8
+    LOAD16  R14, 0x30
+    SUB     R9, R14
+    FBRA.Z  R9, ._reg_do_30
+    LOAD16  R14, ._reg_chk_05
+    JMP     R14, R0
+._reg_do_30:
+    LD      R9, R4
+    SUB     R9, 1
+    FBRA.NZ R9, ._reg_30_ror
+    LOAD16  R4, 0x5D            ; ROL
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_30_ror:
+    LOAD16  R4, 0x5E            ; ROR
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+
+._reg_chk_05:
+    ; Check funct7 == 0x05 (MIN, MINU, MAX, MAXU)
+    LD      R9, R8
+    SUB     R9, 5
+    FBRA.Z  R9, ._reg_do_05
+    LOAD16  R14, ._reg_chk_04
+    JMP     R14, R0
+._reg_do_05:
+    LD      R9, R4
+    SUB     R9, 4
+    FBRA.NZ R9, ._reg_05_minu
+    LOAD16  R4, 0x58            ; MIN
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_05_minu:
+    LD      R9, R4
+    SUB     R9, 5
+    FBRA.NZ R9, ._reg_05_max
+    LOAD16  R4, 0x59            ; MINU
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_05_max:
+    LD      R9, R4
+    SUB     R9, 6
+    FBRA.NZ R9, ._reg_05_maxu
+    LOAD16  R4, 0x56            ; MAX
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+._reg_05_maxu:
+    LOAD16  R4, 0x57            ; MAXU
+    LOAD16  R9, _pack_reg_ctrl
+    JMP     R9, R0
+
+._reg_chk_04:
+    ; Check funct7 == 0x04 && funct3 == 4 (ZEXT.H)
+    LD      R9, R8
+    SUB     R9, 4
+    FBRA.NZ R9, _pack_reg_ctrl
+    LD      R9, R4
+    SUB     R9, 4
+    FBRA.NZ R9, _pack_reg_ctrl
+    LOAD16  R4, 0x5C            ; ZEXT.H
 _pack_reg_ctrl:
     SHIFTL  R4, 12
     SHIFTL  R4, 12              ; R4 = uop << 24
@@ -563,6 +746,11 @@ _emit_branch:
     SHIFTL  R7, R8              ; R7 = uop << 20
     OR      R7, 1               ; Valid bit
 
+    ; Snapshot scoreboard before branch
+    LOAD16  R14, SCOREBOARD_MASK
+    LD32    R8, (R14)
+    LOAD16  R14, BRANCH_SAVED_MASK
+    ST32    (R14), R8
     ; 4. Push 4-word token packet to Core 2 via Channel 1 (R2)
     FIFO.W  R7, R2              ; Word 0: Control Word
     FIFO.W  R5, R2              ; Word 1: Rs1 Value
@@ -586,6 +774,25 @@ _emit_lui:
     OR      R4, 1               ; Valid bit
     LD      R5, 0               ; OpA = 0
     LOAD16  R14, _dispatch_packet
+    JMP     R14, R0
+
+_emit_fence_i:
+    LD      R4, R11
+    SHIFTR  R4, 12
+    AND     R4, 7
+    SUB     R4, 1
+    FBRA.Z  R4, ._do_fence_i
+    LOAD16  R14, _id_main_loop
+    JMP     R14, R0
+._do_fence_i:
+    LOAD16  R4, 0x32            ; FENCE.I uop
+    LD      R8, 12
+    SHIFTL  R8, 1
+    SHIFTL  R4, R8
+    OR      R4, 1               ; Valid bit (Rd = 0)
+    LD      R5, R10
+    LD      R9, 0
+    LOAD16  R14, _push_to_ex
     JMP     R14, R0
 
 _emit_auipc:
@@ -719,6 +926,16 @@ _emit_jal:
     SHIFTL  R7, 1
     OR      R4, R7              ; R4 = J-Immediate jump offset
 
+    LOAD16  R14, SCOREBOARD_MASK
+    LD32    R8, (R14)
+    FBRA.Z  R13, ._jal_no_sb
+    LD      R7, 1
+    SHIFTL  R7, R13
+    OR      R8, R7
+    ST32    (R14), R8
+._jal_no_sb:
+    LOAD16  R14, BRANCH_SAVED_MASK
+    ST32    (R14), R8
     LOAD16  R7, 0x09            ; JAL uop
     SHIFTL  R7, 12
     SHIFTL  R7, 8               ; uop << 20
@@ -734,6 +951,16 @@ _emit_jal:
     JMP     R14, R0
 
 _emit_jalr:
+    LOAD16  R14, SCOREBOARD_MASK
+    LD32    R8, (R14)
+    FBRA.Z  R13, ._jalr_no_sb
+    LD      R7, 1
+    SHIFTL  R7, R13
+    OR      R8, R7
+    ST32    (R14), R8
+._jalr_no_sb:
+    LOAD16  R14, BRANCH_SAVED_MASK
+    ST32    (R14), R8
     LOAD16  R7, 0x0A            ; JALR uop
     SHIFTL  R7, 12
     SHIFTL  R7, 8               ; uop << 20

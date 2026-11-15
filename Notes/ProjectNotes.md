@@ -95,4 +95,27 @@ The trick becomes identifying these replacements, and what code can run in paral
 JIT for RISC-V should be fairly straightforward, however for other architectures it becomes more difficult and a table driven approach might be required.  This would mean hand crafted replacements for instructions... or possibly clusters of instructions providing some peephole optimization.
 
 
+### AOT->JIT 
+
+Levels of AOT:
+
+- 3: A tool that takes risc-v binaries and does a stage 0 AOT on them.  Basically obvious translations
+- 2: above but does peephole optimizations
+- 1 above but also identifies AOT routines to cache and trigger
+
+Normal Operation:
+
+0: Straight CPU emulation (including tool converted binaries)
+
+Levels JIT:
+
++ 1: Live identification of instruction level JIT
++ 2: Live identification of peephole
++ 3: Live identification of hotspots to JIT
+
+and then what glues these all together is a new Parcore instruction:
+HINT {8-bit CPU Hint}
+
+what hints do is identify precompiled sections, areas of code the AOT has looked at and shouldn't be looked at by the CPU Hotspot system, static analysis of branch more likely to be taken, etc.  Anything that tunes the behavior of the running Parcore system.  
+
 ## Thoughts 

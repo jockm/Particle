@@ -262,12 +262,13 @@ _dispatch_alu:
     JMP     R4, R0
 
 _run_alu_lookup:
-    ; Check for System / CSR uops (0x40..0x45)
-    ; All base ALU and M-extension uops are < 0x38 (bit 6 clear)
-    LOAD16  R4, 0x40
+    ; Check for System / CSR uops (0x40..0x47: bit 6 set and bit 4 clear)
+    LOAD16  R4, 0x50
     LD      R5, R3
     AND     R5, R4
-    FBRA.Z  R5, ._not_system_uop
+    LOAD16  R4, 0x40
+    SUB     R5, R4
+    FBRA.NZ R5, ._not_system_uop
 
     LOAD16  R14, _dispatch_system
     JMP     R14, R0
@@ -350,6 +351,13 @@ _skip_lui:
     LOAD16  R14, _do_auipc
     JMP     R14, R0
 _skip_auipc:
+    LOAD16  R5, 0x32            ; FENCE.I
+    LD      R4, R3
+    SUB     R4, R5
+    FBRA.NZ R4, _skip_fence_i
+    LOAD16  R14, _do_fence_i
+    JMP     R14, R0
+_skip_fence_i:
 
     ; RV32M Extension Operations (0x20..0x27)
     LOAD16  R5, 0x20
@@ -409,110 +417,124 @@ _skip_rem:
     JMP     R14, R0
 _skip_remu:
 
-    ; RV32_Zbb Bit-manipulation Extension (0x40..0x50)
-    LOAD16  R5, 0x40
+    ; RV32_Zbb Bit-manipulation Extension (0x50..0x60)
+    LOAD16  R5, 0x50
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_andn
     LOAD16  R14, _do_andn
     JMP     R14, R0
 _skip_andn:
-    LOAD16  R5, 0x41
+    LOAD16  R5, 0x51
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_orn
     LOAD16  R14, _do_orn
     JMP     R14, R0
 _skip_orn:
-    LOAD16  R5, 0x42
+    LOAD16  R5, 0x52
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_xnor
     LOAD16  R14, _do_xnor
     JMP     R14, R0
 _skip_xnor:
-    LOAD16  R5, 0x43
+    LOAD16  R5, 0x53
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_clz
     LOAD16  R14, _do_clz
     JMP     R14, R0
 _skip_clz:
-    LOAD16  R5, 0x44
+    LOAD16  R5, 0x54
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_ctz
     LOAD16  R14, _do_ctz
     JMP     R14, R0
 _skip_ctz:
-    LOAD16  R5, 0x45
+    LOAD16  R5, 0x55
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_cpop
     LOAD16  R14, _do_cpop
     JMP     R14, R0
 _skip_cpop:
-    LOAD16  R5, 0x46
+    LOAD16  R5, 0x56
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_max
     LOAD16  R14, _do_max
     JMP     R14, R0
 _skip_max:
-    LOAD16  R5, 0x47
+    LOAD16  R5, 0x57
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_maxu
     LOAD16  R14, _do_maxu
     JMP     R14, R0
 _skip_maxu:
-    LOAD16  R5, 0x48
+    LOAD16  R5, 0x58
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_min
     LOAD16  R14, _do_min
     JMP     R14, R0
 _skip_min:
-    LOAD16  R5, 0x49
+    LOAD16  R5, 0x59
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_minu
     LOAD16  R14, _do_minu
     JMP     R14, R0
 _skip_minu:
-    LOAD16  R5, 0x4A
+    LOAD16  R5, 0x5A
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_sext_b
     LOAD16  R14, _do_sext_b
     JMP     R14, R0
 _skip_sext_b:
-    LOAD16  R5, 0x4B
+    LOAD16  R5, 0x5B
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_sext_h
     LOAD16  R14, _do_sext_h
     JMP     R14, R0
 _skip_sext_h:
-    LOAD16  R5, 0x4C
+    LOAD16  R5, 0x5C
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_zext_h
     LOAD16  R14, _do_zext_h
     JMP     R14, R0
 _skip_zext_h:
-    LOAD16  R5, 0x4D
+    LOAD16  R5, 0x5D
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _skip_rol
     LOAD16  R14, _do_rol
     JMP     R14, R0
 _skip_rol:
-    LOAD16  R5, 0x4E
+    LOAD16  R5, 0x5E
+    LD      R4, R3
+    SUB     R4, R5
+    FBRA.NZ R4, _skip_ror
+    LOAD16  R14, _do_ror
+    JMP     R14, R0
+_skip_ror:
+    LOAD16  R5, 0x5F
+    LD      R4, R3
+    SUB     R4, R5
+    FBRA.NZ R4, _skip_orc_b
+    LOAD16  R14, _do_orc_b
+    JMP     R14, R0
+_skip_orc_b:
+    LOAD16  R5, 0x60
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _fallback_forward
-    LOAD16  R14, _do_ror
+    LOAD16  R14, _do_rev8
     JMP     R14, R0
 
 _fallback_forward:
@@ -601,6 +623,12 @@ _do_auipc:
     ADD     R15, R12
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
+
+_do_fence_i:
+    LOAD16  R5, _taken_branch
+    LD      R14, R13
+    ADD     R14, 4
+    JMP     R5, R0
 
 _do_mul:
     LD      R15, R11
@@ -1013,6 +1041,65 @@ _do_ror:
     AND     R4, R5
     LD      R15, R11
     ROTR    R15, R4
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
+
+_do_orc_b:
+    LD      R15, 0
+    LOAD16  R6, 0xFF
+    LD      R4, R11
+    AND     R4, R6
+    FBRA.Z  R4, ._orcb_b1
+    OR      R15, R6
+._orcb_b1:
+    LD      R4, R11
+    SHIFTR  R4, 8
+    AND     R4, R6
+    FBRA.Z  R4, ._orcb_b2
+    LOAD16  R5, 0xFF00
+    OR      R15, R5
+._orcb_b2:
+    LD      R4, R11
+    SHIFTR  R4, 15
+    SHIFTR  R4, 1
+    AND     R4, R6
+    FBRA.Z  R4, ._orcb_b3
+    LOAD32  R5, 0x00FF0000
+    OR      R15, R5
+._orcb_b3:
+    LD      R4, R11
+    SHIFTR  R4, 15
+    SHIFTR  R4, 9
+    AND     R4, R6
+    FBRA.Z  R4, ._orcb_done
+    LOAD32  R5, 0xFF000000
+    OR      R15, R5
+._orcb_done:
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
+
+_do_rev8:
+    LOAD16  R6, 0xFF
+    LD      R15, R11
+    SHIFTR  R15, 15
+    SHIFTR  R15, 9              ; byte3 -> byte0
+    LD      R4, R11
+    SHIFTR  R4, 8
+    AND     R4, R6
+    SHIFTL  R4, 8               ; byte1 -> byte2
+    OR      R15, R4
+    LD      R4, R11
+    SHIFTR  R4, 15
+    SHIFTR  R4, 1
+    AND     R4, R6
+    SHIFTL  R4, 15
+    SHIFTL  R4, 1               ; byte2 -> byte1
+    OR      R15, R4
+    LD      R4, R11
+    AND     R4, R6
+    SHIFTL  R4, 15
+    SHIFTL  R4, 9               ; byte0 -> byte3
+    OR      R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 

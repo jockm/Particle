@@ -14,7 +14,7 @@ This revision of the specification is aligned with the reference simulator `psim
   - `R5`–`R10`: Preserved general-purpose registers (Callee-saved).
   - `R11`–`R13`: Scratchpad / temporary registers (Caller-saved).
   - `R14`: Subroutine link register (`JMP`/`RJUMP` link, `RCALL`/`RRET` aliases), immediate accumulator, trap link register, and FIFO try-status register.
-  - `R15` (`SP`): Architectural stack pointer (full-descending, 4-byte aligned).
+  - `R15` (`SP`): Stack pointer by convention (full-descending, 4-byte aligned).
 - **Hardware Shadow Register Bank**:
   - 16 duplicate 32-bit shadow registers (`S0`–`S15`).
   - Single-cycle exchange operations:

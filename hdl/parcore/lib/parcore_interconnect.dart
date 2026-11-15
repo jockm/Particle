@@ -119,7 +119,7 @@ class ParcoreInterconnect extends Module {
 
     final fifo2to3 = ParticleFifoSubsystem(
       clk: clk,
-      reset: ifIdReset,
+      reset: reset,
       chanSelect: Const(0, width: 2),
       pushData: exToMemData,
       pushEn: exToMemPush,
