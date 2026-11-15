@@ -43,6 +43,18 @@
             1. Architectural Proposal: Autonomous Accelerator & Functional Extension Subsystem in Parcore
             2. Addendum 02: Particle 64-Bit Architecture Extension Proposal
 
+# Things to remember:
+
+# Vector table & Startup
+With the exception of Vector 0, which sets up the stack and heap etc, every vector only needs to be 9 instructions long, but if we have a specialized verision of LOAD32 it could be 8:
+
+```
+FAST_ENTER_TRAP                                     ; (1) Save all the registers
+LOAD_R14_32      _vector_n_handler                  ; (5) Load the vector handler address (this could be 3 if load 16)
+JMP              R1, R14                            ; (1) Jump (and link) to the vector handler
+FAST_EXIT_TRAP                                      ; (2) Restore registers and return from trap
+```
+
 # Thoughts
 
 - you could have cores that do AOT compilation

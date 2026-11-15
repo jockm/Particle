@@ -42,6 +42,13 @@
     LD      %reg, R14
 .endmacro
 
+.macro LOAD_R14_32 value
+    LD      R14, ((%value) >> 24) & 0xFF
+    PUSH8   R14, ((%value) >> 16) & 0xFF
+    PUSH8   R14, ((%value) >> 8) & 0xFF
+    PUSH8   R14, (%value) & 0xFF
+.endmacro
+
 .macro LOAD32 reg, value
     LD      R14, ((%value) >> 24) & 0xFF
     PUSH8   R14, ((%value) >> 16) & 0xFF
