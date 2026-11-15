@@ -119,11 +119,11 @@ Core 1 executes the hottest inner loop in Parcore and suffers the highest addres
 
 ---
 
-## 6. Compiler (`act16c.py`) Global Variable Allocation Strategy
+## 6. Compiler (`action`) Global Variable Allocation Strategy
 
-For ACT16 programs compiled via `tools/act16c.py`:
+For ACT16 programs compiled via `action`:
 1. **Zero Page Allocation Bucket:** The compiler's global allocator can place the first 252 bytes of scalar globals/pointers (starting at `0x00000004` to preserve `0x00000000` as a hardware-trapped `NULL` pointer) into a `.zpdata` section (`0x0004..0x00FF`).
-2. **Codegen Rule:** When emitting global variable address loads in `act16c.py`, if `symbol.address < 0x0100`, emit `LD R14, symbol` (2 bytes) instead of `LDI` (4 bytes) or `LOAD32` (10 bytes).
+2. **Codegen Rule:** When emitting global variable address loads in `action`, if `symbol.address < 0x0100`, emit `LD R14, symbol` (2 bytes) instead of `LDI` (4 bytes) or `LOAD32` (10 bytes).
 
 ---
 
