@@ -53,6 +53,8 @@ class ParcoreTcm extends Module {
   }
 
   late final List<int> _mem;
+  int _lastA = -1;
+  int _lastB = -1;
 
   int readWord(int byteAddr) {
     final b0 = _mem[byteAddr];
@@ -83,13 +85,18 @@ class ParcoreTcm extends Module {
     rDataB <= internalRDataB;
 
     void updateReads() {
+      final int nextA;
       if (addrA.value.isValid) {
         final byteAddrA = (addrA.value.toInt() << 1) % totalBytes;
         final b0 = mem[byteAddrA];
         final b1 = mem[(byteAddrA + 1) % totalBytes];
-        internalRDataA.put((b1 << 8) | b0);
+        nextA = (b1 << 8) | b0;
       } else {
-        internalRDataA.put(0);
+        nextA = 0;
+      }
+      if (nextA != _lastA) {
+        _lastA = nextA;
+        internalRDataA.put(nextA);
       }
 
       if (addrB.value.isValid && rEnB.value.isValid && rEnB.value.toInt() == 1) {
@@ -99,7 +106,11 @@ class ParcoreTcm extends Module {
         final b1 = mem[(byteAddrB + 1) % totalBytes];
         final b2 = mem[(byteAddrB + 2) % totalBytes];
         final b3 = mem[(byteAddrB + 3) % totalBytes];
-        internalRDataB.put(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
+        final nextB = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+        if (nextB != _lastB) {
+          _lastB = nextB;
+          internalRDataB.put(nextB);
+        }
       }
     }
 

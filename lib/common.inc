@@ -57,10 +57,27 @@
     LD      %reg, R14
 .endmacro
 
+.macro LOAD_R14_16 value
+    LD      R14, ((%value) >> 8) & 0xFF
+    PUSH8   R14, (%value) & 0xFF
+.endmacro
+
 .macro START_PROGRAM
     LOAD32  R15, 0x00010000
     LOAD32  R14, _main
     JMP     R14, R0
+.endmacro
+
+.macro LJMP target
+    LD      R14, ((%target) >> 8) & 0xFF
+    PUSH8   R14, (%target) & 0xFF
+    JMP     R14, R0
+.endmacro
+
+.macro RLCALL target
+    LD      R14, ((%target) >> 8) & 0xFF
+    PUSH8   R14, (%target) & 0xFF
+    JMP     R14, R14
 .endmacro
 
 .macro RCALL target
