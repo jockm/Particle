@@ -20,24 +20,58 @@ import "lib/protokernel.act";
 
 const bool NotDone = true;
 
-type Task {
-    u16 lc;
-    bool ok;
-};
-
-task watchdog(task t) {
-    t.ok = true;
+type WatchdogState {
+    u16 lc;          // Task continuation; must be the first field
+    u32 checks;
 }
 
-Task watchdogTask;
+type DebugState {
+    u16 lc;          // Task continuation; must be the first field
+    u32 reports;
+}
+
+void setup() {
+    // TODO: Implement me
+}
+
+void firmwareUpdate() {
+    // TODO: Implement me
+}
+
+task watchdog(WatchdogState t) {
+    while (1) {
+        t.checks += 1;
+
+        // Perform watchdog checks here.
+        yield(t);
+    }
+}
+
+task debug(DebugState t) {
+    while (1) {
+        t.reports += 1;
+
+        // Emit diagnostic information here.
+        yield(t);
+    }
+}
 
 void main() {
-    watchdogTask.ok = true;
+    WatchdogState watchdogState;
+    DebugState debugState;
 
-    while(NotDone) {
-        u32 status =watchdog(watchdogTask);    
-        if (status != 0) {
-            watchdogTask.ok = false;
-        }
+    setup();
+    firmwareUpdate();
+
+    while (NotDone) {
+        watchdog(watchdogState);
+        debug(debugState);
     }
+
+    // If we somehow get here, something has gone very wrong.  Trap to the debugger.
+    trap(15);
+
+    // If we somehow get out of the trap 15, then reset the system.  This should never happen, but if it does, 
+    // we want a defined behavior.
+    trap(0);
 }

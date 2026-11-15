@@ -1,5 +1,12 @@
 # TODO
 
+- Change Vector Stride to 8 instructions
+    - 8 instructions is 16 bytes
+    - vector table becomes 256 bytes
+    - each vector is basically 
+    - something is wrong with how action generates the vector table, there are two xchngmost in a row
+    - move code start to 0? we don't seem to be using the pseudo zero page much/at all
+
 - Comprehensive Tests for
     - Assembler
 
@@ -48,3 +55,32 @@
     - software updating
     - failover
 - Implement python (or whatever) compiler/interpreter as a core triggered by the larger system
+
+
+## Thoughts on JIT
+
+### Notes:
+- HP Dynamo: https://dl.acm.org/doi/10.1145/358438.349303
+    - https://cseweb.ucsd.edu/classes/sp00/cse231/dynamopldi.pdf
+- HP PA-RISC to IA64 (Ares?) 
+    - https://www.semanticscholar.org/paper/PA-RISC-to-IA-64%3A-Transparent-Execution%2C-No-Zheng-Thompson/da33e45c803199b6c5ed2acf76d1b6ea4dcaa66a
+    - https://www.computer.org/csdl/magazine/co/2000/03/r3047/13rRUxNmPM9
+
+Parcore could identify code ranges that when hit transfer control to a JITed replacement that would be run, and then the program counter would be updated:
+```
+    type JITReplacement {
+        u64 startAddress
+        u64 length
+        u16 targetCore
+        u32 targetAddress
+    }
+
+    JITReplacement jitReplacements[]
+```
+
+The trick becomes identifying these replacements, and what code can run in parallel. 
+
+JIT for RISC-V should be fairly straightforward, however for other architectures it becomes more difficult and a table driven approach might be required.  This would mean hand crafted replacements for instructions... or possibly clusters of instructions providing some peephole optimization.
+
+
+## Thoughts 

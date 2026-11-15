@@ -199,12 +199,12 @@ class ParcoreTop extends Module {
     );
     uartTx <= ftdiUart.output('txPin');
 
-    // Core 0 Channel 0 status: bit 0 = empty (~rxValid)
+    // Core 0 Channel 0 status: bit 0 = empty (~rxValid); Channel 1: ifToIdStatus
     c0FifoStatus <=
         mux(
           core0.fifoChanSelect.eq(Const(0, width: 2)),
           [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
-          Const(0, width: ParticleWidths.word),
+          interconnect.ifToIdStatus,
         );
 
     // Channel 0 pop data: zero-extend 8-bit UART RX data to 32 bits

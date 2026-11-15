@@ -17,11 +17,20 @@ _reset_vector:
 _if_main_loop:
     ; 1. Service UART RX (Non-Blocking Console Pass-Through on Channel 0)
     FIFO.TRYR R3, R0
-    FBRA.Z    R3, ._fetch_instruction
+    FBRA.Z    R3, ._check_fifo_space
 
     ; Character received: Echo character back to UART TX (Channel 0)
     FIFO.W    R3, R0
     BBRA      _if_main_loop     ; Immediately loop back to keep console responsive
+
+._check_fifo_space:
+    ; Ensure ifToId FIFO (Channel 1) is not full/near-full before pushing 2 words
+    FIFO.STAT R4, R1
+    LD        R7, R4
+    AND       R7, 2             ; Bit 1: full flag
+    BBRA.NZ   R7, _if_main_loop
+    SHIFTR    R4, 15            ; Check if depth[7] (depth >= 128 words) is set
+    BBRA.NZ   R4, _if_main_loop
 
 ._fetch_instruction:
     ; 2. Fetch 32-bit RV32 Instruction via Port B Word Read

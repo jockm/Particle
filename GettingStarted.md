@@ -238,3 +238,12 @@ npm run compile
 Use `npm run watch` instead of `npm run compile` for continuous compilation.
 The Particle extension has the same commands under
 `apps/tools/vscode/particle`.
+
+
+#### notes for windows
+
+- winget install --id=Google.DartSDK -e
+- winget install GnuWin32.Make
+- winget install --id=MartinStorsjo.LLVM-MinGW.UCRT -e
+- add "C:\Program Files\LLVM\bin" to path
+- add "C:\Program Files (x86)\GnuWin32\bin" to path

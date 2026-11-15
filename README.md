@@ -62,6 +62,9 @@ particle/
 For complete setup instructions, VS Code installation, and test commands, see
 [Getting Started](GettingStarted.md).
 
+### For Windows Users
+Please invoke the script ParticalDev.cmd at the root of the project to have a bash shell configured for this project.
+
 ### Prerequisites
 * **Dart SDK** `>= 3.0.0 < 4.0.0` (the hardware uses `rohd: ^0.5.0`)
 * **clang** (LLVM 15 or later), only to build Action programs for your computer

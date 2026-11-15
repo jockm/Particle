@@ -21,13 +21,13 @@ _reset_vector:
     LD      R5, 0               ; Zero value
     LOAD16  R6, 32              ; 32 registers
 _init_rf_loop:
-    LD32    (R4++), R5          ; Clear register word
+    ST32    (R4++), R5          ; Clear register word
     SUB     R6, 1
     BBRA.NZ R6, _init_rf_loop
 
     ; Clear Scoreboard mask (no registers in flight)
     LOAD16  R4, SCOREBOARD_MASK
-    LD32    (R4), R5
+    ST32    (R4), R5
 
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
@@ -41,7 +41,7 @@ _branch_flush_handler:
     ; Reset Scoreboard mask to clear in-flight locks for discarded speculative instructions
     LOAD16  R4, SCOREBOARD_MASK
     LD      R5, 0
-    LD32    (R4), R5
+    ST32    (R4), R5
 
     ; Jump back to main decode loop
     LOAD16  R14, _id_main_loop
