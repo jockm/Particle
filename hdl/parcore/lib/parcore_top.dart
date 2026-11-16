@@ -21,6 +21,9 @@ class ParcoreTop extends Module {
   Logic get uartRx => input('uart_rx');
   Logic get uartTx => output('uart_tx');
 
+  // Runtime guest .text end address (for FENCE.I store-mirror coherence)
+  Logic get guestTextEnd => input('guest_text_end');
+
   // Diagnostic observability
   Logic get branchRedirectStrobe => output('branch_redirect_strobe');
   Logic get branchRedirectVector => output('branch_redirect_vector');
@@ -34,11 +37,17 @@ class ParcoreTop extends Module {
     List<int>? core1Binary,
     List<int>? core2Binary,
     List<int>? core3Binary,
+    Logic? guestTextEnd,
     super.name = 'parcore_top',
   }) {
     addInput('clk', clk);
     addInput('reset', reset);
     addInput('uart_rx', uartRx);
+    addInput(
+      'guest_text_end',
+      guestTextEnd ?? Const(0x00000800, width: ParticleWidths.word),
+      width: ParticleWidths.word,
+    );
 
     addOutput('uart_tx');
     addOutput('branch_redirect_strobe');
@@ -164,15 +173,21 @@ class ParcoreTop extends Module {
       name: 'core0_if',
     );
 
+    final c3GuestStoreMirror = Logic(name: 'c3_guest_store_mirror');
+    final c0TcmPortBAddr = Logic(name: 'c0_tcm_port_b_addr', width: ParticleWidths.word);
+    final c0TcmPortBWData = Logic(name: 'c0_tcm_port_b_wdata', width: ParticleWidths.word);
+    final c0TcmPortBBEn = Logic(name: 'c0_tcm_port_b_ben', width: ParticleWidths.byteEnable);
+    final c0TcmPortBWEn = Logic(name: 'c0_tcm_port_b_wen');
+
     buildTcm(
       name: 'core0',
       sizeBytes: ParcoreConfig.core0If.tcmSizeBytes,
       portAAddr: core0.memPortAAddr,
       portARData: c0MemARData,
-      portBAddr: core0.memPortBAddr,
-      portBWData: core0.memPortBWData,
-      portBBEn: core0.memPortBBEn,
-      portBWEn: core0.memPortBWEn,
+      portBAddr: c0TcmPortBAddr,
+      portBWData: c0TcmPortBWData,
+      portBBEn: c0TcmPortBBEn,
+      portBWEn: c0TcmPortBWEn,
       portBREn: core0.memPortBREn,
       portBRData: c0TcmPortBRData,
       initialBytes: core0Binary,
@@ -374,6 +389,20 @@ class ParcoreTop extends Module {
       portBRData: c3MemBRData,
       initialBytes: core3Binary,
     );
+
+    // Mirror Core 3 guest stores (>= 0x0500) into Core 0 TCM for FENCE.I coherence
+    final c3Addr = core3.memPortBAddr;
+    final inC0GuestRange =
+        c3Addr.gte(Const(0x00000500, width: ParticleWidths.word)) &
+        c3Addr.lt(Const(ParcoreConfig.core0If.tcmSizeBytes, width: ParticleWidths.word));
+    final nonOverlappingData =
+        c3Addr.lt(Const(0x00000800, width: ParticleWidths.word)) |
+        c3Addr.gte(guestTextEnd);
+    c3GuestStoreMirror <= core3.memPortBWEn & inC0GuestRange & nonOverlappingData;
+    c0TcmPortBAddr <= mux(c3GuestStoreMirror, core3.memPortBAddr, core0.memPortBAddr);
+    c0TcmPortBWData <= mux(c3GuestStoreMirror, core3.memPortBWData, core0.memPortBWData);
+    c0TcmPortBBEn <= mux(c3GuestStoreMirror, core3.memPortBBEn, core0.memPortBBEn);
+    c0TcmPortBWEn <= c3GuestStoreMirror | core0.memPortBWEn;
 
     memToWbPush <=
         core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));

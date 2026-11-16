@@ -7,6 +7,8 @@
     - something is wrong with how action generates the vector table, there are two xchngmost in a row
     - move code start to 0? we don't seem to be using the pseudo zero page much/at all
 
+- Add R14 shifts to allow for IMM5 shifts
+
 - Comprehensive Tests for
     - Assembler
 

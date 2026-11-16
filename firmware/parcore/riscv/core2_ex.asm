@@ -530,7 +530,7 @@ _skip_ror:
     LOAD16  R14, _do_orc_b
     JMP     R14, R0
 _skip_orc_b:
-    LOAD16  R5, 0x60
+    LOAD16  R5, 0x70
     LD      R4, R3
     SUB     R4, R5
     FBRA.NZ R4, _fallback_forward
@@ -915,21 +915,14 @@ _do_clz:
     JMP     R14, R0
 
 _do_ctz:
-    FBRA.NZ R11, _calc_ctz
-    LOAD16  R15, 32
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-_calc_ctz:
     LD      R4, R11
     SUB     R4, 1
     LD      R5, R11
     NOT     R5
     AND     R4, R5
-    LD      R5, R4
-    CLZ     R5
-    LOAD16  R6, 31
-    LD      R15, R6
-    SUB     R15, R5
+    CLZ     R4
+    LOAD16  R15, 32
+    SUB     R15, R4
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -1009,13 +1002,19 @@ _minu_take_a:
 
 _do_sext_b:
     LD      R15, R11
-    SEXT8   R15
+    LD      R5, 12
+    SHIFTL  R5, 1               ; R5 = 24
+    SHIFTL  R15, R5
+    ASHIFTR R15, R5
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
 _do_sext_h:
     LD      R15, R11
-    SEXT16  R15
+    LD      R5, 8
+    SHIFTL  R5, 1               ; R5 = 16
+    SHIFTL  R15, R5
+    ASHIFTR R15, R5
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -1080,32 +1079,38 @@ _do_orc_b:
 
 _do_rev8:
     LOAD16  R6, 0xFF
+    ; b0 (inst[7:0]) -> byte3 (res[31:24]) (<< 24)
     LD      R15, R11
-    SHIFTR  R15, 15
-    SHIFTR  R15, 9              ; byte3 -> byte0
+    AND     R15, R6
+    SHIFTL  R15, 15
+    SHIFTL  R15, 9
+
+    ; b1 (inst[15:8]) -> byte2 (res[23:16]) (>> 8, & 0xFF, << 16)
     LD      R4, R11
     SHIFTR  R4, 8
     AND     R4, R6
-    SHIFTL  R4, 8               ; byte1 -> byte2
+    SHIFTL  R4, 15
+    SHIFTL  R4, 1
     OR      R15, R4
+
+    ; b2 (inst[23:16]) -> byte1 (res[15:8]) (>> 16, & 0xFF, << 8)
     LD      R4, R11
     SHIFTR  R4, 15
     SHIFTR  R4, 1
     AND     R4, R6
-    SHIFTL  R4, 15
-    SHIFTL  R4, 1               ; byte2 -> byte1
+    SHIFTL  R4, 8
     OR      R15, R4
+
+    ; b3 (inst[31:24]) -> byte0 (res[7:0]) (>> 24, & 0xFF)
     LD      R4, R11
+    SHIFTR  R4, 15
+    SHIFTR  R4, 9
     AND     R4, R6
-    SHIFTL  R4, 15
-    SHIFTL  R4, 9               ; byte0 -> byte3
     OR      R15, R4
+
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
-; ==============================================================================
-; System & CSR Subsystem (Opcode 0x73 uops: 0x40..0x45)
-; ==============================================================================
 _dispatch_system:
     ; uop in R3: 0x40=ECALL, 0x41=EBREAK, 0x42=MRET, 0x43=CSRRW, 0x44=CSRRS, 0x45=CSRRC
     ; R10 = Control Word, R11 = OpA, R12 = OpB (12-bit CSR), R13 = Base PC

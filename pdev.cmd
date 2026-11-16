@@ -1,21 +1,32 @@
 @echo off
 setlocal
 
-REM This script is used to set uo and environment for building and testing Particle on Windows. It assumes that 
-REM Git Bash, LLVM, and GnuWin32 are installed in their default locations.  If not please refer to GettingStarted.md
-REM for what is required for this project
+REM This script is used to set up the environment for building and testing Particle on Windows.
+REM Git Bash and GnuWin32 are expected in their default locations; LLVM and Dart can be found via WinGet.
 
 set "BASH_EXE=C:\Program Files\Git\bin\bash.exe"
 set "LLVM_BIN=C:\Program Files\LLVM\bin"
 set "GNUWIN_BIN=C:\Program Files (x86)\GnuWin32\bin"
+set "DART_BIN="
 
 if not exist "%BASH_EXE%" (
     echo Git Bash not found: "%BASH_EXE%"
     exit /b 1
 )
 
-if not exist "%LLVM_BIN%\." (
-    echo LLVM tools directory not found: "%LLVM_BIN%"
+if not exist "%LLVM_BIN%\clang.exe" (
+    set "LLVM_BIN="
+    if defined LOCALAPPDATA (
+        for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\MartinStorsjo.LLVM-MinGW.UCRT_*") do (
+            for /f "delims=" %%F in ('where /r "%%~fD" clang.exe 2^>nul') do (
+                if not defined LLVM_BIN set "LLVM_BIN=%%~dpF"
+            )
+        )
+    )
+)
+
+if not defined LLVM_BIN (
+    echo LLVM clang.exe not found. Install it with: winget install --id=MartinStorsjo.LLVM-MinGW.UCRT -e
     exit /b 1
 )
 
@@ -24,7 +35,22 @@ if not exist "%GNUWIN_BIN%\." (
     exit /b 1
 )
 
-set "PATH=%LLVM_BIN%;%GNUWIN_BIN%;%PATH%"
+if defined LOCALAPPDATA (
+    for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\Google.DartSDK_*") do (
+        if not defined DART_BIN if exist "%%~fD\dart-sdk\bin\dart.exe" set "DART_BIN=%%~fD\dart-sdk\bin"
+    )
+)
+
+if defined DART_BIN (
+    set "PATH=%DART_BIN%;%LLVM_BIN%;%GNUWIN_BIN%;%PATH%"
+) else (
+    where dart >nul 2>nul
+    if errorlevel 1 (
+        echo Dart SDK not found. Install it with: winget install --id=Google.DartSDK -e
+        exit /b 1
+    )
+    set "PATH=%LLVM_BIN%;%GNUWIN_BIN%;%PATH%"
+)
 
 cd /d "%~dp0"
 if errorlevel 1 (

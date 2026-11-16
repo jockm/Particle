@@ -5,9 +5,9 @@
 ; ==============================================================================
 .include "lib/common.inc"
 
-.define REG_BASE        0x0800  ; Local TCM base for x0..x31 (32 words = 128 bytes)
-.define SCOREBOARD_MASK 0x0880  ; Local TCM address for 32-bit in-flight bitmask
-.define BRANCH_SAVED_MASK 0x0884  ; Scoreboard snapshot before latest branch/jump
+.define REG_BASE        0x0C00  ; Local TCM base for x0..x31 (32 words = 128 bytes)
+.define SCOREBOARD_MASK 0x0C80  ; Local TCM address for 32-bit in-flight bitmask
+.define BRANCH_SAVED_MASK 0x0C84  ; Scoreboard snapshot before latest branch/jump
 
 .org 0x00000100
 _reset_vector:
@@ -472,7 +472,7 @@ _emit_op_imm:
     LOAD16  R8, 0x698
     SUB     R8, R7
     FBRA.NZ R8, ._imm_f5_rori
-    LOAD16  R4, 0x60            ; REV8
+    LOAD16  R4, 0x70            ; REV8
     LOAD16  R14, _pack_imm_ctrl
     JMP     R14, R0
 ._imm_f5_rori:
