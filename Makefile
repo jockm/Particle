@@ -463,6 +463,10 @@ GIT_HOOKS_DIR := apps/tools/git-hooks
 GIT_HOOKS     := pre-commit
 
 install-hooks:
+	# Not a hook, but a handy alias
+	@git config --global alias.ac '!f() { msg="$1"; shift; git add "$@" && git commit -m "$msg"; }; f'
+	
+	# Now a hook that does a dot_clean before commit.
 	@git rev-parse --git-dir > /dev/null 2>&1 || { echo "[FAIL] Not inside a git repository."; exit 1; }
 	@hooks="$$(git rev-parse --git-path hooks)"; mkdir -p "$$hooks"; \
 	for h in $(GIT_HOOKS); do \
