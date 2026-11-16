@@ -6,8 +6,19 @@
 import 'package:particle_rohd/cpu_config.dart';
 
 class ParcoreConfig {
+  /// Conductor Supervisor Core (Minimal footprint, 2 KB TCM, no FIFOs/DSP)
+  static const CpuConfig conductorConfig = CpuConfig(
+    coreId: 7,
+    tcmSizeBytes: 2 * 1024,
+    fifoChannels: 0,
+    fifoDepth: 0,
+    enableMultiplier: false,
+    enableDivider: false,
+    enableUlx3sFtdiUart: false,
+    trapTableBase: 0x00000100,
+  );
+
   /// Core 0: Instruction Fetch Stage (IF) + FTDI Console UART
-  /// Needs a modest buffer for UART character staging and fetch window
   static const CpuConfig core0If = CpuConfig(
     coreId: 0,
     tcmSizeBytes: 8 * 1024, // 8 KB local TCM
@@ -20,7 +31,6 @@ class ParcoreConfig {
   );
 
   /// Core 1: Instruction Decode Stage (ID) & Register Scoreboard
-  /// Tight register lookup loop; minimal local scratchpad needed
   static const CpuConfig core1Id = CpuConfig(
     coreId: 1,
     tcmSizeBytes: 4 * 1024, // 4 KB local TCM
@@ -31,7 +41,6 @@ class ParcoreConfig {
   );
 
   /// Core 2: Execute Stage (EX)
-  /// Dedicated execution engine; retains multiplier/divider
   static const CpuConfig core2Ex = CpuConfig(
     coreId: 2,
     tcmSizeBytes: 4 * 1024, // 4 KB local TCM
@@ -42,7 +51,6 @@ class ParcoreConfig {
   );
 
   /// Core 3: Memory Access Stage (MEM)
-  /// Handles alignment and routing tokens
   static const CpuConfig core3Mem = CpuConfig(
     coreId: 3,
     tcmSizeBytes: 4 * 1024, // 4 KB local TCM
@@ -53,7 +61,6 @@ class ParcoreConfig {
   );
 
   /// Core 4: Writeback Stage (WB)
-  /// Commit and retire queue
   static const CpuConfig core4Wb = CpuConfig(
     coreId: 4,
     tcmSizeBytes: 4 * 1024, // 4 KB local TCM
@@ -64,7 +71,6 @@ class ParcoreConfig {
   );
 
   /// Core 5: L1 Cache Controller (CC) & SDRAM Burster
-  /// Needs significant RAM for cache tag directories and line refill buffers
   static const CpuConfig core5Cache = CpuConfig(
     coreId: 5,
     tcmSizeBytes: 32 * 1024, // 32 KB local TCM

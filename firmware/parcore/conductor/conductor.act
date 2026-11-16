@@ -1,77 +1,169 @@
-/////////////////////////////
-// Parcore Conductor
-//
-// The Parcore Conductor is a software component that manages the execution of tasks and coordinates 
-//   - System bringup
-//   - Firmware initialization
-//   - Firmware updates
-//   - System monitoring
-//   - Watchdog management
-//   - System debugging
-//   - System shutdown
-//
-// Its actions are independant of what CPU architecture is being implmented, or task being performed by the Parcore
-// system.  For example the job of the conductor is the same whether the Parcore is running on a RISC-V CPU or an 
-// x86-64 CPU, I/O processor, data acquisition task or a signal processing task.  The conductor is an independant 
-// software component.
-/////////////////////////////
+// =============================================================================
+// File: firmware/parcore/conductor/conductor.act
+// Architecture: Parcore System Lifecycle & Firmware Boot Supervisor
+// Target: Particle Conductor Core (Minimal Config, No Heap)
+// =============================================================================
 
-import "lib/protokernel.act";
+// -----------------------------------------------------------------------------
+// Hardware MMIO Register Bindings
+// -----------------------------------------------------------------------------
+// RST_CTRL:
+//   Bits [5:0]  = Per-core active-high reset/hold (1 = Reset/Mux to Conductor)
+//   Bit  [6]    = Global Pipeline Interconnect FIFO flush strobe
+//   Bit  [31]   = Conductor boot completed status flag
+u32 RST_CTRL @ 0xF0000000;
 
-const bool NotDone = true;
+// SPI Flash Master Controller (Phase 3):
+//   0xF000_0010 = SPI_CTRL (Bit 0: CS_N, Bit 1: START, Bit 2: BUSY)
+//   0xF000_0014 = SPI_DATA (7:0 TX/RX shift register)
+//   0xF000_0018 = SPI_DIV  (15:0 clock divider)
+u32 SPI_CTRL @ 0xF0000010;
+u32 SPI_DATA @ 0xF0000014;
+u32 SPI_DIV  @ 0xF0000018;
 
-type WatchdogState {
-    u16 lc;          // Task continuation; must be the first field
-    u32 checks;
-}
+// -----------------------------------------------------------------------------
+// Multi-Core Firmware Image Layout (SPI Flash @ 0x0010_0000)
+// -----------------------------------------------------------------------------
+// Header (16 bytes):
+//   Word 0: Magic = 0x50415243 ("PARC")
+//   Word 1: Section Count (N <= 6)
+//   Word 2: Payload Checksum / CRC32
+//   Word 3: Reserved
+// Section Entry (12 bytes per section):
+//   Word 0: Target Core ID (0..5)
+//   Word 1: Destination TCM Offset (typically 0x00000100)
+//   Word 2: Payload Size in Bytes (multiple of 4)
+// -----------------------------------------------------------------------------
 
-type DebugState {
-    u16 lc;          // Task continuation; must be the first field
-    u32 reports;
-}
+const u32 IMAGE_MAGIC      = 0x50415243;
+const u32 FLASH_IMAGE_BASE = 0x00100000;
+const u32 SPI_CMD_READ     = 0x03;
 
-void setup() {
-    // TODO: Implement me
-}
+const u32 CTRL_CS_HIGH     = 0x00000001;
+const u32 CTRL_CS_LOW      = 0x00000000;
+const u32 CTRL_BUSY_MASK   = 0x00000004;
 
-void firmwareUpdate() {
-    // TODO: Implement me
-}
+// Core TCM Window Base Addresses (0x1000_0000 + (coreId << 16))
+const u32 CORE_WINDOW_BASE = 0x10000000;
+const u32 CORE_WINDOW_STEP = 0x00010000;
 
-task watchdog(WatchdogState t) {
-    while (1) {
-        t.checks += 1;
-
-        // Perform watchdog checks here.
-        yield(t);
+// -----------------------------------------------------------------------------
+// SPI Low-Level Helpers
+// -----------------------------------------------------------------------------
+inline void spiWaitIdle() {
+    while ((SPI_CTRL & CTRL_BUSY_MASK) != 0) {
+        // Spin until shift register completes 8-bit transfer
     }
 }
 
-task debug(DebugState t) {
-    while (1) {
-        t.reports += 1;
+u8 spiTransferByte(u8 tx) {
+    spiWaitIdle();
+    SPI_DATA = u32(tx);
+    spiWaitIdle();
+    return u8(SPI_DATA & 0xFF);
+}
 
-        // Emit diagnostic information here.
-        yield(t);
+u32 spiReadWordLE() {
+    u32 b0 = u32(spiTransferByte(0x00));
+    u32 b1 = u32(spiTransferByte(0x00));
+    u32 b2 = u32(spiTransferByte(0x00));
+    u32 b3 = u32(spiTransferByte(0x00));
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+}
+
+void spiBeginRead(u32 flashAddr) {
+    SPI_CTRL = CTRL_CS_HIGH;
+    SPI_CTRL = CTRL_CS_LOW;
+    spiTransferByte(u8(SPI_CMD_READ));
+    spiTransferByte(u8((flashAddr >> 16) & 0xFF));
+    spiTransferByte(u8((flashAddr >> 8) & 0xFF));
+    spiTransferByte(u8(flashAddr & 0xFF));
+}
+
+void spiEndRead() {
+    spiWaitIdle();
+    SPI_CTRL = CTRL_CS_HIGH;
+}
+
+// -----------------------------------------------------------------------------
+// Bootloader Entry & Staging Orchestration
+// -----------------------------------------------------------------------------
+void faultHalt() {
+    // Keep all application cores held in reset on image validation error
+    RST_CTRL = 0x0000003F;
+    while (1) {
+        asm("NOP");
     }
 }
 
 void main() {
-    WatchdogState watchdogState;
-    DebugState debugState;
+    // 1. Ensure all 6 application cores are held in reset and flush FIFOs
+    RST_CTRL = 0x0000007F; // Bits [5:0] = 1 (Reset), Bit 6 = 1 (FIFO Flush)
+    RST_CTRL = 0x0000003F; // Deassert flush strobe while keeping cores in reset
 
-    setup();
-    firmwareUpdate();
+    // Configure SPI clock divider (12.5 MHz @ 25 MHz sysclk)
+    SPI_DIV = 1;
 
-    while (NotDone) {
-        watchdog(watchdogState);
-        debug(debugState);
+    // 2. Read Multi-Core Image Header from SPI Flash
+    spiBeginRead(FLASH_IMAGE_BASE);
+
+    u32 magic        = spiReadWordLE();
+    u32 sectionCount = spiReadWordLE();
+    u32 expectedSum  = spiReadWordLE();
+    u32 reserved     = spiReadWordLE();
+
+    if (magic != IMAGE_MAGIC || sectionCount == 0 || sectionCount > 6) {
+        spiEndRead();
+        faultHalt();
     }
 
-    // If we somehow get here, something has gone very wrong.  Trap to the debugger.
-    trap(15);
+    // 3. Parse Section Directory & Stream Payloads to Target Core TCMs
+    // Section headers immediately follow the 16-byte image header;
+    // payloads follow the section table at FLASH_IMAGE_BASE + 16 + (sectionCount * 12).
+    u32 runningSum = 0;
+    u32 payloadFlashOffset = FLASH_IMAGE_BASE + 16 + (sectionCount * 12);
 
-    // If we somehow get out of the trap 15, then reset the system.  This should never happen, but if it does, 
-    // we want a defined behavior.
-    trap(0);
+    for (u32 s : 0..sectionCount) {
+        u32 dirEntryAddr = FLASH_IMAGE_BASE + 16 + (s * 12);
+
+        spiEndRead();
+        spiBeginRead(dirEntryAddr);
+        u32 targetCore = spiReadWordLE();
+        u32 tcmOffset  = spiReadWordLE();
+        u32 byteLength = spiReadWordLE();
+        spiEndRead();
+
+        if (targetCore > 5 || (byteLength & 3) != 0) {
+            faultHalt();
+        }
+
+        u32 dstAddr   = CORE_WINDOW_BASE + (targetCore * CORE_WINDOW_STEP) + tcmOffset;
+        u32 wordCount = byteLength >> 2;
+
+        // Stream 32-bit firmware words directly across Port B into target TCM
+        spiBeginRead(payloadFlashOffset);
+        for (u32 w : 0..wordCount) {
+            u32 word = spiReadWordLE();
+            poke32(dstAddr, word);
+            runningSum += word;
+            dstAddr += 4;
+        }
+        spiEndRead();
+
+        payloadFlashOffset += byteLength;
+    }
+
+    // 4. Verify Cumulative Checksum before Releasing Cores
+    if (runningSum != expectedSum) {
+        faultHalt();
+    }
+
+    // 5. Synchronized Pipeline Release
+    // Clear bits [5:0] to release Cores 0-5 simultaneously; set Bit 31 (Boot Complete)
+    RST_CTRL = 0x80000000;
+
+    // 6. Post-Boot Supervisor Idle Loop
+    while (1) {
+        asm("NOP");
+    }
 }

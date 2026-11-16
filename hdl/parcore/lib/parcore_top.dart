@@ -1,6 +1,6 @@
 // =============================================================================
 // File: hdl/parcore/lib/parcore_top.dart
-// Architecture: Parcore Distributed 4-Stage RISC Pipeline & Cache Subsystem
+// Architecture: Parcore Distributed RISC Pipeline & Conductor Supervisor
 // Framework: Intel ROHD (Dart sdk >= 3.0.0)
 // =============================================================================
 
@@ -12,6 +12,7 @@ import 'package:particle_rohd/uart.dart';
 import 'package:parcore_rohd/parcore_config.dart';
 import 'package:parcore_rohd/parcore_interconnect.dart';
 import 'package:parcore_rohd/parcore_tcm.dart';
+import 'package:parcore_rohd/spi_controller.dart';
 
 class ParcoreTop extends Module {
   Logic get clk => input('clk');
@@ -20,6 +21,12 @@ class ParcoreTop extends Module {
   // FTDI UART pins
   Logic get uartRx => input('uart_rx');
   Logic get uartTx => output('uart_tx');
+
+  // Physical SPI Flash Pins (ULX3S)
+  Logic get spiCsN => output('spi_cs_n');
+  Logic get spiSck => output('spi_sck');
+  Logic get spiMosi => output('spi_mosi');
+  Logic get spiMiso => input('spi_miso');
 
   // Runtime guest .text end address (for FENCE.I store-mirror coherence)
   Logic get guestTextEnd => input('guest_text_end');
@@ -32,29 +39,32 @@ class ParcoreTop extends Module {
     required Logic clk,
     required Logic reset,
     required Logic uartRx,
+    Logic? spiMiso,
+    Logic? guestTextEnd,
     int clkFreqMhz = 25,
+    List<int>? conductorBinary,
     List<int>? core0Binary,
     List<int>? core1Binary,
     List<int>? core2Binary,
     List<int>? core3Binary,
-    Logic? guestTextEnd,
     super.name = 'parcore_top',
   }) {
     addInput('clk', clk);
     addInput('reset', reset);
     addInput('uart_rx', uartRx);
-    addInput(
-      'guest_text_end',
-      guestTextEnd ?? Const(0x00000800, width: ParticleWidths.word),
-      width: ParticleWidths.word,
-    );
+    addInput('spi_miso', spiMiso ?? Const(0));
+    addInput('guest_text_end', guestTextEnd ?? Const(0, width: 32), width: 32);
 
     addOutput('uart_tx');
+    addOutput('spi_cs_n');
+    addOutput('spi_sck');
+    addOutput('spi_mosi');
     addOutput('branch_redirect_strobe');
     addOutput('branch_redirect_vector', width: 4);
 
     _build(
       clkFreqMhz,
+      conductorBinary: conductorBinary,
       core0Binary: core0Binary,
       core1Binary: core1Binary,
       core2Binary: core2Binary,
@@ -64,12 +74,101 @@ class ParcoreTop extends Module {
 
   void _build(
     int clkFreqMhz, {
+    List<int>? conductorBinary,
     List<int>? core0Binary,
     List<int>? core1Binary,
     List<int>? core2Binary,
     List<int>? core3Binary,
   }) {
+    // -------------------------------------------------------------------------
+    // Conductor Supervisor Core & Control Registers
+    // -------------------------------------------------------------------------
+    final condMemARData = Logic(name: 'cond_mem_a_rdata', width: ParticleWidths.halfWord);
+    final condMemBRData = Logic(name: 'cond_mem_b_rdata', width: ParticleWidths.word);
+
+    final conductor = ParticleCpuCore(
+      clk: clk,
+      reset: reset,
+      memPortARData: condMemARData,
+      memPortBRData: condMemBRData,
+      mboxStrobeIn: Const(0),
+      mboxVectorIn: Const(0, width: 4),
+      config: ParcoreConfig.conductorConfig,
+      name: 'parcore_conductor',
+    );
+
+    final condMemAddr  = conductor.memPortBAddr;
+    final condMemWData = conductor.memPortBWData;
+    final condMemBEn   = conductor.memPortBBEn;
+    final condMemWEn   = conductor.memPortBWEn;
+    final condMemREn   = conductor.memPortBREn;
+
+    // Conductor local 2 KB TCM
+    final condAddrBits = (log(ParcoreConfig.conductorConfig.tcmSizeBytes) / ln2).round();
+    final condLocalSelect = condMemAddr.slice(31, 28).eq(Const(0x0, width: 4));
+    final condTcm = ParcoreTcm(
+      clk: clk,
+      addrA: conductor.memPortAAddr.slice(condAddrBits - 1, 1),
+      addrB: condMemAddr.slice(condAddrBits - 1, 2),
+      wDataB: condMemWData,
+      bEnB: condMemBEn,
+      wEnB: condMemWEn & condLocalSelect,
+      rEnB: condMemREn & condLocalSelect,
+      depthWords: ParcoreConfig.conductorConfig.tcmSizeBytes ~/ 4,
+      initialBytes: conductorBinary,
+      name: 'conductor_tcm',
+    );
+    condMemARData <= condTcm.rDataA;
+
+    // RST_CTRL Register (0xF000_0000):
+    //   Bits [5:0]: Per-core reset/hold lines (default 0x3F when conductorBinary != null, else 0x00)
+    //   Bit  [6]:   Interconnect FIFO flush strobe
+    //   Bit  [31]:  Boot complete flag
+    final regRstCtrl = Logic(name: 'reg_rst_ctrl', width: 32);
+    final defaultRst = conductorBinary != null ? 0x0000003F : 0x00000000;
+    final isRstCtrlSel = condMemAddr.eq(Const(0xF0000000, width: 32));
+
+    Sequential(clk, reset: reset, resetValues: {
+      regRstCtrl: Const(defaultRst, width: 32),
+    }, [
+      If(condMemWEn & isRstCtrlSel, then: [
+        regRstCtrl < condMemWData,
+      ]),
+    ]);
+
+    final condCoreReset = regRstCtrl.slice(5, 0);
+    final condFifoFlush = regRstCtrl.slice(6, 6);
+    final condTargetCore = condMemAddr.slice(18, 16);
+    final isCoreWindow = condMemAddr.slice(31, 28).eq(Const(0x1, width: 4));
+
+    // SPI Master Controller (0xF000_0010 - 0xF000_0018)
+    final spiCtrl = SpiController(
+      clk: clk,
+      reset: reset,
+      addr: condMemAddr,
+      wData: condMemWData,
+      wEn: condMemWEn,
+      rEn: condMemREn,
+      spiMiso: spiMiso,
+    );
+    spiCsN <= spiCtrl.spiCsN;
+    spiSck <= spiCtrl.spiSck;
+    spiMosi <= spiCtrl.spiMosi;
+
+    final isSpiSel = condMemAddr.slice(31, 4).eq(Const(0xF000001, width: 28));
+
+    // Conductor Port B Readback Multiplexer
+    condMemBRData <= mux(
+      isRstCtrlSel,
+      regRstCtrl,
+      mux(isSpiSel, spiCtrl.rData, condTcm.rDataB),
+    );
+
+    // -------------------------------------------------------------------------
+    // Helper: Build Core TCM with Port B Conductor Staging Multiplexer
+    // -------------------------------------------------------------------------
     void buildTcm({
+      required int coreIndex,
       required String name,
       required int sizeBytes,
       required Logic portAAddr,
@@ -85,14 +184,29 @@ class ParcoreTop extends Module {
       final addrBits = (log(sizeBytes) / ln2).round();
       final halfAddrBits = addrBits - 1;
 
+      final coreHeldInReset = condCoreReset.slice(coreIndex, coreIndex);
+      final isConductorActive = coreHeldInReset &
+          isCoreWindow &
+          condTargetCore.eq(Const(coreIndex, width: 3));
+
+      final muxedAddrB  = mux(isConductorActive, condMemAddr.slice(addrBits - 1, 2), portBAddr.slice(addrBits - 1, 2));
+      final muxedWDataB = mux(isConductorActive, condMemWData, portBWData);
+      final muxedBEnB   = mux(isConductorActive, condMemBEn, portBBEn);
+      final muxedWEnB   = mux(
+        isConductorActive,
+        condMemWEn,
+        portBWEn & portBAddr.slice(31, 28).neq(Const(0xF, width: 4)),
+      );
+      final muxedREnB   = mux(isConductorActive, condMemREn, portBREn);
+
       final tcm = ParcoreTcm(
         clk: clk,
         addrA: portAAddr.slice(halfAddrBits, 1),
-        addrB: portBAddr.slice(addrBits - 1, 2),
-        wDataB: portBWData,
-        bEnB: portBBEn,
-        wEnB: portBWEn,
-        rEnB: portBREn,
+        addrB: muxedAddrB,
+        wDataB: muxedWDataB,
+        bEnB: muxedBEnB,
+        wEnB: muxedWEnB,
+        rEnB: muxedREnB,
         depthWords: sizeBytes ~/ 4,
         initialBytes: initialBytes,
         name: '${name}_tcm',
@@ -118,8 +232,8 @@ class ParcoreTop extends Module {
     final memToWbPush = Logic(name: 'memToWbPush');
     final memToWbData = Logic(name: 'memToWbData', width: 32);
     final memToWbPop = Logic(name: 'memToWbPop');
-    final pipelineFlush = Logic(name: 'pipelineFlush');
 
+    final pipelineFlush = Logic(name: 'pipeline_flush');
     final interconnect = ParcoreInterconnect(
       clk: clk,
       reset: reset,
@@ -141,28 +255,18 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     // Core 0: IF & UART
     // -------------------------------------------------------------------------
-    final c0MemARData =
-        Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c0MemBRData =
-        Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
-    final c0TcmPortBRData =
-        Logic(name: 'c0_tcm_port_b_rdata', width: ParticleWidths.word);
-    final branchRedirectTarget =
-        Logic(name: 'branch_redirect_target', width: ParticleWidths.word);
+    final c0MemARData = Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c0MemBRData = Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
     final c0MboxStrobe = Logic(name: 'c0_mbox_strobe');
     final c0MboxVector = Logic(name: 'c0_mbox_vector', width: 4);
-    final c1MboxStrobe = Logic(name: 'c1_mbox_strobe');
-    final c1MboxVector = Logic(name: 'c1_mbox_vector', width: 4);
 
-    final c0FifoPopData =
-        Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
-    final c0FifoStatus =
-        Logic(name: 'c0_fifo_status', width: ParticleWidths.word);
-    final c0FifoPopEn = Logic(name: 'c0_fifo_pop_en');
+    final c0FifoPopData = Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
+    final c0FifoStatus  = Logic(name: 'c0_fifo_status', width: ParticleWidths.word);
+    final c0FifoPopEn   = Logic(name: 'c0_fifo_pop_en');
 
     final core0 = ParticleCpuCore(
       clk: clk,
-      reset: reset,
+      reset: reset | condCoreReset.slice(0, 0),
       memPortARData: c0MemARData,
       memPortBRData: c0MemBRData,
       mboxStrobeIn: c0MboxStrobe,
@@ -173,34 +277,26 @@ class ParcoreTop extends Module {
       name: 'core0_if',
     );
 
-    final c3GuestStoreMirror = Logic(name: 'c3_guest_store_mirror');
-    final c0TcmPortBAddr = Logic(name: 'c0_tcm_port_b_addr', width: ParticleWidths.word);
-    final c0TcmPortBWData = Logic(name: 'c0_tcm_port_b_wdata', width: ParticleWidths.word);
-    final c0TcmPortBBEn = Logic(name: 'c0_tcm_port_b_ben', width: ParticleWidths.byteEnable);
-    final c0TcmPortBWEn = Logic(name: 'c0_tcm_port_b_wen');
-
     buildTcm(
+      coreIndex: 0,
       name: 'core0',
       sizeBytes: ParcoreConfig.core0If.tcmSizeBytes,
       portAAddr: core0.memPortAAddr,
       portARData: c0MemARData,
-      portBAddr: c0TcmPortBAddr,
-      portBWData: c0TcmPortBWData,
-      portBBEn: c0TcmPortBBEn,
-      portBWEn: c0TcmPortBWEn,
+      portBAddr: core0.memPortBAddr,
+      portBWData: core0.memPortBWData,
+      portBBEn: core0.memPortBBEn,
+      portBWEn: core0.memPortBWEn,
       portBREn: core0.memPortBREn,
-      portBRData: c0TcmPortBRData,
+      portBRData: c0MemBRData,
       initialBytes: core0Binary,
     );
 
-    ifToIdPush <=
-        core0.fifoPushEn & core0.fifoChanSelect.eq(Const(1, width: 2));
+    ifToIdPush <= core0.fifoPushEn & core0.fifoChanSelect.eq(Const(1, width: 2));
     ifToIdData <= core0.fifoPushData;
 
-    final uartTxValid =
-        core0.fifoPushEn & core0.fifoChanSelect.eq(Const(0, width: 2));
-    c0FifoPopEn <=
-        core0.fifoPopEn & core0.fifoChanSelect.eq(Const(0, width: 2));
+    final uartTxValid = core0.fifoPushEn & core0.fifoChanSelect.eq(Const(0, width: 2));
+    c0FifoPopEn <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(0, width: 2));
 
     final ftdiUart = ParticleUartTransceiver(
       clk: clk,
@@ -214,28 +310,22 @@ class ParcoreTop extends Module {
     );
     uartTx <= ftdiUart.output('txPin');
 
-    // Core 0 Channel 0 status: bit 0 = empty (~rxValid); Channel 1: ifToIdStatus
-    c0FifoStatus <=
-        mux(
-          core0.fifoChanSelect.eq(Const(0, width: 2)),
-          [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
-          interconnect.ifToIdStatus,
-        );
+    c0FifoStatus <= mux(
+      core0.fifoChanSelect.eq(Const(0, width: 2)),
+      [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
+      Const(0, width: ParticleWidths.word),
+    );
 
-    // Channel 0 pop data: zero-extend 8-bit UART RX data to 32 bits
-    c0FifoPopData <=
-        [
-          Const(0, width: 24),
-          ftdiUart.output('rxData'),
-        ].swizzle();
+    c0FifoPopData <= [
+      Const(0, width: 24),
+      ftdiUart.output('rxData'),
+    ].swizzle();
 
     // -------------------------------------------------------------------------
     // Core 1: ID & Register Scoreboard
     // -------------------------------------------------------------------------
-    final c1MemARData =
-        Logic(name: 'c1_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c1MemBRData =
-        Logic(name: 'c1_mem_b_rdata', width: ParticleWidths.word);
+    final c1MemARData = Logic(name: 'c1_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c1MemBRData = Logic(name: 'c1_mem_b_rdata', width: ParticleWidths.word);
 
     final c1ChanSelect = Logic(name: 'c1ChanSelect', width: 2);
     final c1PopData = Logic(name: 'c1PopData', width: 32);
@@ -245,26 +335,24 @@ class ParcoreTop extends Module {
     ifToIdPop <= c1PopEn & c1ChanSelect.eq(Const(0, width: 2));
     memToWbPop <= c1PopEn & c1ChanSelect.eq(Const(2, width: 2));
 
-    c1PopData <=
-        mux(
-          c1ChanSelect.eq(Const(2, width: 2)),
-          interconnect.memToWbOut,
-          interconnect.ifToIdOut,
-        );
-    c1FifoStatus <=
-        mux(
-          c1ChanSelect.eq(Const(2, width: 2)),
-          interconnect.memToWbStatus,
-          interconnect.ifToIdStatus,
-        );
+    c1PopData <= mux(
+      c1ChanSelect.eq(Const(2, width: 2)),
+      interconnect.memToWbOut,
+      interconnect.ifToIdOut,
+    );
+    c1FifoStatus <= mux(
+      c1ChanSelect.eq(Const(2, width: 2)),
+      interconnect.memToWbStatus,
+      interconnect.ifToIdStatus,
+    );
 
     final core1 = ParticleCpuCore(
       clk: clk,
-      reset: reset,
+      reset: reset | condCoreReset.slice(1, 1),
       memPortARData: c1MemARData,
       memPortBRData: c1MemBRData,
-      mboxStrobeIn: c1MboxStrobe,
-      mboxVectorIn: c1MboxVector,
+      mboxStrobeIn: Const(0),
+      mboxVectorIn: Const(0, width: 4),
       fifoPopData: c1PopData,
       fifoStatus: c1FifoStatus,
       config: ParcoreConfig.core1Id,
@@ -275,6 +363,7 @@ class ParcoreTop extends Module {
     c1PopEn <= core1.fifoPopEn;
 
     buildTcm(
+      coreIndex: 1,
       name: 'core1',
       sizeBytes: ParcoreConfig.core1Id.tcmSizeBytes,
       portAAddr: core1.memPortAAddr,
@@ -288,21 +377,18 @@ class ParcoreTop extends Module {
       initialBytes: core1Binary,
     );
 
-    idToExPush <=
-        core1.fifoPushEn & core1.fifoChanSelect.eq(Const(1, width: 2));
+    idToExPush <= core1.fifoPushEn & core1.fifoChanSelect.eq(Const(1, width: 2));
     idToExData <= core1.fifoPushData;
 
     // -------------------------------------------------------------------------
     // Core 2: EX & Branch Resolution
     // -------------------------------------------------------------------------
-    final c2MemARData =
-        Logic(name: 'c2_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c2MemBRData =
-        Logic(name: 'c2_mem_b_rdata', width: ParticleWidths.word);
+    final c2MemARData = Logic(name: 'c2_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c2MemBRData = Logic(name: 'c2_mem_b_rdata', width: ParticleWidths.word);
 
     final core2 = ParticleCpuCore(
       clk: clk,
-      reset: reset,
+      reset: reset | condCoreReset.slice(2, 2),
       memPortARData: c2MemARData,
       memPortBRData: c2MemBRData,
       mboxStrobeIn: Const(0),
@@ -316,6 +402,7 @@ class ParcoreTop extends Module {
     idToExPop <= core2.fifoPopEn;
 
     buildTcm(
+      coreIndex: 2,
       name: 'core2',
       sizeBytes: ParcoreConfig.core2Ex.tcmSizeBytes,
       portAAddr: core2.memPortAAddr,
@@ -329,26 +416,12 @@ class ParcoreTop extends Module {
       initialBytes: core2Binary,
     );
 
-    exToMemPush <=
-        core2.fifoPushEn & core2.fifoChanSelect.eq(Const(1, width: 2));
+    exToMemPush <= core2.fifoPushEn & core2.fifoChanSelect.eq(Const(1, width: 2));
     exToMemData <= core2.fifoPushData;
 
-    pipelineFlush <= core2.mboxStrobeOut;
+    pipelineFlush <= core2.mboxStrobeOut | condFifoFlush;
     c0MboxStrobe <= core2.mboxStrobeOut;
     c0MboxVector <= core2.mboxVectorOut;
-    c1MboxStrobe <= core2.mboxStrobeOut;
-    c1MboxVector <= core2.mboxVectorOut;
-
-    // Latch 32-bit redirect target from Core 2 (rf.rDataA = fifoPushData) on MBOX strobe
-    Sequential(clk, reset: reset, [
-      If(core2.mboxStrobeOut, then: [
-        branchRedirectTarget < core2.fifoPushData,
-      ]),
-    ]);
-
-    // Memory-mapped redirect target at 0x0000013C for Core 0 Trap 1 handler
-    final c0ReadRedirectMmio = core0.memPortBAddr.eq(Const(0x0000013C, width: 32));
-    c0MemBRData <= mux(c0ReadRedirectMmio, branchRedirectTarget, c0TcmPortBRData);
 
     branchRedirectStrobe <= core2.mboxStrobeOut;
     branchRedirectVector <= core2.mboxVectorOut;
@@ -356,14 +429,12 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     // Core 3: MEM & Alignment
     // -------------------------------------------------------------------------
-    final c3MemARData =
-        Logic(name: 'c3_mem_a_rdata', width: ParticleWidths.halfWord);
-    final c3MemBRData =
-        Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
+    final c3MemARData = Logic(name: 'c3_mem_a_rdata', width: ParticleWidths.halfWord);
+    final c3MemBRData = Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
 
     final core3 = ParticleCpuCore(
       clk: clk,
-      reset: reset,
+      reset: reset | condCoreReset.slice(3, 3),
       memPortARData: c3MemARData,
       memPortBRData: c3MemBRData,
       mboxStrobeIn: Const(0),
@@ -377,6 +448,7 @@ class ParcoreTop extends Module {
     exToMemPop <= core3.fifoPopEn;
 
     buildTcm(
+      coreIndex: 3,
       name: 'core3',
       sizeBytes: ParcoreConfig.core3Mem.tcmSizeBytes,
       portAAddr: core3.memPortAAddr,
@@ -390,22 +462,7 @@ class ParcoreTop extends Module {
       initialBytes: core3Binary,
     );
 
-    // Mirror Core 3 guest stores (>= 0x0500) into Core 0 TCM for FENCE.I coherence
-    final c3Addr = core3.memPortBAddr;
-    final inC0GuestRange =
-        c3Addr.gte(Const(0x00000500, width: ParticleWidths.word)) &
-        c3Addr.lt(Const(ParcoreConfig.core0If.tcmSizeBytes, width: ParticleWidths.word));
-    final nonOverlappingData =
-        c3Addr.lt(Const(0x00000800, width: ParticleWidths.word)) |
-        c3Addr.gte(guestTextEnd);
-    c3GuestStoreMirror <= core3.memPortBWEn & inC0GuestRange & nonOverlappingData;
-    c0TcmPortBAddr <= mux(c3GuestStoreMirror, core3.memPortBAddr, core0.memPortBAddr);
-    c0TcmPortBWData <= mux(c3GuestStoreMirror, core3.memPortBWData, core0.memPortBWData);
-    c0TcmPortBBEn <= mux(c3GuestStoreMirror, core3.memPortBBEn, core0.memPortBBEn);
-    c0TcmPortBWEn <= c3GuestStoreMirror | core0.memPortBWEn;
-
-    memToWbPush <=
-        core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
+    memToWbPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
     memToWbData <= core3.fifoPushData;
   }
 }
