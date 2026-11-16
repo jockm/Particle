@@ -112,10 +112,13 @@ class ParticleCpuCore extends Module {
     const int stateFetch = 0;
     const int stateExec = 1;
     const int stateWait = 2;
+    const int stateFetchImm = 3;
 
     final pc = Logic(name: 'pc', width: ParticleWidths.word);
     final nextPc = Logic(name: 'nextPc', width: ParticleWidths.word);
     final state = Logic(name: 'state', width: 2);
+    final immDestReg = Logic(name: 'immDestReg', width: 4);
+    final immIsSigned = Logic(name: 'immIsSigned');
 
     final outMemBREn = Logic(name: 'outMemBREn');
     final outMemBWEn = Logic(name: 'outMemBWEn');
@@ -123,7 +126,7 @@ class ParticleCpuCore extends Module {
     final outMemBWData = Logic(name: 'outMemBWData', width: ParticleWidths.word);
     final outMemBBEn = Logic(name: 'outMemBBEn', width: ParticleWidths.byteEnable);
 
-    memPortAAddr <= pc;
+    memPortAAddr <= mux(state.eq(stateFetchImm), pc + 2, pc);
 
     final inst = memPortARData;
     final opcode = inst.slice(15, 8);
@@ -341,9 +344,13 @@ class ParticleCpuCore extends Module {
 
     rfWAddr <=
         mux(
-          trap14Strobe | isR14Dest,
-          Const(14, width: 4),
-          mux(opcode.eq(Const(ParticleOpcodes.tas, width: 8)), rl, rr),
+          state.eq(stateFetchImm),
+          immDestReg,
+          mux(
+            trap14Strobe | isR14Dest,
+            Const(14, width: 4),
+            mux(opcode.eq(Const(ParticleOpcodes.tas, width: 8)), rl, rr),
+          ),
         );
     rfXchgRegIdx <= rr;
 
@@ -374,10 +381,16 @@ class ParticleCpuCore extends Module {
     fifoPopEn <= outFifoPopEn;
     sarfRdWe <= outSarfRdWe;
 
+    final inFetchImm = state.eq(stateFetchImm);
+    final isLoadImm16 = opcode.eq(Const(ParticleOpcodes.ldi, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.ldis, width: 8));
+    final imm16Extended =
+        mux(immIsSigned, memPortARData.signExtend(32), memPortARData.zeroExtend(32));
+
     Combinational([
       // Defaults
-      rfWData < mux(trap14Strobe, pc + 2, alu.result),
-      rfWEn < mux(trap14Strobe, inExec, Const(0)),
+      rfWData < mux(inFetchImm, imm16Extended, mux(trap14Strobe, pc + 2, alu.result)),
+      rfWEn < mux(inFetchImm, Const(1), mux(trap14Strobe, inExec, Const(0))),
       rfXchgEn < Const(0),
       rfXchgAllEn < Const(0),
       rfXchgMostEn < Const(0),
@@ -768,9 +781,10 @@ class ParticleCpuCore extends Module {
 
     final mboxTargetAddr = Const(config.trapTableBase, width: 32) +
         (mboxVectorIn.zeroExtend(32) << 6);
+    final mboxAccepted = mboxStrobeIn & ~inFetchImm;
 
     nextPc <= mux(
-      mboxStrobeIn,
+      mboxAccepted,
       mboxTargetAddr,
       mux(trap14Strobe, trap14TargetAddr, branchNextPc),
     );
@@ -778,8 +792,10 @@ class ParticleCpuCore extends Module {
     Sequential(clk, reset: reset, resetValues: {
       pc: Const(config.trapTableBase, width: 32),
       state: Const(stateFetch, width: 2),
+      immDestReg: Const(0, width: 4),
+      immIsSigned: Const(0),
     }, [
-      If(mboxStrobeIn, then: [
+      If(mboxAccepted, then: [
         pc < mboxTargetAddr,
         state < Const(stateFetch, width: 2),
       ], orElse: [
@@ -792,9 +808,20 @@ class ParticleCpuCore extends Module {
               pc < pc,
               state < Const(stateExec, width: 2),
             ], orElse: [
-              pc < nextPc,
-              state < Const(stateFetch, width: 2),
+              If(isLoadImm16, then: [
+                immDestReg < rl,
+                immIsSigned < opcode.eq(Const(ParticleOpcodes.ldis, width: 8)),
+                pc < pc,
+                state < Const(stateFetchImm, width: 2),
+              ], orElse: [
+                pc < nextPc,
+                state < Const(stateFetch, width: 2),
+              ]),
             ]),
+          ]),
+          CaseItem(Const(stateFetchImm, width: 2), [
+            pc < pc + 4,
+            state < Const(stateFetch, width: 2),
           ]),
           CaseItem(Const(stateWait, width: 2), []),
         ]),

@@ -54,7 +54,7 @@ abstract class AluOps {
 }
 
 abstract class ParticleOpcodes {
-  // 4.1 Loads & Immediates (0x00 - 0x06)
+  // 4.1 Loads & Immediates (0x00 - 0x08)
   static const int ld = 0x00;
   static const int ldImm4 = 0x01;
   static const int ldImm8 = 0x02;
@@ -62,6 +62,8 @@ abstract class ParticleOpcodes {
   static const int ldNegImm8 = 0x04;
   static const int push4 = 0x05;
   static const int push8 = 0x06;
+  static const int ldi = 0x07;
+  static const int ldis = 0x08;
 
   // 4.2 Memory Loads & Stores (0x10 - 0x39)
   static const int ld8 = 0x10;

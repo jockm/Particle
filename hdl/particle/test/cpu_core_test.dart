@@ -242,5 +242,97 @@ void main() {
 
       expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
     });
+
+    test('LDI zero-extends 16-bit immediate and advances PC by 4', () async {
+      // Pulse 1 (t=5): Reset active
+      Simulator.registerAction(0, () => clk.put(0));
+      Simulator.registerAction(5, () => clk.put(1));
+      Simulator.registerAction(10, () => clk.put(0));
+
+      // Pulse 2 (t=15): Fetch LDI R5, 0xBEEF (Word 0 = 0x0705)
+      Simulator.registerAction(12, () {
+        reset.put(0);
+        memARData.put((ParticleOpcodes.ldi << 8) | 0x05);
+      });
+      Simulator.registerAction(15, () => clk.put(1));
+      Simulator.registerAction(20, () => clk.put(0));
+
+      // Pulse 3 (t=25): Exec LDI -> transitions to stateFetchImm (memPortAAddr -> 0x0102)
+      Simulator.registerAction(25, () => clk.put(1));
+      Simulator.registerAction(30, () => clk.put(0));
+
+      // Pulse 4 (t=35): FetchImm latches 0xBEEF into R5 and advances PC to 0x0104
+      Simulator.registerAction(32, () {
+        expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
+        memARData.put(0xBEEF);
+      });
+      Simulator.registerAction(35, () => clk.put(1));
+      Simulator.registerAction(40, () => clk.put(0));
+
+      // Pulse 5 (t=45): Fetch next instruction ST32 (R0), R5 (0x3505) to observe R5 on memPortBWData
+      Simulator.registerAction(42, () {
+        expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
+        memARData.put((ParticleOpcodes.st32 << 8) | 0x05);
+      });
+      Simulator.registerAction(45, () => clk.put(1));
+      Simulator.registerAction(50, () => clk.put(0));
+
+      reset.put(1);
+      memARData.put(0);
+      memBRData.put(0);
+      mboxStrobe.put(0);
+      mboxVector.put(0);
+
+      await Simulator.run();
+
+      expect(core.memPortBWData.value.toInt(), equals(0x0000BEEF));
+      expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
+    });
+
+    test('LDIS sign-extends 16-bit immediate and advances PC by 4', () async {
+      // Pulse 1 (t=5): Reset active
+      Simulator.registerAction(0, () => clk.put(0));
+      Simulator.registerAction(5, () => clk.put(1));
+      Simulator.registerAction(10, () => clk.put(0));
+
+      // Pulse 2 (t=15): Fetch LDIS R6, -4096 (0xF000 -> Word 0 = 0x0806)
+      Simulator.registerAction(12, () {
+        reset.put(0);
+        memARData.put((ParticleOpcodes.ldis << 8) | 0x06);
+      });
+      Simulator.registerAction(15, () => clk.put(1));
+      Simulator.registerAction(20, () => clk.put(0));
+
+      // Pulse 3 (t=25): Exec LDIS -> transitions to stateFetchImm (memPortAAddr -> 0x0102)
+      Simulator.registerAction(25, () => clk.put(1));
+      Simulator.registerAction(30, () => clk.put(0));
+
+      // Pulse 4 (t=35): FetchImm latches 0xFFFFF000 into R6 and advances PC to 0x0104
+      Simulator.registerAction(32, () {
+        expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
+        memARData.put(0xF000);
+      });
+      Simulator.registerAction(35, () => clk.put(1));
+      Simulator.registerAction(40, () => clk.put(0));
+
+      // Pulse 5 (t=45): Fetch ST32 (R0), R6 (0x3506) to observe R6 on memPortBWData
+      Simulator.registerAction(42, () {
+        expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
+        memARData.put((ParticleOpcodes.st32 << 8) | 0x06);
+      });
+      Simulator.registerAction(45, () => clk.put(1));
+      Simulator.registerAction(50, () => clk.put(0));
+
+      reset.put(1);
+      memARData.put(0);
+      memBRData.put(0);
+      mboxStrobe.put(0);
+      mboxVector.put(0);
+
+      await Simulator.run();
+
+      expect(core.memPortBWData.value.toInt(), equals(0xFFFFF000));
+      expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
+    });
   });
 }
