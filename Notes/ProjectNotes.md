@@ -16,12 +16,12 @@
     - Fix errors in monitor
     - Monitor needs way to load files
     - Simulator needs way to load files
-    - Build tool
-    - More than 32 registers?
     - 64 bit Particle
         - Configuration option?
     - Floating Point?
     - XTRA instruction/Coprocessor interface
+    - HINT Instruction
+    - Load Immediate 
 
 - Parcore
     - System Bringup (aka the conductor)
