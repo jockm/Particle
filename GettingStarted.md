@@ -154,6 +154,23 @@ make test-parcore
 make test-sim
 ```
 
+### Official RISC-V ISA compliance tests (`riscv-tests`)
+
+To verify Parcore against the 67 official RISC-V ISA architectural tests
+(`rv32ui`, `rv32um`, and `rv32uzbb`), first initialize the
+`third_party/riscv-tests` submodule if you have not already done so:
+
+```sh
+git submodule update --init third_party/riscv-tests
+```
+
+Then build the bare-metal test binaries (requires the RISC-V toolchain) and
+run the suite:
+
+```sh
+make test-parcore-isa
+```
+
 ### Action compiler and language-server tests
 
 ```sh
@@ -218,6 +235,7 @@ Run `make help` to see the available targets. Common ones include:
 | `make vscode-ext` | Build the VSIX packages without installing them |
 | `make build` | Build firmware and applications |
 | `make test` | Run Particle hardware, Parcore, and simulator tests |
+| `make test-parcore-isa` | Build and run official RISC-V ISA tests (`rv32ui`, `rv32um`, `rv32uzbb`) |
 | `make compiler-tests` | Run Action compiler, LSP, and Action program tests |
 | `make test-lint` | Run assembly linter tests |
 | `make llvm-tests` | Build and run Action tests using the LLVM backend |

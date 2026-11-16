@@ -66,7 +66,7 @@ MULTI_NAMES   := $(notdir $(patsubst %/,%,$(wildcard $(MULTI_ROOT)/*/)))
 MULTI_BINS    := $(patsubst %,$(BUILD_DIR)/%.bin,$(MULTI_NAMES))
 MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
-.PHONY: all setup test test-all test-particle test-parcore test-sim compiler-tests test-lint \
+.PHONY: all setup test test-all test-particle test-parcore test-parcore-isa test-sim compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         firmware apps clean help
 
@@ -86,6 +86,7 @@ help:
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
+	@echo "  make test-parcore-isa - Build and run official RISC-V ISA tests (rv32ui, rv32um, rv32uzbb)"
 	@echo "  make test-sim         - Run instruction simulator verification"
 	@echo "  make compiler-tests   - Run Action compiler unit tests and all test suites in psim"
 	@echo "  make action           - Build the Action compiler ($(ACTION_BIN))"
@@ -152,6 +153,18 @@ test-parcore: setup firmware guest-tests
 	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
 	@(cd $(PARCORE_DIR) && ./test_pipeline.sh)
+
+test-parcore-isa: setup firmware
+	@if [ ! -d "third_party/riscv-tests/isa" ]; then \
+		echo "[FAIL] third_party/riscv-tests/isa not found."; \
+		echo "       Initialize the submodule first: git submodule update --init third_party/riscv-tests"; \
+		exit 1; \
+	fi
+	@echo "==> Building official RISC-V ISA test binaries (rv32ui, rv32um, rv32uzbb)..."
+	@bash $(PARCORE_DIR)/test/riscv_tests/build_riscv_tests.sh
+	@echo "==> Running official RISC-V ISA tests on Parcore..."
+	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=1 $(DART) test -j 1 -r compact test/parcore_riscv_isa_test.dart)
+	@$(DOT_CLEAN_CMD)
 
 # Run instruction-level simulation tests with $(PSIM).
 test-sim: $(PSIM) $(BUILD_DIR)/branch_suite.bin
