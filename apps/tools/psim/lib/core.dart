@@ -204,7 +204,7 @@ class ParticleCore {
 
     var nextPc = (pc + 2) & mask32;
 
-    // ---------------- Register Loads & Immediates (0x00 - 0x06) ----------------
+    // ---------------- Register Loads & Immediates (0x00 - 0x08) ----------------
     if (opcode == 0x00) {
       r[rr] = r[rl];
     } else if (opcode == 0x01) {
@@ -219,6 +219,19 @@ class ParticleCore {
       r[rr] = ((r[rr] << 4) | imm4) & mask32;
     } else if (opcode == 0x06) {
       r[14] = ((r[14] << 8) | imm8) & mask32;
+    } else if (opcode == 0x07) {
+      final imm16 = read16((pc + 2) & mask32);
+      if (!_trapTaken) {
+        r[rl] = imm16;
+        nextPc = (pc + 4) & mask32;
+      }
+    } else if (opcode == 0x08) {
+      final imm16 = read16((pc + 2) & mask32);
+      if (!_trapTaken) {
+        final immS = (imm16 < 0x8000) ? imm16 : imm16 - 0x10000;
+        r[rl] = toUnsigned32(immS);
+        nextPc = (pc + 4) & mask32;
+      }
 
     // ---------------- Memory Group (8-bit: 0x10 - 0x19) ----------------
     } else if (opcode == 0x10) {

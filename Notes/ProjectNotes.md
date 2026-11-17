@@ -21,7 +21,6 @@
     - Floating Point?
     - XTRA instruction/Coprocessor interface
     - HINT Instruction
-    - Load Immediate 
 
 - Parcore
     - System Bringup (aka the conductor)
