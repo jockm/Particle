@@ -277,6 +277,18 @@ class Checker {
   /// The checks of the whole program: constants, types, signatures, trap
   /// handlers, globals, coroutine operations, prototypes and references.
   void _prepare(ProgramNode root) {
+    // -D NAME also sets a constant NAME declared in a package (93)
+    for (final d in root.decls) {
+      final names = d is VarDeclNode && d.isConst
+          ? [d.name]
+          : d is EnumDeclNode
+              ? d.members.map((m) => m.$1)
+              : const <String>[];
+      for (final n in names) {
+        final v = predefinedConstants[baseName(n)];
+        if (n != baseName(n) && v != null) predefinedConstants[n] = v;
+      }
+    }
     // Locals are block-scoped: give each its own name first
     resolveBlockScopes(root, {
       for (final d in root.decls)
@@ -793,7 +805,7 @@ class Checker {
         }
         continue;
       }
-      if (_coroutineOps.containsKey(f.name)) continue;
+      if (_coroutineOps.containsKey(baseName(f.name))) continue;
       if (!defined.contains(f.name) && !asmNames.contains(f.name)) {
         throw CompileError(
             "'${_displayName(f)}' is declared but never defined; if it is written in assembly, declare it 'asm'").at(f.loc);

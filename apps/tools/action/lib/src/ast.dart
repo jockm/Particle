@@ -13,6 +13,9 @@ abstract class AstNode {
   /// messages. Null for nodes the compiler makes itself.
   String? loc;
 
+  /// `pub` in front of a top-level declaration: visible outside its package.
+  bool isPub = false;
+
   /// The node's `expr` child, for the node kinds that have one. The Python
   /// type inference walked through such wrappers with `hasattr(e, 'expr')`.
   AstNode? get innerExpr => null;
@@ -24,7 +27,55 @@ abstract class AstNode {
 
 class ImportNode extends AstNode {
   final String path;
-  ImportNode(this.path);
+
+  /// `import "path" as alias;`: the name the importing file uses for the
+  /// package (else the name the package declares).
+  final String? alias;
+
+  /// Where the alias is written, when there is one.
+  final String? aliasLoc;
+
+  ImportNode(this.path, [this.alias, this.aliasLoc]);
+
+  /// An import of a file (`import "lib/string.act";`), not of a package.
+  bool get isFile => path.endsWith('.act');
+}
+
+/// `package name;` at the top of a file of a package.
+class PackageNode extends AstNode {
+  final String name;
+  PackageNode(this.name);
+}
+
+/// What the loader learned about a package of the program, for the
+/// language server.
+class PackageInfo {
+  /// The name the package declares (`uart`).
+  final String name;
+
+  /// The prefix of its declarations' internal names: its folder inside the
+  /// module, with `.` between the parts (`drivers.uart`).
+  final String prefix;
+
+  /// Its import path (`github.com/jockm/Particle/drivers/uart`).
+  final String path;
+
+  /// Its folder.
+  final String folder;
+
+  /// Its top-level names as written, and those of them that are `pub`.
+  final Set<String> names;
+  final Set<String> pubNames;
+
+  /// Names that keep their spelling outside the package: `asm` and
+  /// `extern` prototypes (a label or a C name).
+  final Set<String> plainNames;
+
+  PackageInfo(this.name, this.prefix, this.path, this.folder, this.names, this.pubNames,
+      this.plainNames);
+
+  /// The internal name of [name] declared in this package.
+  String internal(String name) => '$prefix..$name';
 }
 
 class ArrayAccessNode extends AstNode {
@@ -121,6 +172,18 @@ class SizeofNode extends AstNode {
 class ProgramNode extends AstNode {
   final List<AstNode> decls;
   ProgramNode(this.decls);
+
+  /// Warnings found while loading the program (such as an unused import).
+  final List<(String, String?)> loadWarnings = [];
+
+  /// The packages of the program, by prefix, and for each file the
+  /// package each import name of it stands for.
+  final Map<String, PackageInfo> packages = {};
+  final Map<String, Map<String, PackageInfo>> fileImports = {};
+
+  /// The package each file of an imported package belongs to (the
+  /// program's own files, and the prelude, are not here).
+  final Map<String, PackageInfo> filePackages = {};
 }
 
 /// One field of a `type` declaration.

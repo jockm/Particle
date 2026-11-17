@@ -1,0 +1,22 @@
+// The second file of the geometry package: it uses the first file's
+// declarations without qualifying them.
+package geometry;
+
+pub type Rect {
+    Point min;
+    Point max;
+};
+
+pub u32 Rect.area() {
+    return (this.max.x - this.min.x) * (this.max.y - this.min.y);
+}
+
+pub u32 kindOf(Rect r) {
+    if (r.area() == 0) {
+        return POINT;
+    }
+    if (r.max.x - r.min.x == r.max.y - r.min.y) {
+        return SQUARE;
+    }
+    return RECT;
+}

@@ -40,6 +40,7 @@ This document has three parts:
   - [2.9 Editor support](#29-editor-support)
   - [2.10 Building for your computer (LLVM)](#210-building-for-your-computer-llvm)
   - [2.11 Code for both targets](#211-code-for-both-targets)
+  - [2.12 Packages](#212-packages)
 - [Part 3: Reference](#part-3-reference)
   - [3.1 Lexical structure](#31-lexical-structure)
   - [3.2 Modules and imports](#32-modules-and-imports)
@@ -1132,13 +1133,14 @@ A file is checked the way the compiler would check it. By default, that means th
 
 | Key | Meaning |
 |-----|---------|
+| `module` | The module's name, as `{ "name": "github.com/you/project" }`. Programs made of packages need it (see [2.12](#212-packages)). |
 | `includeDirs` | Directories searched by `import`, like `-I`. The workspace root and `lib` are always searched. |
 | `defines` | Constants, like `-D NAME=VALUE`. |
 | `programFolders` | Folders whose subfolders are each one program: all the `.act` files in the subfolder, checked together. Adding a folder or a file needs no change to `action.json`. This repository's `action.json` names `apps/act/multi` (see [2.2](#22-multi-file-projects)). |
 | `programs` | Other groups of files compiled together, listed file by file. |
 | `target` | The compiler programs are checked for: `"particle"` (the default), `"llvm"` (see [2.10](#210-building-for-your-computer-llvm)), or both as a list. With both, an error found for only one of them is shown as a warning that names it, such as `for llvm: 'readFifo': FIFOs are Particle hardware…`. A file with a build directive, such as `//act:build llvm`, is checked for the targets it is built for (see [2.11](#211-code-for-both-targets)). The editor also warns when a file's name says it is for a target or operating system (`name_llvm.act`) that its directive does not keep it to, or that it has no directive. Types and values shown on hover are those of the first target. |
 
-A file in a program is checked with the rest of it; any other file is checked on its own.
+A file in a program is checked with the rest of it; any other file is checked on its own. A file that starts with a `package` line other than `package main;` is checked with the other files of its folder, as that package. Hover, go to definition and completion follow `name.declaration` into imported packages, and completion after `name.` lists the package's `pub` names.
 
 Paths are relative to `action.json`. A mistake in the file is shown as an error on it, and the defaults are used until it is fixed.
 
@@ -1284,6 +1286,85 @@ void main() {
 
 The compilers themselves (`build/tools/action` and `action_llvm`) do not define them: a program that uses them and is compiled without `pbuild` or `llbuild` needs the same `-D` options.
 
+## 2.12 Packages
+
+A larger program can be divided into **packages**. A package is a folder of `.act` files that all start with the same `package` line. Its declarations are private to it unless they are marked `pub`, and other packages use them through the package's name: `geometry.Point`, `geometry.init(p, 1, 2)`.
+
+### The module
+
+Packages are found through the **module**, which is named in `action.json` (see [2.9](#the-project-file-actionjson)):
+
+```json
+{
+  "action": {
+    "module": { "name": "github.com/jockm/Particle" }
+  }
+}
+```
+
+A package's **import path** is the module's name followed by the package's folder inside `action.json`'s folder. In this repository, the folder `apps/act/packages/geometry` is the package `github.com/jockm/Particle/apps/act/packages/geometry`. Imports always give the full path, even between packages of the same module. Only packages of the program's own module can be imported for now. Importing a package when `action.json` names no module is an error.
+
+### A program made of packages
+
+The program's own files (those named on the command line) start with `package main;`. Only then can they import packages:
+
+```c
+package main;
+
+import "github.com/jockm/Particle/apps/act/packages/geometry";
+import "github.com/jockm/Particle/apps/act/packages/report" as rep;
+
+void main() {
+    geometry.Rect r;
+    geometry.init(r.min, 1, 2);
+    u32 a = rep.summarize(r);
+}
+```
+
+A package import gives a folder, not a file, and makes its package's `pub` declarations available as `name.declaration`. The name is the one in the package's `package` line, or the name after `as`. Every use of an imported name has that form: an import name cannot be used on its own, and two imports of a file cannot have the same name. An import name cannot be a built-in name or a name declared in the same package, and a local variable cannot hide it. An import that is never used is a warning.
+
+`lib/string.act` is the **prelude** of a program with packages: it is loaded first, and its functions and methods can be used everywhere without an import.
+
+### Writing a package
+
+```c
+// apps/act/packages/geometry/geometry.act
+package geometry;
+
+pub type Point {
+    u32 x;
+    u32 y;
+};
+
+pub const u32 UNIT = 1;
+pub u32 created;            // others may read and assign it
+
+u32 scale(u32 v) {          // private to the package
+    return v * UNIT;
+}
+
+pub void init(Point p, u32 x, u32 y) {
+    p.x = scale(x);
+    p.y = scale(y);
+    created = created + 1;
+}
+```
+
+- The `package` line comes first in each file, and every `.act` file in the folder must give the same name. The name is letters and digits, starting with a letter. By convention it is the folder's name; the editor warns when it is not. Folder names in an import path follow the same rule.
+- The files of a package see each other's declarations, private ones too, without a prefix.
+- `pub` goes in front of a function (including an `asm` or `extern` prototype), a type, a type alias, a function type, a constant, an enum or a global. A `pub` enum makes its members visible; every field and method of a `pub` type is visible. `pub` cannot be put on `main` or on a trap handler, and only on top-level declarations.
+- A `pub` declaration cannot use a private type of its package, in its parameters, its result, its fields or its type: an importer could not name it.
+- A **method** must be declared in its type's own package.
+- A package cannot declare `main`, and packages cannot import each other in a cycle.
+- `import "file.act";` still works inside a package: the file **joins the importing package**, and its declarations are private to it. For example, a package that imports `lib/protokernel.act` can declare tasks, but its `pt` type is the package's own and not `pub`, so a `pub` function cannot take a `pt`. A file that starts with a `package` line cannot be imported as a file.
+- `-D NAME=VALUE` sets a constant called `NAME` in any package.
+
+### Names in the output
+
+The program's own declarations keep their names. A package's declarations are given **internal names** made of the package's folder path inside the module, `..`, and the name: the function `init` of `apps/act/packages/geometry` is the label `_apps.act.packages.geometry..init` in Particle assembly, and `@"act.apps.act.packages.geometry..init"` in LLVM IR. Assembly code calls a package's function by that label. `asm` and `extern` prototypes keep their plain names, because they name a label or a C function. Error messages and the editor show these names as the source writes them, `geometry.init`.
+
+In this repository the test packages are in `apps/act/packages/`, and `apps/act/test_packages.act` uses them.
+
 ---
 
 # Part 3: Reference
@@ -1335,7 +1416,7 @@ import "lib/protokernel.act";
 4. `lib/`
 5. the current directory
 
-Each file is loaded once, however many times it is imported, so circular imports are harmless. There is no preprocessor: no `#define`, `#include`, `#if` or predefined names such as `__LINE__`. A file can be limited to some targets with a build directive; an imported file that is left out adds nothing (see [2.11](#211-code-for-both-targets)).
+Each file is loaded once, however many times it is imported, so circular imports are harmless. A path that does not end in `.act` imports a **package**, a folder of files (see [2.12](#212-packages)): `import "github.com/jockm/Particle/apps/act/packages/geometry";`, optionally followed by `as name`. Package imports are allowed only in files that start with a `package` line. There is no preprocessor: no `#define`, `#include`, `#if` or predefined names such as `__LINE__`. A file can be limited to some targets with a build directive; an imported file that is left out adds nothing (see [2.11](#211-code-for-both-targets)).
 
 ## 3.3 Types
 
@@ -2051,9 +2132,9 @@ Constant expressions are computed **exactly**, with no limit on size: `-1 < 0` i
 
 ## 3.14 Keywords
 
-**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `extern` `f32` `f64` `false` `fast` `fn` `for` `if` `import` `inline` `ref` `return` `s8` `s16` `s32` `s64` `sizeof` `string` `switch` `true` `type` `u8` `u16` `u32` `u64` `verify` `void` `volatile` `while`
+**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `extern` `f32` `f64` `false` `fast` `fn` `for` `if` `import` `inline` `package` `pub` `ref` `return` `s8` `s16` `s32` `s64` `sizeof` `string` `switch` `true` `type` `u8` `u16` `u32` `u64` `verify` `void` `volatile` `while`
 
-**Built-in names** (identifiers with special meaning): `this`, `trap`, `readFifo`, `writeFifo`, `tryReadFifo`, `peek8`, `peek16`, `peek32`, `poke8`, `poke16`, `poke32`, `callAddr`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `unset`, `sameAs`, `copyFrom`, `len`, `capacity`. `task` starts a task declaration when it is followed by a name and `(`. `yield`, `waitUntil` and `pkExit` are task operations when `lib/protokernel.act` is imported.
+**Built-in names** (identifiers with special meaning): `this`, `trap`, `readFifo`, `writeFifo`, `tryReadFifo`, `peek8`, `peek16`, `peek32`, `poke8`, `poke16`, `poke32`, `callAddr`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `unset`, `sameAs`, `copyFrom`, `len`, `capacity`. `task` starts a task declaration when it is followed by a name and `(`. `as` names an import only after a package import's path. `yield`, `waitUntil` and `pkExit` are task operations when `lib/protokernel.act` is imported.
 
 ## 3.15 Known limitations and pitfalls
 

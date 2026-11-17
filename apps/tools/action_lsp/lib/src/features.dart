@@ -9,8 +9,8 @@ import 'symbols.dart';
 
 const _keywords = [
   'asm', 'break', 'case', 'const', 'continue', 'default', 'else', 'enum',
-  'extern', 'fast', 'fn', 'for', 'if', 'import', 'inline', 'ref', 'return', 'sizeof',
-  'switch', 'task', 'type', 'verify', 'void', 'volatile', 'while',
+  'extern', 'fast', 'fn', 'for', 'if', 'import', 'inline', 'package', 'pub', 'ref', 'return',
+  'sizeof', 'switch', 'task', 'type', 'verify', 'void', 'volatile', 'while',
 ];
 
 const _builtinTypes = {
@@ -155,9 +155,25 @@ class Features {
       }
       if (found != null) return found;
     }
-    final g = index.globals[name];
+    final g = index.globals[index.keyIn(path, name)] ?? index.globals[name];
     if (g != null && g.kind != SymKind.method) return g;
     return null;
+  }
+
+  /// The package [name] stands for in this file, unless a local hides it.
+  PackageInfo? _importAt(String name, Pos pos) {
+    final pkg = index.importIn(path, name);
+    if (pkg == null) return null;
+    final fn = index.functionAt(path, pos);
+    if (fn != null && fn.$2.any((s) => s.name == name)) return null;
+    return pkg;
+  }
+
+  /// The declaration `alias.name` refers to, when it is pub.
+  Sym? _qualified(PackageInfo pkg, String name) {
+    if (!pkg.pubNames.contains(name)) return null;
+    final g = index.globals[ProgramIndex.keyOf(pkg, name)];
+    return g == null || g.kind == SymKind.method ? null : g;
   }
 
   Val? _valOf(Sym s) {
@@ -182,9 +198,20 @@ class Features {
   /// The value a chain names, or null if it cannot be followed.
   Val? resolveChain(Chain chain, Pos pos) {
     if (!chain.known || chain.parts.isEmpty) return null;
-    final (base, baseIdx) = chain.parts.first;
+    var (base, baseIdx) = chain.parts.first;
+    var rest = chain.parts.skip(1);
     Val? v;
-    final s = lookup(base, pos);
+    // alias.name...: a declaration of an imported package
+    final pkg = baseIdx == 0 && chain.parts.length > 1 ? _importAt(base, pos) : null;
+    Sym? s;
+    if (pkg != null) {
+      (base, baseIdx) = chain.parts[1];
+      rest = chain.parts.skip(2);
+      s = _qualified(pkg, base);
+      if (s == null) return null;
+    } else {
+      s = lookup(base, pos);
+    }
     if (s != null) {
       v = _valOf(s);
     } else if (_builtinTypes.containsKey(base)) {
@@ -192,7 +219,7 @@ class Features {
     }
     if (v == null) return null;
     v = _index(v, baseIdx);
-    for (final (name, idx) in chain.parts.skip(1)) {
+    for (final (name, idx) in rest) {
       if (v == null || v.isTypeName) return null;
       if (v.isArray && (name == 'len' || name == 'capacity')) {
         v = const Val('u32');
@@ -224,12 +251,17 @@ class Features {
     final text = _hoverText(word, chain, pos);
     if (text == null) return null;
     return {
-      'contents': {'kind': 'markdown', 'value': text},
+      'contents': {'kind': 'markdown', 'value': sourceName(text)},
       'range': rangeJson(Pos(pos.line, start), Pos(pos.line, end)),
     };
   }
 
   String? _hoverText(String word, Chain chain, Pos pos) {
+    final pkg = _packageBefore(chain, pos);
+    if (pkg != null) {
+      final s = _qualified(pkg, word);
+      return s == null ? null : describe(s);
+    }
     if (chain.parts.isNotEmpty) {
       final base = resolveChain(chain, pos);
       if (base == null) {
@@ -251,6 +283,10 @@ class Features {
     }
     final s = lookup(word, pos);
     if (s != null) return describe(s);
+    final imported = _importAt(word, pos);
+    if (imported != null) {
+      return '${_code('import "${imported.path}"')}Package `${imported.name}`.\n';
+    }
     final bt = _builtinTypes[word];
     if (bt != null) return _code(word) + bt;
     final bf = _builtinFunctions[word];
@@ -260,6 +296,13 @@ class Features {
     }
     return null;
   }
+
+  /// The package of `alias.` just before the word, when that is the whole
+  /// chain.
+  PackageInfo? _packageBefore(Chain chain, Pos pos) =>
+      chain.known && chain.parts.length == 1 && chain.parts.first.$2 == 0
+          ? _importAt(chain.parts.first.$1, pos)
+          : null;
 
   String _code(String s) => '```action\n$s\n```\n';
 
@@ -278,7 +321,7 @@ class Features {
         buf.write(_code(_signature(s)));
       case SymKind.type:
         buf.write(_code(_typeDecl(s)));
-        final st = info?.types[s.name];
+        final st = info?.types[s.key];
         if (st != null) buf.write('Size ${st.size} bytes, aligned to ${st.align}.\n');
       case SymKind.field:
         final decl = s.decl;
@@ -303,16 +346,16 @@ class Features {
         buf.write(_code('type ${s.name} = fn(${d.paramTypes.join(', ')}) -> ${d.retType}'));
       case SymKind.enumType:
         final members = [
-          for (final m in s.children) '    ${m.name} = ${info?.constants[m.name] ?? '?'},'
+          for (final m in s.children) '    ${m.name} = ${info?.constants[m.key] ?? '?'},'
         ];
         buf.write(_code('enum ${s.name} {\n${members.join('\n')}\n}'));
       case SymKind.enumMember:
-        buf.write(_code('${s.name} = ${_value(s.name)}'));
+        buf.write(_code('${s.name} = ${_value(s.key)}'));
         buf.write('Member of enum `${s.container}`.\n');
       case SymKind.constant:
       case SymKind.localConstant:
-        final t = info?.constType(s.name) ?? s.type ?? '';
-        buf.write(_code('const $t ${s.name} = ${_value(s.name)}'));
+        final t = info?.constType(s.key) ?? s.type ?? '';
+        buf.write(_code('const $t ${s.name} = ${_value(s.key)}'));
       case SymKind.global:
       case SymKind.local:
       case SymKind.parameter:
@@ -322,6 +365,10 @@ class Features {
           SymKind.parameter => 'Parameter of `${_display(s.container)}`.\n',
           _ => 'Local variable of `${_display(s.container)}`.\n',
         });
+    }
+    if (s.key.contains(packageMark)) {
+      final pkg = index.program.packages[s.key.substring(0, s.key.indexOf(packageMark))];
+      if (pkg != null) buf.write('In package `${pkg.name}` (${pkg.path}).\n');
     }
     if (s.doc != null) buf.write('\n${s.doc}\n');
     return buf.toString();
@@ -369,7 +416,7 @@ class Features {
       final dims = d.dimExprs.isNotEmpty
           ? (d.arrayDims != null ? d.arrayDims!.map((n) => '[$n]').join() : '[...]')
           : (d.isPtr ? '[]' : '');
-      return '${d.isFast ? 'fast ' : ''}${d.isVolatile && d.boundAddr == null ? 'volatile ' : ''}${d.typeName} ${d.name}$dims'
+      return '${d.isFast ? 'fast ' : ''}${d.isVolatile && d.boundAddr == null ? 'volatile ' : ''}${d.typeName} ${s.name}$dims'
           '${d.boundAddr != null ? ' @ 0x${d.boundAddr!.toRadixString(16).toUpperCase()}' : ''}';
     }
     return '${s.type ?? '?'} ${s.name}${s.isArray ? '[]' : ''}';
@@ -398,7 +445,7 @@ class Features {
   }
 
   String _typeDecl(Sym s) {
-    final info = index.info?.types[s.name];
+    final info = index.info?.types[s.key];
     final rows = <String>[];
     for (final f in s.children) {
       final d = f.decl as FieldDecl;
@@ -434,6 +481,11 @@ class Features {
     // import "file.act";
     final imp = RegExp(r'^\s*import\s+"([^"]*)"').firstMatch(line);
     if (imp != null && pos.character >= imp.start && pos.character <= imp.end) {
+      final pkg = index.program.packages.values.where((p) => p.path == imp.group(1)).firstOrNull;
+      if (pkg != null) {
+        final first = (index.files.where((f) => f.startsWith('${pkg.folder}/')).toList()..sort()).firstOrNull;
+        return first == null ? null : SrcLoc(first, const Pos(0, 0), const Pos(0, 0)).toLocationJson();
+      }
       final target = resolveImport(imp.group(1)!, path);
       if (target == null) return null;
       return SrcLoc(target, const Pos(0, 0), const Pos(0, 0)).toLocationJson();
@@ -442,7 +494,10 @@ class Features {
     if (start == end) return null;
     final word = line.substring(start, end);
     Sym? s;
-    if (chain.parts.isEmpty) {
+    final pkg = _packageBefore(chain, pos);
+    if (pkg != null) {
+      s = _qualified(pkg, word);
+    } else if (chain.parts.isEmpty) {
       s = lookup(word, pos);
     } else {
       final base = resolveChain(chain, pos);
@@ -457,6 +512,27 @@ class Features {
 
   // ----------------------------------------------------------- completion
 
+  void _addGlobal(Sym s, void Function(String, int, [String?, String?]) add) {
+    switch (s.kind) {
+      case SymKind.function || SymKind.task || SymKind.prototype:
+        add(s.name, _ciFunction, _signature(s), s.doc);
+      case SymKind.type:
+        add(s.name, _ciStruct, 'type', s.doc);
+      case SymKind.alias:
+        add(s.name, _ciTypeParameter, 'type ${s.name} = ${s.type}', s.doc);
+      case SymKind.functionType:
+        add(s.name, _ciInterface, 'function type', s.doc);
+      case SymKind.enumMember:
+        add(s.name, _ciEnumMember, '${s.container} = ${_value(s.key)}', s.doc);
+      case SymKind.constant:
+        add(s.name, _ciConstant, 'const ${s.type} = ${_value(s.key)}', s.doc);
+      case SymKind.global:
+        add(s.name, _ciVariable, _typeText(s.type ?? '', s.isArray), s.doc);
+      default:
+        break;
+    }
+  }
+
   List<Map<String, Object?>> completion(Pos pos) {
     if (pos.line >= lines.length) return const [];
     final line = lines[pos.line];
@@ -466,11 +542,19 @@ class Features {
       items.add({
         'label': label,
         'kind': kind,
-        if (detail != null) 'detail': detail,
+        if (detail != null) 'detail': sourceName(detail),
         if (doc != null) 'documentation': {'kind': 'markdown', 'value': doc},
       });
     }
 
+    final pkg = _packageBefore(chain, pos);
+    if (pkg != null) {
+      for (final name in pkg.pubNames.toList()..sort()) {
+        final s = _qualified(pkg, name);
+        if (s != null) _addGlobal(s, add);
+      }
+      return items;
+    }
     if (chain.parts.isNotEmpty) {
       final base = resolveChain(chain, pos);
       if (base == null) return const [];
@@ -533,25 +617,15 @@ class Features {
             s.kind == SymKind.localConstant ? 'const' : _typeText(s.type ?? '', s.isArray));
       }
     }
+    // Names of other packages are reached through their import names
+    final own = index.packageOf(path);
+    final mine = own == null ? null : '${own.prefix}$packageMark';
     for (final s in index.globals.values) {
-      switch (s.kind) {
-        case SymKind.function || SymKind.task || SymKind.prototype:
-          add(s.name, _ciFunction, _signature(s), s.doc);
-        case SymKind.type:
-          add(s.name, _ciStruct, 'type', s.doc);
-        case SymKind.alias:
-          add(s.name, _ciTypeParameter, 'type ${s.name} = ${s.type}', s.doc);
-        case SymKind.functionType:
-          add(s.name, _ciInterface, 'function type', s.doc);
-        case SymKind.enumMember:
-          add(s.name, _ciEnumMember, '${s.container} = ${_value(s.name)}', s.doc);
-        case SymKind.constant:
-          add(s.name, _ciConstant, 'const ${s.type} = ${_value(s.name)}', s.doc);
-        case SymKind.global:
-          add(s.name, _ciVariable, _typeText(s.type ?? '', s.isArray), s.doc);
-        default:
-          break;
-      }
+      if (s.key.contains(packageMark) && (mine == null || !s.key.startsWith(mine))) continue;
+      _addGlobal(s, add);
+    }
+    for (final e in (index.program.fileImports[path] ?? const <String, PackageInfo>{}).entries) {
+      add(e.key, _ciModule, 'import "${e.value.path}"');
     }
     for (final k in _keywords) {
       add(k, _ciKeyword);
@@ -606,7 +680,7 @@ class Features {
         children.add({
           'name': c.name,
           'kind': c.kind == SymKind.field ? _skField : _skEnumMember,
-          if (c.type != null) 'detail': c.type,
+          if (c.type != null) 'detail': sourceName(c.type!),
           'range': rangeJson(cs, ce),
           'selectionRange': rangeJson(cs, ce),
         });
@@ -615,7 +689,7 @@ class Features {
     return {
       'name': s.displayName,
       'kind': _symbolKind(s.kind),
-      if (_detail(s) != null) 'detail': _detail(s),
+      if (_detail(s) != null) 'detail': sourceName(_detail(s)!),
       'range': rangeJson(start, end),
       'selectionRange': rangeJson(sel.start, sel.end),
       if (children.isNotEmpty) 'children': children,
@@ -656,6 +730,7 @@ const _ciFunction = 3;
 const _ciField = 5;
 const _ciVariable = 6;
 const _ciInterface = 8;
+const _ciModule = 9;
 const _ciProperty = 10;
 const _ciKeyword = 14;
 const _ciEnumMember = 20;

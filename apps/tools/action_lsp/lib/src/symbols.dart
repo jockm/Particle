@@ -43,8 +43,13 @@ class SrcLoc {
 
 /// One declared name.
 class Sym {
-  /// The name as written: `move` for the method `Point.move`.
+  /// The name as written: `move` for the method `Point.move`, `Point` for
+  /// the type `Point` of a package.
   final String name;
+
+  /// The name the compiler knows it by: `geo..Point` for the type `Point`
+  /// of package `geo` (the same as [name] outside packages).
+  final String key;
   final SymKind kind;
 
   /// Where the name is written, or null if unknown.
@@ -80,18 +85,20 @@ class Sym {
   Pos? visibleUntil;
 
   Sym(this.name, this.kind,
-      {this.at,
+      {String? key,
+      this.at,
       this.declStart,
       this.container,
       this.type,
       this.isArray = false,
       this.isHeapRef = false,
       this.decl,
-      this.doc});
+      this.doc})
+      : key = key ?? name;
 
   /// The name shown to the user: `Point.move` for a method.
   String get displayName =>
-      kind == SymKind.method && container != null ? '$container.$name' : name;
+      kind == SymKind.method && container != null ? '${baseName(container!)}.$name' : name;
 }
 
 final _locRe = RegExp(r'^(.*):(\d+):(\d+)$');
@@ -206,6 +213,26 @@ class ProgramIndex {
     return find(typeName);
   }
 
+  /// The package [path] belongs to, or null for the program's own files.
+  PackageInfo? packageOf(String path) => program.filePackages[path];
+
+  /// The package [alias] stands for in [path], or null.
+  PackageInfo? importIn(String path, String alias) => program.fileImports[path]?[alias];
+
+  /// The key in [globals] of [name] as written in [path]: a package's own
+  /// names carry its prefix there.
+  String keyIn(String path, String name) {
+    final pkg = packageOf(path);
+    if (pkg != null && pkg.names.contains(name) && !pkg.plainNames.contains(name)) {
+      return pkg.internal(name);
+    }
+    return name;
+  }
+
+  /// The key in [globals] of [name] of [pkg], as `alias.name` names it.
+  static String keyOf(PackageInfo pkg, String name) =>
+      pkg.plainNames.contains(name) ? name : pkg.internal(name);
+
   // --------------------------------------------------------------------------
 
   List<Sym> _declare(AstNode d) {
@@ -231,8 +258,10 @@ class ProgramIndex {
       bool isHeapRef = false,
       Object? decl,
       String? searchFor}) {
-    // Block-scoped locals carry internal names; show the source's
-    name = sourceName(name);
+    // Block-scoped locals carry internal names, and a package's declarations
+    // their package's prefix; show the source's
+    final key = name;
+    name = name.contains(packageMark) ? baseName(name) : sourceName(name);
     final start = parseLoc(loc);
     SrcLoc? at;
     SrcLoc? declStart;
@@ -244,6 +273,7 @@ class ProgramIndex {
       doc = _docComment(path, pos.line);
     }
     final s = Sym(name, kind,
+        key: key,
         at: at,
         declStart: declStart,
         container: container,
@@ -258,7 +288,7 @@ class ProgramIndex {
       SymKind.functionType,
       SymKind.enumMember,
     }.contains(kind)) {
-      globals[name] = s;
+      globals[key] = s;
     }
     return s;
   }

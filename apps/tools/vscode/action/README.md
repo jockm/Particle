@@ -7,8 +7,9 @@ Language support for the Action language (`.act` files):
 - Hover: a variable's type, a function's signature, a constant's value, a
   type's layout (field offsets and sizes)
 - Go to definition, including across imports and onto an `import` line
-- Completion: names in scope, keywords and types, and fields and methods
-  after `.`
+  (a package's import goes to the first file of its folder)
+- Completion: names in scope, keywords and types, fields and methods after
+  `.`, and a package's `pub` names after its import name (`geo.`)
 - Outline of a file's functions, types, constants and enums
 - Checking of the project file `action.json`
 
@@ -45,6 +46,7 @@ the workspace root:
 ```json
 {
   "action": {
+    "module": { "name": "github.com/you/project" },
     "includeDirs": ["lib", "apps/act"],
     "defines": { "DEBUG": 1, "BAUD": 115200 },
     "target": ["particle", "llvm"],
@@ -61,6 +63,13 @@ Paths are relative to `action.json`. Each subfolder of a folder in
 together, and adding a folder or a file needs no change to `action.json`.
 `programs` lists other groups file by file. A file in a program is checked
 together with the rest of it; any other file is checked on its own.
+
+`module` names the module, which programs made of packages need: a
+package's import path is that name followed by the package's folder inside
+`action.json`'s folder. A file that starts with a `package` line other than
+`package main;` is checked together with the other files of its folder, as
+that package. A package whose folder has another name than the package gets
+a warning, and so does an import that is not used.
 
 `target` is the compiler programs are checked for: `"particle"` (the
 default), `"llvm"`, or both as a list. With both, an error found for only one

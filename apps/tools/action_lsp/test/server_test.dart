@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:test/test.dart';
 
 import 'support.dart';
@@ -408,6 +410,148 @@ void main() {
       final (l, ch) = find(broken, 'p.x = 5', 2);
       final r = asMap(await c.result('textDocument/completion', c.at('main.act', l, ch)));
       expect([for (final i in r['items'] as List) asMap(i)['label']], contains('x'));
+      await c.close();
+    });
+  });
+
+  group('packages', () {
+    const geoAct = '''package geo;
+
+// A point of the geometry package.
+pub type Point {
+    u32 x;
+    u32 y;
+};
+
+pub enum Kind { A, B = 5 }
+
+pub const u32 UNIT = 1;
+
+u32 hidden;
+
+pub void init(Point p, u32 x) {
+    p.x = x * UNIT;
+    hidden = hidden + 1;
+}
+
+pub u32 Point.sum() {
+    return this.x + this.y;
+}
+''';
+
+    const pkgMain = '''package main;
+import "example.com/m/geo";
+
+void main() {
+    geo.Point p;
+    geo.init(p, geo.UNIT);
+    u32 s = p.sum();
+    u32 k = geo.B;
+}
+''';
+
+    final prelude = File('${Directory.current.path}/../../../lib/string.act').readAsStringSync();
+
+    Future<TestClient> start([Map<String, String> more = const {}]) async {
+      final c = await TestClient.start({
+        'action.json': '{ "action": { "module": { "name": "example.com/m" } } }',
+        'lib/string.act': prelude,
+        'geo/geo.act': geoAct,
+        'main.act': pkgMain,
+        ...more,
+      });
+      return c;
+    }
+
+    Future<String> hover(TestClient c, String rel, String text, String needle, [int offset = 0]) async {
+      final (l, ch) = find(text, needle, offset);
+      final h = await c.result('textDocument/hover', c.at(rel, l, ch));
+      return h == null ? '' : asMap(asMap(h)['contents'])['value'] as String;
+    }
+
+    test('a program made of packages checks cleanly', () async {
+      final c = await start();
+      expect(await c.open('main.act'), isEmpty);
+      await c.close();
+    });
+
+    test('hover on alias.name shows the declaration and its package', () async {
+      final c = await start();
+      await c.open('main.act');
+      final v = await hover(c, 'main.act', pkgMain, 'geo.Point', 4);
+      expect(v, contains('type Point {'));
+      expect(v, contains('In package `geo` (example.com/m/geo).'));
+      expect(v, contains('A point of the geometry package.'));
+      expect(await hover(c, 'main.act', pkgMain, 'geo.UNIT', 4), contains('const u32 UNIT = 1'));
+      expect(await hover(c, 'main.act', pkgMain, 'geo.B', 4), contains('B = 5'));
+      expect(await hover(c, 'main.act', pkgMain, 'p.sum', 2), contains('u32 Point.sum()'));
+      expect(await hover(c, 'main.act', pkgMain, 'geo.init', 1), contains('import "example.com/m/geo"'));
+      expect(await hover(c, 'main.act', pkgMain, 'geo.Point p', 10), contains('geo.Point p'));
+      await c.close();
+    });
+
+    test('go to definition of alias.name and of a package import', () async {
+      final c = await start();
+      await c.open('main.act');
+      var (l, ch) = find(pkgMain, 'geo.init', 5);
+      var loc = asMap(await c.result('textDocument/definition', c.at('main.act', l, ch)));
+      expect(loc['uri'], equals(c.uri('geo/geo.act')));
+      final (dl, dc) = find(geoAct, 'init(');
+      expect(asMap(asMap(loc['range'])['start']), equals({'line': dl, 'character': dc}));
+      (l, ch) = find(pkgMain, 'example.com', 3);
+      loc = asMap(await c.result('textDocument/definition', c.at('main.act', l, ch)));
+      expect(loc['uri'], equals(c.uri('geo/geo.act')));
+      await c.close();
+    });
+
+    test('completion after alias. lists the pub names; elsewhere the import names', () async {
+      final c = await start();
+      await c.open('main.act');
+      var (l, ch) = find(pkgMain, 'geo.UNIT', 4);
+      var r = asMap(await c.result('textDocument/completion', c.at('main.act', l, ch)));
+      var labels = [for (final i in r['items'] as List) asMap(i)['label']];
+      expect(labels, containsAll(['Point', 'init', 'UNIT', 'A', 'B']));
+      expect(labels, isNot(contains('hidden')));
+      (l, ch) = find(pkgMain, 'u32 s');
+      r = asMap(await c.result('textDocument/completion', c.at('main.act', l, ch)));
+      labels = [for (final i in r['items'] as List) asMap(i)['label']];
+      expect(labels, containsAll(['geo', 'p', 'main']));
+      expect(labels, isNot(contains('hidden')));
+      expect(labels, isNot(contains('Point')));
+      await c.close();
+    });
+
+    test("a package's file is checked with its folder, as that package", () async {
+      final c = await start({'geo/more.act': 'package geo;\npub u32 twice(Point p) { return p.sum() * 2; }\n'});
+      expect(await c.open('geo/more.act'), isEmpty);
+      expect(await hover(c, 'geo/geo.act', geoAct, 'hidden = hidden', 0), contains('u32 hidden'));
+      final syms = await c.result('textDocument/documentSymbol', {
+        'textDocument': {'uri': c.uri('geo/geo.act')}
+      }) as List;
+      expect([for (final s in syms) asMap(s)['name']],
+          equals(['Point', 'Kind', 'UNIT', 'hidden', 'init', 'Point.sum']));
+      await c.close();
+    });
+
+    test('an unused import and a folder named differently are warnings', () async {
+      final c = await start({
+        'shapes2/s.act': 'package shapes;\npub u32 one() { return 1; }\n',
+        'other.act': 'package main;\nimport "example.com/m/shapes2";\nvoid main() { }\n',
+      });
+      final d = await c.open('other.act');
+      expect(d.map((e) => asMap(e)['message']),
+          contains("import 'example.com/m/shapes2' is not used"));
+      final w = await c.open('shapes2/s.act');
+      expect(w.map((e) => asMap(e)['message']),
+          contains("package 'shapes' is in the folder 'shapes2'; by convention a package's folder has its name"));
+      await c.close();
+    });
+
+    test('a module entry that is not an object is reported', () async {
+      final c = await TestClient.start({'action.json': '{ "action": { "module": "x" } }'});
+      expect(await c.open('main.act', 'void main() { }\n'), isEmpty);
+      final d = c.lastDiagnostics('action.json')!;
+      expect(asMap(d.first)['message'] as String, contains('"module" must be an object such as'));
       await c.close();
     });
   });

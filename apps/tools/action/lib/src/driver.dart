@@ -11,6 +11,8 @@ import 'particle/particle.dart';
 import 'compiler.dart';
 import 'errors.dart';
 import 'lexer.dart';
+import 'package_loader.dart';
+import 'packages.dart';
 import 'parser.dart';
 import 'paths.dart' as p;
 
@@ -48,6 +50,10 @@ class CompileOptions {
   /// LLVM compiler ignores it.
   final int stackTop;
 
+  /// Check [sources] as the files of one package, as an editor does with a
+  /// package's folder: their `package` line names the package, not `main`.
+  final bool asPackage;
+
   const CompileOptions(
       {this.includeDirs = const [],
       this.defines = const [],
@@ -56,7 +62,8 @@ class CompileOptions {
       this.overlays = const {},
       this.target = 'particle',
       this.os,
-      this.stackTop = defaultStackTop});
+      this.stackTop = defaultStackTop,
+      this.asPackage = false});
 
   /// The operating system this build is for.
   String? get buildOs => os ?? defaultOs(target);
@@ -70,7 +77,8 @@ class CompileOptions {
       overlays: overlays,
       target: target,
       os: os,
-      stackTop: stackTop);
+      stackTop: stackTop,
+      asPackage: asPackage);
 }
 
 /// The stack pointer set at startup when `--stack-top` is not given.
@@ -157,6 +165,49 @@ ProgramNode _loadOnce(
     return null;
   }
 
+  String readSource(String realP) {
+    try {
+      return options.overlays[realP] ?? File(realP).readAsStringSync();
+    } on FileSystemException {
+      throw CompileError("[Errno 2] No such file or directory: '$realP'");
+    }
+  }
+
+  bool isBuilt(String realP) =>
+      readBuildDirective(readSource(realP), realP)?.matches(options.target, options.buildOs) ?? true;
+
+  // A program whose files start with 'package main;' is made of packages
+  final builtSources = <String>[];
+  var hasPackageLine = false;
+  for (final s in sources) {
+    final realS = p.realPath(s);
+    if (!File(realS).existsSync() && !options.overlays.containsKey(realS)) {
+      throw CompileError("[Errno 2] No such file or directory: '$s'");
+    }
+    if (!isBuilt(realS)) continue;
+    builtSources.add(realS);
+    if (scanPackage(tokenize(readSource(realS), fname: realS)) != null) hasPackageLine = true;
+  }
+  if (hasPackageLine) {
+    final loader = PackageLoader(
+        resolvePath: resolvePath,
+        isBuilt: isBuilt,
+        read: readSource,
+        aliases: aliases,
+        predefined: parseDefines(options.defines).keys.toSet());
+    if (options.asPackage) {
+      loader.loadPackage(builtSources);
+    } else {
+      loader.loadProgram(builtSources);
+    }
+    final program = ProgramNode(loader.decls);
+    program.loadWarnings.addAll(loader.warnings);
+    program.packages.addAll(loader.packages);
+    program.fileImports.addAll(loader.fileImports);
+    program.filePackages.addAll(loader.filePackages);
+    return program;
+  }
+
   /// Reads [filePath] and what it imports; false when its build directive
   /// leaves it out of this build.
   bool ingestFile(String filePath) {
@@ -181,6 +232,17 @@ ProgramNode _loadOnce(
     final parsedAst = parserInst.parseProgram();
 
     for (final decl in parsedAst.decls) {
+      if (decl is PackageNode) {
+        throw CompileError("'${p.basename(realP)}' is a file of package '${decl.name}': a program "
+                "that uses packages starts each of its own files with 'package main;' and imports "
+                "the package's folder")
+            .at(decl.loc);
+      }
+      if (decl is ImportNode && !decl.isFile) {
+        throw CompileError("'${decl.path}' is a package: a program that imports packages starts "
+                "each of its own files with 'package main;'")
+            .at(decl.loc);
+      }
       if (decl is ImportNode) {
         final res = resolvePath(decl.path, realP);
         if (res == null) {
@@ -265,6 +327,7 @@ String compile(List<String> sources,
       backend: backend ?? ParticleAsmBackend(),
       predefinedConstants: predefined,
       stackTop: options.stackTop);
+  notes?.addAll(loadNotes(mergedAst));
   try {
     return cg.generate(mergedAst);
   } finally {
@@ -284,9 +347,16 @@ String compileLlvm(List<String> sources,
       referenceCheck: options.referenceCheck,
       debugInfo: debugInfo,
       predefinedConstants: predefined);
+  notes?.addAll(loadNotes(mergedAst));
   try {
     return gen.generate(mergedAst);
   } finally {
     notes?.addAll(gen.notes);
   }
 }
+
+/// The warnings found while loading [program] (such as an unused import).
+List<CompileNote> loadNotes(ProgramNode program) => [
+      for (final (msg, loc) in program.loadWarnings)
+        CompileNote(NoteSeverity.warning, loc == null ? msg : '$loc: $msg')
+    ];

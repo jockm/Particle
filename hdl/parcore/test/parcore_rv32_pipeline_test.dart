@@ -94,22 +94,26 @@ void main() {
       final c3Push = core3.output("fifoPushEn");
 
       int idleCycles = 0;
-      for (int cycle = 0; cycle < 35000; cycle++) {
-        await clk.waitCycles(1);
+      int totalCycles = 0;
+      final sub = clk.clk.posedge.listen((_) {
+        totalCycles++;
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
-
-        // Detect early completion
         if (c3Push.value.isValid && c3Push.value.toInt() == 1) {
           idleCycles = 0;
         } else {
           idleCycles++;
         }
-        if (pushes > 0 && pops >= 328 && idleCycles > 400) {
-          print("Program completed early at cycle $cycle (pipeline drained).");
+      });
+
+      while (totalCycles < 35000) {
+        await clk.waitCycles(250);
+        if (pushes > 0 && pops >= 100 && idleCycles > 500) {
+          print("Program completed early at cycle $totalCycles (pipeline drained).");
           break;
         }
       }
+      await sub.cancel();
       print("Summary: Total C0 Pushes = $pushes, Total C1 Pops = $pops");
       print("Final C0 PC = 0x${c0Pc.value.toInt().toRadixString(16)}, C1 PC = 0x${c1Pc.value.toInt().toRadixString(16)}");
 

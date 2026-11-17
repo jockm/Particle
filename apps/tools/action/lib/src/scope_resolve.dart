@@ -25,9 +25,35 @@ const internalNameMark = '~';
 
 final _internalSuffix = RegExp(r'~\d+');
 
-/// [name] (or a message naming locals) as the source writes it.
-String sourceName(String name) =>
-    name.contains(internalNameMark) ? name.replaceAll(_internalSuffix, '') : name;
+/// Separates a package's prefix from a name declared in it, in the
+/// internal names of package declarations (`drivers.uart..init`).
+const packageMark = '..';
+
+/// The name each loaded package declares, by its prefix: its folder inside
+/// the module with `.` between the parts (`drivers.uart`).
+final Map<String, String> packageDisplayNames = {};
+
+/// [name] without the package prefix of its internal name (`init` for
+/// `drivers.uart..init`).
+String baseName(String name) {
+  final i = name.lastIndexOf(packageMark);
+  return i < 0 ? name : name.substring(i + packageMark.length);
+}
+
+final _packagePrefix = RegExp(r'([A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*)\.\.(?=[A-Za-z_])');
+
+/// [name] (or a message naming locals or package declarations) as the
+/// source writes it: `x~2` is `x`, and `drivers.uart..init` is `uart.init`.
+String sourceName(String name) {
+  var s = name.contains(internalNameMark) ? name.replaceAll(_internalSuffix, '') : name;
+  if (s.contains(packageMark) && packageDisplayNames.isNotEmpty) {
+    s = s.replaceAllMapped(_packagePrefix, (m) {
+      final shown = packageDisplayNames[m[1]];
+      return shown == null ? m[0]! : '$shown.';
+    });
+  }
+  return s;
+}
 
 /// Resolves the locals of every function body in [root] (see above).
 /// [globalVars] names the global variables and [globalNames] the other

@@ -17,4 +17,5 @@ export 'src/driver.dart';
 export 'src/errors.dart';
 export 'src/lexer.dart' show Token, tokenize;
 export 'src/parser.dart';
-export 'src/scope_resolve.dart' show internalNameMark, sourceName;
+export 'src/scope_resolve.dart' show internalNameMark, sourceName, baseName, packageMark;
+export 'src/packages.dart' show scanPackage;

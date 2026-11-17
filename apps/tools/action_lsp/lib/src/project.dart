@@ -6,6 +6,7 @@
 //
 //   {
 //     "action": {
+//       "module": { "name": "github.com/you/project" },
 //       "includeDirs": ["lib", "apps/act"],
 //       "defines": { "DEBUG": 1, "BAUD": 115200 },
 //       "target": ["particle", "llvm"],
@@ -22,6 +23,9 @@
 // here. "programs" lists other groups file by file. A file in a program is
 // checked together with the rest of that program; any other file is checked
 // on its own, with its imports.
+//
+// "module" names the module: a package's import path is that name, then
+// the package's folder inside the project file's folder.
 //
 // "target" is the compiler programs are checked for: "particle" (the
 // default) or "llvm", or a list of both. With both, an error found for only
@@ -126,6 +130,14 @@ class Project {
     }
     for (final d in [root, '$root${Platform.pathSeparator}lib']) {
       if (!includeDirs.contains(d)) includeDirs.add(d);
+    }
+
+    final module = section['module'];
+    if (module != null) {
+      final name = module is Map<String, Object?> ? module['name'] : null;
+      if (name is! String || name.isEmpty) {
+        throw fail('module', '"module" must be an object such as { "name": "github.com/you/project" }');
+      }
     }
 
     final defines = <String>[];

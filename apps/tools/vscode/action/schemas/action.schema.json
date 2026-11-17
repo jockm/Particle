@@ -8,6 +8,19 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "module": {
+          "description": "The module: its name starts the import path of each package, followed by the package's folder inside this file's folder.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "description": "The module's name, such as github.com/you/project.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
         "includeDirs": {
           "description": "Directories searched by 'import', like the compiler's -I. The workspace root and its lib directory are always searched.",
           "type": "array",

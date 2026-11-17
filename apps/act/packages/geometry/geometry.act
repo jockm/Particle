@@ -1,0 +1,32 @@
+// The geometry package of test_packages: types, methods, constants, an
+// enum and a global that other packages use. Its declarations are split
+// over two files (see shapes.act).
+package geometry;
+
+pub type Point {
+    u32 x;
+    u32 y;
+};
+
+pub enum Kind { POINT, RECT = 10, SQUARE }
+
+pub const u32 UNIT = 1;
+
+// How many points init has set up: other packages may read and write it
+pub u32 created;
+
+// Not pub: only this package uses it
+u32 scale(u32 v) {
+    return v * UNIT;
+}
+
+pub void init(Point p, u32 x, u32 y) {
+    p.x = scale(x);
+    p.y = scale(y);
+    created = created + 1;
+}
+
+pub void Point.add(Point other) {
+    this.x = this.x + other.x;
+    this.y = this.y + other.y;
+}

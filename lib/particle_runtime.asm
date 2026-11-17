@@ -32,10 +32,10 @@ _on_mbox_trap:
 
 _on_alignment_error:
 _panic_align_loop:
-    FBRA    _panic_align_loop
+    BBRA    _panic_align_loop
 
 _on_illegal_instruction:
 _panic_illegal_loop:
-    FBRA    _panic_illegal_loop
+    BBRA    _panic_illegal_loop
 
 .endif

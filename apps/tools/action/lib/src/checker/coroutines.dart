@@ -28,7 +28,7 @@ const Map<String, int> _coroutineOps = {'yield': 1, 'waitUntil': 2, 'pkExit': 1}
 extension _Coroutines on Checker {
   /// True when [name] is a coroutine operation the program has declared.
   bool _isCoroutineOp(String name) =>
-      _coroutineOps.containsKey(name) && _prototypeNames.contains(name);
+      _coroutineOps.containsKey(baseName(name)) && _prototypeNames.contains(name);
 
   /// Rewrites coroutine operation call statements in [funcs] into
   /// [YieldNode], [WaitUntilNode] and [PkExitNode], numbering the resume
@@ -85,7 +85,8 @@ extension _Coroutines on Checker {
       throw CompileError(
           "'${call.name}' can only be used in a task function; declare '${f.name}' as 'task ${f.name}(...)'");
     }
-    final want = _coroutineOps[call.name]!;
+    final op = baseName(call.name);
+    final want = _coroutineOps[op]!;
     if (call.args.length != want) {
       throw CompileError(
           "'${call.name}' takes $want argument${want == 1 ? '' : 's'}, got ${call.args.length}");
@@ -97,7 +98,7 @@ extension _Coroutines on Checker {
       throw CompileError(
           "'${call.name}' in task '${f.name}' must name the task's state '$state'");
     }
-    switch (call.name) {
+    switch (op) {
       case 'yield':
         return YieldNode(taskArg)..stepConst = _nextStep++;
       case 'waitUntil':
@@ -109,7 +110,10 @@ extension _Coroutines on Checker {
 
   /// The value of protokernel status constant [name].
   int _pkStatus(String name) {
-    final v = constants[name];
+    // lib/protokernel.act may have been imported into a package (its names
+    // then carry the package's prefix)
+    final v = constants[name] ??
+        constants.entries.where((e) => baseName(e.key) == name).firstOrNull?.value;
     if (v == null) {
       throw CompileError(
           "coroutine status '$name' is not defined; import \"lib/protokernel.act\"");

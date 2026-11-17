@@ -161,4 +161,149 @@ void main() {
       }
     });
   });
+
+  group('packages', () {
+    late Directory dir;
+    final libDir = '${Directory.current.path}/../../../lib';
+
+    void write(String rel, String text) => File('${dir.path}/$rel')
+      ..createSync(recursive: true)
+      ..writeAsStringSync(text);
+
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('action_pkg_');
+      File('${dir.path}/action.json')
+          .writeAsStringSync('{ "action": { "module": { "name": "example.com/m" } } }');
+      write('geo/geo.act', '''
+package geo;
+
+pub type Point {
+    u32 x;
+    u32 y;
+};
+
+pub enum Kind { A, B = 5 }
+
+pub const u32 UNIT = 1;
+
+u32 hidden;
+
+pub void init(Point p, u32 x) {
+    p.x = x * UNIT;
+    hidden = hidden + 1;
+}
+
+pub u32 Point.sum() {
+    return this.x + this.y;
+}
+''');
+    });
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    String build(String main, {List<CompileNote>? notes, List<String> defines = const []}) {
+      write('main.act', main);
+      return compile(['${dir.path}/main.act'],
+          options: CompileOptions(includeDirs: [libDir], defines: defines), notes: notes);
+    }
+
+    String? errorOf(String main) {
+      try {
+        build(main);
+        return null;
+      } on CompileError catch (e) {
+        return e.message.replaceAll('${dir.path}/', '');
+      }
+    }
+
+    const head = 'package main;\nimport "example.com/m/geo";\n';
+
+    test('declarations get internal names from the package folder; the program keeps its own', () {
+      final asm = build('${head}u32 total;\nvoid main() { geo.Point p; geo.init(p, 3); total = p.sum(); }\n');
+      expect(asm, contains('_geo..init:'));
+      expect(asm, contains('_geo..Point.sum:'));
+      expect(asm, contains('_geo..hidden:'));
+      expect(asm, contains('RCALL   _geo..init'));
+      expect(asm, contains('_total:'));
+      expect(asm, contains('_main:'));
+    });
+
+    test('an import can be renamed, and enum members and constants are qualified', () {
+      expect(
+          errorOf('package main;\nimport "example.com/m/geo" as g;\n'
+              'void main() { g.Point p; u32 k = g.B + g.UNIT; }\n'),
+          isNull);
+    });
+
+    test('-D sets a constant declared in a package', () {
+      final asm = build('${head}void main() { u32 u = geo.UNIT; }\n', defines: ['UNIT=7']);
+      expect(asm, contains('Imm4 load (7)'));
+    });
+
+    test('messages name package declarations as package.name', () {
+      expect(errorOf('${head}void main() { geo.Point p; u32 x = p; }\n'), contains("'geo.Point'"));
+    });
+
+    test('errors about packages', () {
+      expect(errorOf('${head}void main() { u32 c = geo.hidden; }\n'),
+          contains("main.act:3:26: 'hidden' is not pub in package 'geo'"));
+      expect(errorOf('${head}void main() { u32 c = geo.nothing; }\n'),
+          contains("package 'geo' has no 'nothing'"));
+      expect(errorOf('${head}void main() { u32 geo = 1; }\n'),
+          contains("'geo' is the name of an imported package; use its declarations as 'geo.name'"));
+      expect(errorOf('${head}import "example.com/m/geo";\nvoid main() { geo.Point p; }\n'),
+          contains("'geo' already names another import of this file"));
+      expect(errorOf('package main;\nimport "example.com/m/geo" as trap;\nvoid main() { }\n'),
+          contains("the import name 'trap' is a built-in name"));
+      expect(errorOf('package geo;\nvoid main() { }\n'),
+          contains("the program's files must say 'package main;', not 'package geo;'"));
+      expect(errorOf('${head}void geo.Point.bad() { }\nvoid main() { }\n'),
+          contains("a method of 'geo.Point' must be declared in package 'geo'"));
+      expect(errorOf('package main;\nimport "example.org/other/x";\nvoid main() { }\n'),
+          contains("'example.org/other/x' is not in this module (example.com/m)"));
+      expect(errorOf('package main;\nimport "example.com/m/my_pkg";\nvoid main() { }\n'),
+          contains("folder 'my_pkg' must be letters and digits"));
+      expect(errorOf('package main;\nimport "example.com/m/none";\nvoid main() { }\n'),
+          contains("package 'example.com/m/none' not found"));
+      expect(errorOf('import "example.com/m/geo";\nvoid main() { }\n'),
+          contains("'example.com/m/geo' is a package: a program that imports packages starts"));
+      expect(errorOf('import "geo/geo.act";\nvoid main() { }\n'),
+          contains("'geo.act' is a file of package 'geo'"));
+      expect(errorOf('package main;\npub void main() { }\n'), contains("'main' cannot be 'pub'"));
+      expect(errorOf('package main;\npub trap(3) h() { }\nvoid main() { }\n'),
+          contains("a trap handler cannot be 'pub'"));
+      expect(errorOf('package main;\nvoid main() { }\npackage x;\n'),
+          contains("'package' must come first in the file"));
+      expect(errorOf('package main;\nvoid main() { pub u32 x; }\n'),
+          contains("main.act:2:14: 'pub' can be used only outside functions"));
+    });
+
+    test('a package cannot import itself through another, declare main, or show a private type', () {
+      write('a/a.act', 'package a;\nimport "example.com/m/b";\npub u32 f() { return b.g(); }\n');
+      write('b/b.act', 'package b;\nimport "example.com/m/a";\npub u32 g() { return a.f(); }\n');
+      expect(errorOf('package main;\nimport "example.com/m/a";\nvoid main() { u32 v = a.f(); }\n'),
+          contains('import cycle: a -> b -> a'));
+      write('c/c.act', 'package c;\nvoid main() { }\n');
+      expect(errorOf('package main;\nimport "example.com/m/c";\nvoid main() { }\n'),
+          contains("package 'c' cannot declare 'main'"));
+      write('d/d.act', 'package d;\ntype Secret { u32 x; };\npub void f(Secret s) { }\n');
+      expect(errorOf('package main;\nimport "example.com/m/d";\nvoid main() { d.f(); }\n'),
+          contains("pub function 'd.f' uses 'd.Secret', which is not pub"));
+      write('e/e1.act', 'package e;\npub u32 one() { return 1; }\n');
+      write('e/e2.act', 'package f;\n');
+      expect(errorOf('package main;\nimport "example.com/m/e";\nvoid main() { u32 v = e.one(); }\n'),
+          contains("'e2.act' says 'package f;', but the other files in its folder say 'package e;'"));
+    });
+
+    test('an unused import is a warning', () {
+      final notes = <CompileNote>[];
+      build('${head}void main() { }\n', notes: notes);
+      expect(notes.single.message, contains("main.act:2:7: import 'example.com/m/geo' is not used"));
+    });
+
+    test('a program without a module name cannot import a package', () {
+      File('${dir.path}/action.json').writeAsStringSync('{ "action": { } }');
+      expect(errorOf('${head}void main() { geo.Point p; }\n'),
+          contains("importing the package 'example.com/m/geo' needs the module's name"));
+    });
+  });
 }

@@ -23,6 +23,10 @@ const serverVersion = '1.0.0';
 /// The checks for one program (a set of files compiled together).
 class _ProgramState {
   final List<String> sources;
+
+  /// True when [sources] are the files of one package's folder, checked
+  /// as that package rather than as a program.
+  final bool asPackage;
   AnalysisResult? result;
 
   /// From the last check that parsed, so features keep working while the
@@ -32,9 +36,9 @@ class _ProgramState {
   /// Files this program has published errors for.
   final Set<String> published = {};
 
-  _ProgramState(this.sources);
+  _ProgramState(this.sources, {this.asPackage = false});
 
-  String get key => sources.join('\u0000');
+  String get key => '${asPackage ? 'package\u0000' : ''}${sources.join('\u0000')}';
 
   /// Every file in the program, including imported ones, as last seen.
   Set<String> get files => {...sources, ...?index?.files};
@@ -256,9 +260,53 @@ class ActionLanguageServer {
   // ------------------------------------------------------------- checking
 
   _ProgramState _programOf(String path) {
-    final sources = _project.programFor(path);
-    final key = sources.join('\u0000');
-    return _programs.putIfAbsent(key, () => _ProgramState(sources));
+    final folder = _packageFolderFiles(path);
+    final st = folder != null
+        ? _ProgramState(folder, asPackage: true)
+        : _ProgramState(_project.programFor(path));
+    return _programs.putIfAbsent(st.key, () => st);
+  }
+
+  /// The package line of [path] (its name and location), or null.
+  (String, String)? _packageLine(String path) {
+    final lines = _texts.lines(path);
+    if (lines == null) return null;
+    try {
+      return scanPackage(tokenize(lines.join('\n'), fname: path));
+    } on CompileError {
+      return null;
+    }
+  }
+
+  /// When [path] is a file of a package other than `main`, the .act files
+  /// of its folder: they are checked together, as that package.
+  List<String>? _packageFolderFiles(String path) {
+    final pkg = _packageLine(path);
+    if (pkg == null || pkg.$1 == 'main') return null;
+    final dir = File(path).parent;
+    final files = <String>{path};
+    try {
+      for (final e in dir.listSync()) {
+        if (e is File && e.path.endsWith('.act')) files.add(canonicalPath(e.path));
+      }
+    } on FileSystemException {
+      // Only the file itself
+    }
+    return files.toList()..sort();
+  }
+
+  /// A warning when a package's folder has another name than the package
+  /// (the import path names the folder; the package line names the
+  /// package).
+  Diagnostic? _folderWarning(String path) {
+    final pkg = _packageLine(path);
+    if (pkg == null || pkg.$1 == 'main') return null;
+    final folder = File(path).parent.uri.pathSegments.where((e) => e.isNotEmpty).lastOrNull;
+    if (folder == null || folder == pkg.$1) return null;
+    return Diagnostic.fromNote(CompileNote(
+        NoteSeverity.warning,
+        "${pkg.$2}: package '${pkg.$1}' is in the folder '$folder'; by convention a "
+        "package's folder has its name"));
   }
 
   void _checkLater(String path) {
@@ -299,7 +347,8 @@ class ActionLanguageServer {
     final options = CompileOptions(
         includeDirs: _project.includeDirs,
         defines: _project.defines,
-        overlays: _texts.overlays);
+        overlays: _texts.overlays,
+        asPackage: st.asPackage);
     final builds = _buildsOf(st.sources);
     final targets = [for (final b in builds) b.$1];
     final results = [
@@ -335,9 +384,11 @@ class ActionLanguageServer {
     for (final path in st.files) {
       final w = _nameWarning(path);
       if (w != null) add(w, 2);
+      final fw = _folderWarning(path);
+      if (fw != null) add(fw, 2);
     }
     void addError(Diagnostic err, int severity, [String prefix = '']) {
-      if (!_project.isProgram(st.sources) && _mayBeElsewhere(err.message)) {
+      if (!st.asPackage && !_project.isProgram(st.sources) && _mayBeElsewhere(err.message)) {
         // Checked without the rest of its program: the definition may be
         // in a file named only on the command line
         add(err, 3,

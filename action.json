@@ -1,5 +1,6 @@
 {
   "action": {
+    "module": { "name": "github.com/jockm/Particle" },
     "includeDirs": ["lib"],
     "target": ["particle", "llvm"],
     "programFolders": ["apps/act/multi"]

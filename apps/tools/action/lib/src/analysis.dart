@@ -117,6 +117,8 @@ AnalysisResult analyze(List<String> sources,
   } on CompileError catch (e) {
     error = Diagnostic.fromError(e);
   }
-  return AnalysisResult(
-      program, error, ProgramInfo(cg), [for (final n in cg.notes) Diagnostic.fromNote(n)]);
+  return AnalysisResult(program, error, ProgramInfo(cg), [
+    for (final n in loadNotes(program)) Diagnostic.fromNote(n),
+    for (final n in cg.notes) Diagnostic.fromNote(n)
+  ]);
 }

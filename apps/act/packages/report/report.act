@@ -1,0 +1,40 @@
+// The report package of test_packages: it imports another package (as
+// 'geo'), keeps a fast global, and imports lib/protokernel.act as a file,
+// which joins this package: its names are this package's own, not pub.
+package report;
+
+import "github.com/jockm/Particle/apps/act/packages/geometry" as geo;
+import "protokernel.act";
+
+pub fast u32 calls;
+
+u32 steps;
+
+// A task, private to this package (its state type 'pt' comes from the
+// file import, so it is not pub)
+task stepper(pt t) {
+    while (true) {
+        steps = steps + 1;
+        yield(t);
+    }
+}
+
+pub u32 runSteps(u32 n) {
+    pt t;
+    u32 i = 0;
+    while (i < n) {
+        stepper(t);
+        i = i + 1;
+    }
+    return steps;
+}
+
+// The area of r, counting the call; the prelude's string methods work here
+pub u32 summarize(geo.Rect r) {
+    calls = calls + 1;
+    string name[8] = "rect";
+    if (name.find(114) != 0) {
+        return 0;
+    }
+    return r.area();
+}

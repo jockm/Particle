@@ -82,6 +82,10 @@ class Parser {
   ProgramNode parseProgram() {
     final decls = <AstNode>[];
     while (peek().type != 'EOF') {
+      final tok = peek();
+      if (decls.isNotEmpty && tok.val == 'package' && tok.type == 'KEYWORD') {
+        throw CompileError("${tok.loc}: 'package' must come first in the file");
+      }
       decls.add(parseTopLevel());
     }
     return ProgramNode(decls);
@@ -105,10 +109,33 @@ class Parser {
     consume('KEYWORD', 'import');
     final tok = consume('STRING');
     final rawPath = tok.val.substring(1, tok.val.length - 1);
+    String? alias;
+    String? aliasLoc;
+    if (peek().type == 'IDENT' && peek().val == 'as') {
+      consume();
+      aliasLoc = peek().loc;
+      alias = consume('IDENT').val;
+      if (rawPath.endsWith('.act')) {
+        throw CompileError("$aliasLoc: 'as' is for packages; a file import ('$rawPath') has no name");
+      }
+    }
     if (peek().val == ';') {
       consume('PUNCT', ';');
     }
-    return ImportNode(rawPath);
+    return ImportNode(rawPath, alias, aliasLoc);
+  }
+
+  /// `package name;`
+  PackageNode parsePackage() {
+    consume('KEYWORD', 'package');
+    final nameTok = peek();
+    final name = consume('IDENT').val;
+    if (!RegExp(r'^[A-Za-z][A-Za-z0-9]*$').hasMatch(name)) {
+      throw CompileError(
+          "${nameTok.loc}: package name '$name' must be letters and digits, starting with a letter");
+    }
+    consume('PUNCT', ';');
+    return PackageNode(name);
   }
 
   EnumDeclNode parseEnum() {
@@ -193,6 +220,26 @@ class Parser {
   }
 
   AstNode _parseTopLevel() {
+    if (peek().val == 'package' && peek().type == 'KEYWORD') {
+      return parsePackage();
+    }
+    // pub Declaration  -- visible outside its package
+    if (peek().val == 'pub' && peek().type == 'KEYWORD') {
+      final pubTok = consume();
+      final decl = parseTopLevel();
+      if (decl is ImportNode || decl is PackageNode || decl is VerifyNode) {
+        throw CompileError("${pubTok.loc}: 'pub' must be followed by a declaration");
+      }
+      if (decl is FuncDeclNode && decl.trapExpr != null) {
+        throw CompileError(
+            "${pubTok.loc}: a trap handler cannot be 'pub': it runs only as a trap");
+      }
+      if (decl is FuncDeclNode && decl.name == 'main') {
+        throw CompileError("${pubTok.loc}: 'main' cannot be 'pub'");
+      }
+      decl.isPub = true;
+      return decl;
+    }
     // asm ReturnType name(params);  -- a routine written in assembly
     if (peek().val == 'asm' && ahead(1).val != '(') {
       final asmTok = consume();
@@ -771,6 +818,10 @@ class Parser {
     if (tok.val == 'fast' && tok.type == 'KEYWORD') {
       throw CompileError(
           "${tok.loc}: 'fast' applies only to global variables, declared outside functions");
+    }
+    if ((tok.val == 'pub' || tok.val == 'package') && tok.type == 'KEYWORD') {
+      throw CompileError(
+          "${tok.loc}: '${tok.val}' can be used only outside functions");
     }
     if (tok.val == ';') {
       consume('PUNCT', ';');
