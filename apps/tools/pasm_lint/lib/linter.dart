@@ -794,7 +794,58 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
   errors.sort((a, b) => a.$1.compareTo(b.$1));
   warnings.sort((a, b) => a.$1.compareTo(b.$1));
 
+  final hidden = findSuppressions(lines);
+  errors.removeWhere((d) => hidden.hides(d.$1));
+  warnings.removeWhere((d) => hidden.hides(d.$1));
+
   return LintResult(errors, warnings);
+}
+
+/// The lines whose errors and warnings are hidden by comments:
+///   `; pasm-disable-line`       this line
+///   `; pasm-disable-next-line`  the next line
+///   `; pasm-disable` ... `; pasm-enable`  the lines between
+///   `; pasm-disable-file`       the whole file
+class Suppressions {
+  final bool wholeFile;
+  final Set<int> lines;
+
+  const Suppressions(this.wholeFile, this.lines);
+
+  /// Whether diagnostics on line [lno] (counted from 1) are hidden.
+  bool hides(int lno) => wholeFile || lines.contains(lno);
+}
+
+final _suppressRe = RegExp(r"(?<![\w-])pasm-(disable-next-line|disable-line|disable-file|disable|enable)(?![\w-])");
+
+/// Finds the `; pasm-disable...` comments in [lines].
+Suppressions findSuppressions(List<String> lines) {
+  var wholeFile = false;
+  final hidden = <int>{};
+  var inBlock = false;
+  for (var i = 0; i < lines.length; i++) {
+    final lno = i + 1;
+    final code = _stripComment(lines[i]);
+    final comment = lines[i].substring(code.length);
+    var enabled = false;
+    for (final m in _suppressRe.allMatches(comment)) {
+      switch (m.group(1)) {
+        case "disable-line":
+          hidden.add(lno);
+        case "disable-next-line":
+          hidden.add(lno + 1);
+        case "disable-file":
+          wholeFile = true;
+        case "disable":
+          inBlock = true;
+        case "enable":
+          enabled = true;
+      }
+    }
+    if (inBlock && !enabled) hidden.add(lno);
+    if (enabled) inBlock = false;
+  }
+  return Suppressions(wholeFile, hidden);
 }
 
 /// CLI wrapper around [lintLines] that reads [filepath] from disk and prints

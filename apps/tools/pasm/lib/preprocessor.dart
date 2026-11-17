@@ -226,6 +226,16 @@ class Preprocessor {
     return -1;
   }
 
+  /// Runs [f], giving an error that has no place the place [file]:[lno].
+  T _located<T>(String file, int lno, T Function() f) {
+    try {
+      return f();
+    } on AssemblerError catch (e) {
+      if (e.lineno == null) throw AssemblerError(e.message, file, lno);
+      rethrow;
+    }
+  }
+
   /// Processes source lines recursively, expanding macros and resolving includes.
   /// Matches exact recursion semantics of tools/pasm.py:Preprocessor.process.
   List<(String, int, String)> process(String filename, [List<String>? lines, Set<String>? visited]) {
@@ -277,7 +287,7 @@ class Preprocessor {
           condStack.add(!defines.containsKey(arg));
           continue;
         } else if (directive == ".if") {
-          final val = parseExpr(arg, defines);
+          final val = _located(absPath, lno, () => parseExpr(arg, defines));
           condStack.add(val != 0);
           continue;
         } else if (directive == ".else") {
@@ -314,12 +324,14 @@ class Preprocessor {
               (incFile.startsWith("'") && incFile.endsWith("'"))) {
             incFile = incFile.substring(1, incFile.length - 1);
           }
-          final fullInc = resolveInclude(absPath, incFile);
+          final fullInc = _located(absPath, lno, () => resolveInclude(absPath, incFile));
           expanded.addAll(process(fullInc, null, visited));
           continue;
         } else if (directive == ".define") {
           final defParts = arg.split(RegExp(r"\s+"));
-          final val = defParts.length > 1 ? parseExpr(arg.substring(defParts[0].length).trim(), defines) : 1;
+          final val = defParts.length > 1
+              ? _located(absPath, lno, () => parseExpr(arg.substring(defParts[0].length).trim(), defines))
+              : 1;
           defines[defParts[0]] = val;
           continue;
         }
@@ -354,8 +366,20 @@ class Preprocessor {
           subL = subL.replaceAll(".%", uniqueSuffix);
           mLines.add(subL);
         }
-        // Recurse into expanded macro lines
-        expanded.addAll(process(absPath, mLines, visited));
+        // Recurse into expanded macro lines. Every line the macro expands
+        // to takes the line number of the call, so errors point at it.
+        final List<(String, int, String)> inner;
+        try {
+          inner = process(absPath, mLines, visited);
+        } on AssemblerError catch (e) {
+          if (e.filename == null || e.filename == absPath) {
+            throw AssemblerError(e.message, absPath, lno);
+          }
+          rethrow;
+        }
+        for (final x in inner) {
+          expanded.add(x.$1 == absPath ? (absPath, lno, x.$3) : x);
+        }
         continue;
       }
 

@@ -3,7 +3,9 @@
 Language support for Particle RISC assembly (pasm):
 
 - Syntax highlighting
-- Errors and lint warnings as you type, from pasm and pasm_lint
+- Errors and lint warnings as you type, from pasm and pasm_lint; a
+  `; pasm-disable-line` comment (and the other forms in
+  `Documentation/pasm_assembler.md`) hides them
 - Hover, go to definition, find references, rename, completion and an
   outline
 

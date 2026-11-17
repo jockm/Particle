@@ -84,6 +84,23 @@ class ParticleAssembler {
   ///   - Maximum emitted byte address
   ///   - Formatted `.lst` listing lines
   (Map<int, int>, int, List<String>) assemble(dynamic srcFiles) {
+    _at = null;
+    try {
+      return _assemble(srcFiles);
+    } on AssemblerError catch (e) {
+      final at = _at;
+      if (e.lineno == null && at != null) {
+        throw AssemblerError(e.message, at.$1, at.$2);
+      }
+      rethrow;
+    }
+  }
+
+  /// The file and line being assembled, given to an error raised without
+  /// a place of its own.
+  (String, int)? _at;
+
+  (Map<int, int>, int, List<String>) _assemble(dynamic srcFiles) {
     final List<String> fileList = (srcFiles is List<String>)
         ? srcFiles
         : (srcFiles is List)
@@ -139,6 +156,7 @@ class ParticleAssembler {
       final lno = entry.$2;
       final origLine = entry.$3;
       var line = origLine;
+      _at = (fname, lno);
 
       // Emit standalone label entries in listing output
       while (true) {
@@ -258,6 +276,7 @@ class ParticleAssembler {
     for (var index = 0; index < processedLines.length; index++) {
       final entry = processedLines[index];
       var line = entry.$3;
+      _at = (entry.$1, entry.$2);
 
       // Extract all labels preceding the instruction or directive
       while (true) {

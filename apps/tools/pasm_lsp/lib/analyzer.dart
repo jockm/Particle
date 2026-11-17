@@ -298,7 +298,7 @@ class ParticleAnalyzer {
       if (errFile == canonPath) {
         final lno0 = ((e.lineno ?? 1) - 1).clamp(0, lines.isEmpty ? 0 : lines.length - 1);
         final alreadyReported = diagnostics.any((d) => d.line == lno0 && d.severity == 1);
-        if (!alreadyReported) {
+        if (!alreadyReported && !findSuppressions(lines).hides(lno0 + 1)) {
           final (startCol, endCol) = _lineSpan(lines, lno0);
           diagnostics.add(LspDiagnostic(
             line: lno0,

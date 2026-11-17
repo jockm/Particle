@@ -54,6 +54,25 @@ Macros support parameter substitution via `%parameter` syntax and unique local l
 .endmacro
 ```
 
+An error in a line a macro expands to is reported at the line that calls the macro.
+
+---
+
+## Hiding Errors and Warnings
+
+`pasm_lint` and the language server (`pasm_lsp`) hide the errors and warnings on lines marked by these comments:
+
+* `; pasm-disable-line` at the end of a line: that line.
+* `; pasm-disable-next-line` on a line of its own: the next line.
+* `; pasm-disable` ... `; pasm-enable`: every line between them.
+* `; pasm-disable-file` anywhere in the file: the whole file.
+
+```assembly
+    LOAD32  R14, _main  ; pasm-disable-line
+```
+
+They hide every diagnostic on those lines. The assembler itself does not read them: an error still stops the build. The language server checks the assembler's errors only up to the first one, so once that error is hidden, nothing after it is checked by the assembler; the lint checks still cover the whole file.
+
 ---
 
 ## Pseudo-Instructions

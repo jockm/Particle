@@ -55,22 +55,18 @@ $header
     \$sformat(hexfile, "/tmp/parcore_pipeline_verilator/%m.hex");
     \$readmemh(hexfile, mem);
   end
-  wire [13:0] bAddrA = {14'(addrA), 1'b0};
-  assign rDataA = {mem[bAddrA + 14'd1], mem[bAddrA]};
-  wire [13:0] bAddrB = {14'(addrB), 2'b00};
+  wire [13:0] bAddrA = {addrA, 1'b0};
+  wire [13:0] bAddrB = {addrB, 2'b00};
   always_ff @(posedge clk) begin
+    rDataA <= {mem[bAddrA + 14'd1], mem[bAddrA]};
     if (wEnB) begin
       if (bEnB[0]) mem[bAddrB] <= wDataB[7:0];
       if (bEnB[1]) mem[bAddrB + 14'd1] <= wDataB[15:8];
       if (bEnB[2]) mem[bAddrB + 14'd2] <= wDataB[23:16];
       if (bEnB[3]) mem[bAddrB + 14'd3] <= wDataB[31:24];
     end
-  end
-  always_comb begin
     if (rEnB) begin
-      rDataB = {mem[bAddrB + 14'd3], mem[bAddrB + 14'd2], mem[bAddrB + 14'd1], mem[bAddrB]};
-    end else begin
-      rDataB = 32'h0;
+      rDataB <= {mem[bAddrB + 14'd3], mem[bAddrB + 14'd2], mem[bAddrB + 14'd1], mem[bAddrB]};
     end
   end
 endmodule
