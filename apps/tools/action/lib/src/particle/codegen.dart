@@ -60,16 +60,20 @@ class CodeGen extends Checker {
 
   /// Innermost-last stack of loops and switches, for `continue`.
 
+  /// The stack pointer the startup code sets (`--stack-top`).
+  final int stackTop;
+
   CodeGen(
       {bool boundsCheck = true,
       bool referenceCheck = true,
       Backend? backend,
-      Map<String, int> predefinedConstants = const {}})
+      Map<String, int> predefinedConstants = const {},
+      int stackTop = 0x00010000})
       : this._(backend ?? ParticleAsmBackend(), boundsCheck, referenceCheck,
-            predefinedConstants);
+            predefinedConstants, stackTop);
 
   CodeGen._(this.backend, this.boundsCheck, this.referenceCheck,
-      Map<String, int> predefinedConstants)
+      Map<String, int> predefinedConstants, this.stackTop)
       : super(backend, predefinedConstants: predefinedConstants) {
     backend.referenceCheck = referenceCheck;
   }
@@ -112,14 +116,14 @@ class CodeGen extends Checker {
     emit('LD8     (R14), R12', 'Store byte into string buffer');
     emit('ADD     R13, 1', 'literal_ptr++');
     emit('ADD     R14, 1', 'buffer_ptr++');
-    emit('BBRA    $lblLoop', 'Copy next byte');
+    emit('JUMP    $lblLoop', 'Copy next byte');
     emitLabel(lblDone);
     emit('LD8     (R14), R12', 'Store null terminator');
   }
 
   void _emitStringScanLen(String? arrName, int targetReg) {
     if (boundAddrs.containsKey(arrName)) {
-      emitImmediate(14, boundAddrs[arrName]!);
+      _emitFixedAddr(14, boundAddrs[arrName]!);
     } else if (locals.containsKey(arrName)) {
       final offset = stackOffset - locals[arrName]!;
       if (offset > 0) {
@@ -135,7 +139,7 @@ class CodeGen extends Checker {
         emit('LD32    R14, (R14)', "Dereference param/ptr string '$arrName'");
       }
     } else if (globals.contains(arrName)) {
-      emit('LOAD32  R14, _$arrName');
+      _emitGlobalAddr(14, arrName!);
     } else {
       emitImmediate(targetReg, 0);
       return;
@@ -156,7 +160,7 @@ class CodeGen extends Checker {
     emit('FBRA.Z  R13, $lblDone', 'Null terminator reached');
     emit('ADD     R$targetReg, 1', 'len++');
     emit('ADD     R14, 1', 'ptr++');
-    emit('BBRA    $lblScan', 'Check next byte');
+    emit('JUMP    $lblScan', 'Check next byte');
     emitLabel(lblDone);
   }
 
@@ -207,34 +211,41 @@ class CodeGen extends Checker {
     scope.restore(this);
     final funcDecls = _funcDecls;
     final dataDecls = _dataDecls;
+    final hasMain = _funcDecls.any((f) => f.name == 'main');
+    _placeFastGlobals(dataDecls, hasMain);
 
-    if (_funcDecls.any((f) => f.name == 'main')) {
+    if (hasMain) {
       asm.add(
           '; ------------------------------------------------------------------------------');
       asm.add('; Direct Stride Vector Table & Startup Code (Auto-generated)');
       asm.add(
           '; ------------------------------------------------------------------------------');
       asm.add('.org 0x${backend.vectorBase.toRadixString(16).toUpperCase().padLeft(8, '0')}');
+      // Each vector fits in 8 halfwords; the reset vector jumps to the
+      // startup code after the table
       emitLabel('_vector_reset');
-      emit('LOAD32  R15, 0x00010000', 'Initialize stack pointer SP');
-      emit('LOAD32  R14, _main', 'Load main entry address');
-      emit('JMP     R14, R0', 'Jump to _main (discard link)');
-      emit('.align  ${backend.vectorStride}');
+      emit('LOAD_R14_32 _start', 'Startup code');
+      emit('JMP     R14, R0', 'Jump to _start (discard link)');
+      emit('.align  TRAP_STRIDE_BYTES');
       asm.add('');
-      // Every other vector has the same shape, so no trap lands in code:
-      // swap to the shadow registers, call the bound handler if there is
-      // one, swap back and return
+      // Every other vector is emitted, so no trap lands in code. A vector
+      // with a handler swaps to the shadow registers and jumps to the
+      // handler, which returns from the trap itself (FAST_EXIT_TRAP); one
+      // without swaps back and returns.
       for (var v = 1; v < backend.vectorCount; v++) {
         emitLabel(v == 1 ? '_vector_mbox' : '_vector_$v');
         emit('FAST_ENTER_TRAP');
         final handler = _trapHandlers[v];
         if (handler != null) {
-          emit('RCALL   _$handler', 'Trap $v handler');
+          emit('LOAD_R14_32 _$handler', 'Trap $v handler');
+          emit('JMP     R14, R0', 'The handler returns from the trap');
+        } else {
+          emit('FAST_EXIT_TRAP');
         }
-        emit('FAST_EXIT_TRAP');
-        emit('.align  ${backend.vectorStride}');
+        emit('.align  TRAP_STRIDE_BYTES');
         asm.add('');
       }
+      _emitStartup();
     }
 
     for (final f in funcDecls) {
@@ -242,8 +253,9 @@ class CodeGen extends Checker {
     }
 
     // Emit global variable data section AFTER all code
-    final emitGlobals =
-        dataDecls.where((d) => !d.isConst && d.boundAddr == null).toList();
+    final emitGlobals = dataDecls
+        .where((d) => !d.isConst && d.boundAddr == null && !fastAddrs.containsKey(d.name))
+        .toList();
     if (emitGlobals.isNotEmpty) {
       asm.add(
           '; ------------------------------------------------------------------------------');
@@ -443,6 +455,108 @@ class CodeGen extends Checker {
     }
   }
 
+  /// Zero-page addresses of the `fast` globals.
+  final Map<String, int> fastAddrs = {};
+
+  /// First and last zero-page addresses `fast` globals may use. The first
+  /// word is left unused, so a null reference never points at a variable.
+  static const _fastFirst = 0x0004, _fastEnd = 0x0100;
+
+  /// Places each `fast` global in the next free word of the zero page, in
+  /// declaration order. One that does not fit, or whose starting value
+  /// could not be stored (a program without main has no startup code),
+  /// stays in ordinary memory, with a warning.
+  void _placeFastGlobals(List<VarDeclNode> dataDecls, bool hasStartup) {
+    var next = _fastFirst;
+    for (final d in dataDecls) {
+      if (!d.isFast || d.isConst) continue;
+      final shown = sourceName(d.name);
+      if (_fastStartingValue(d) != null && !hasStartup) {
+        note(
+            NoteSeverity.warning,
+            "fast global '$shown' is placed in ordinary memory: its starting value is stored "
+            "by the startup code, which only a program with 'main' has",
+            d);
+        continue;
+      }
+      if (next + 4 > _fastEnd) {
+        note(
+            NoteSeverity.warning,
+            "fast global '$shown' is placed in ordinary memory: the zero page "
+            '(0x0004 to 0x00FF) is full',
+            d);
+        continue;
+      }
+      fastAddrs[d.name] = next;
+      next += 4;
+    }
+  }
+
+  /// What the startup code stores in `fast` global [d]: a number, the name
+  /// of a function (for a function value), or null when it starts at zero.
+  Object? _fastStartingValue(VarDeclNode d) {
+    final init = d.initExpr;
+    if (init == null) return null;
+    if (fnTypes.containsKey(cleanName(d.typeName)) && !d.isPtr && init is VarAccessNode) {
+      return init.name;
+    }
+    final v = init is IntLitNode ? init.val : _evalConstExpr(init);
+    return v == 0 ? null : v;
+  }
+
+  /// Stores the starting values of the `fast` globals (startup code).
+  void _emitFastStartingValues() {
+    for (final d in _dataDecls) {
+      final at = fastAddrs[d.name];
+      if (at == null) continue;
+      final v = _fastStartingValue(d);
+      if (v == null) continue;
+      if (v is String) {
+        emit('LOAD32  R1, _$v', "Function '${sourceName(v)}'");
+      } else {
+        emitImmediate(1, v as int);
+      }
+      emitImmediate(14, at);
+      final width = switch (_getElemSize(d.typeName, d.isPtr)) { 1 => '8', 2 => '16', _ => '32' };
+      final shown = v is int && v >= 0x80000000 ? v - 0x100000000 : v;
+      emit('LD$width${' ' * (4 - width.length)}  (R14), R1', "fast '${sourceName(d.name)}' starts at $shown");
+    }
+  }
+
+  /// Loads the address of global [name] into R[reg]: one instruction for
+  /// a `fast` global in the zero page, otherwise its label.
+  void _emitGlobalAddr(int reg, String name, [String comment = '']) {
+    final at = fastAddrs[name];
+    if (at != null) {
+      _emitFixedAddr(reg, at, "fast '${sourceName(name)}' (zero page)");
+      return;
+    }
+    emit('LOAD32  R$reg, _$name', comment);
+  }
+
+  /// Loads a known address into R[reg]. Below 0x100 (the zero page) it
+  /// takes one instruction: `LD Rr, imm4` up to 15, or `LD R14, imm8`.
+  void _emitFixedAddr(int reg, int addr, [String comment = '']) {
+    if (reg == 14 && addr >= 16 && addr <= 0xFF) {
+      emit('LD      R14, $addr', comment.isEmpty ? 'Zero-page address' : comment);
+    } else {
+      emitImmediate(reg, addr);
+    }
+  }
+
+  /// The startup code the reset vector jumps to: sets the stack pointer,
+  /// gives the `fast` globals their starting values, and jumps to main
+  /// (whose epilogue halts if it returns).
+  void _emitStartup() {
+    asm.add('; Startup code');
+    emitLabel('_start');
+    emitImmediate(15, stackTop);
+    emit('; Stack pointer set to 0x${stackTop.toRadixString(16).toUpperCase().padLeft(8, '0')} (--stack-top)');
+    _emitFastStartingValues();
+    emit('JUMP    _main', 'Run the program');
+    asm.add('');
+  }
+
   void genFunc(FuncDeclNode func) {
     // Every function starts from the program's global scope
     _globalScope?.restore(this);
@@ -458,16 +572,17 @@ class CodeGen extends Checker {
     locals = {};
     stackOffset = 0;
 
+    final isHandler = func.trapExpr != null;
     if (func.name == 'main') {
-      emit('LD      R14, 1', 'Accumulate 0x00010000 into R14');
-      emit('PUSH8   R14, 0');
-      emit('PUSH8   R14, 0');
-      emit('LD      R15, R14', 'Initialize Stack Pointer (SP = 0x00010000)');
+      // The startup code (_start) has set the stack pointer
       if (func.params.isNotEmpty) {
         // There is no command line: 'args' is empty
         emit('LD      R1, 0', 'args: no strings');
         emit('LD      R2, 0', 'args.len = 0');
       }
+    } else if (isHandler) {
+      // Entered by a jump from its vector: there is no return address to
+      // keep (the trap's is in the shadow R14, restored by FAST_EXIT_TRAP)
     } else {
       emit('PUSH32  R14', 'Preserve return address link');
       stackOffset = 4;
@@ -528,7 +643,7 @@ class CodeGen extends Checker {
       emit('LD       R3, R1', 'Copy lc for check');
       emit('SEQ      R3, R0', 'Check if initial entry (lc == 0)');
       emit('FBRA.Z   R3, $lblSkip0', 'Hop if not lc == 0');
-      emit('FBRA     $lblEntry0', 'Wide branch to initial entry (8-bit)');
+      emit('JUMP    $lblEntry0', 'Wide branch to initial entry');
       emitLabel(lblSkip0);
       final seen = <int>{};
       for (final (sVal, _) in coroSteps) {
@@ -539,7 +654,7 @@ class CodeGen extends Checker {
           emit('LD       R3, R1', 'Copy lc for check');
           emit('SEQ      R3, R2', 'Check step $sVal');
           emit('FBRA.Z   R3, $lblSkipS', 'Hop if not matched');
-          emit('FBRA     $lblS', 'Wide branch to step $sVal (8-bit)');
+          emit('JUMP    $lblS', 'Wide branch to step $sVal');
           emitLabel(lblSkipS);
         }
       }
@@ -567,7 +682,13 @@ class CodeGen extends Checker {
       }
       final spinLbl = '._halt_${func.name}';
       emitLabel(spinLbl);
-      emit('BBRA    $spinLbl', 'Halt loop upon main completion');
+      emit('JUMP    $spinLbl', 'Halt loop upon main completion');
+    } else if (isHandler) {
+      if (stackOffset > 0) {
+        emitImmediate(14, stackOffset);
+        emit('ADD     R15, R14', 'Deallocate stack frame');
+      }
+      emit('FAST_EXIT_TRAP', 'Return from the trap');
     } else {
       final frameLocals = stackOffset - 4;
       if (frameLocals > 0) {

@@ -44,6 +44,10 @@ class CompileOptions {
   /// null for the usual one ([defaultOs]).
   final String? os;
 
+  /// The stack pointer the Particle startup code sets (`--stack-top`). The
+  /// LLVM compiler ignores it.
+  final int stackTop;
+
   const CompileOptions(
       {this.includeDirs = const [],
       this.defines = const [],
@@ -51,7 +55,8 @@ class CompileOptions {
       this.referenceCheck = true,
       this.overlays = const {},
       this.target = 'particle',
-      this.os});
+      this.os,
+      this.stackTop = defaultStackTop});
 
   /// The operating system this build is for.
   String? get buildOs => os ?? defaultOs(target);
@@ -64,8 +69,12 @@ class CompileOptions {
       referenceCheck: referenceCheck,
       overlays: overlays,
       target: target,
-      os: os);
+      os: os,
+      stackTop: stackTop);
 }
+
+/// The stack pointer set at startup when `--stack-top` is not given.
+const defaultStackTop = 0x00010000;
 
 /// Loads [sources] (and everything they import) and returns the merged
 /// program. Each file is read once, however many times it is imported.
@@ -254,7 +263,8 @@ String compile(List<String> sources,
       boundsCheck: options.boundsCheck,
       referenceCheck: options.referenceCheck,
       backend: backend ?? ParticleAsmBackend(),
-      predefinedConstants: predefined);
+      predefinedConstants: predefined,
+      stackTop: options.stackTop);
   try {
     return cg.generate(mergedAst);
   } finally {

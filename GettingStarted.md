@@ -219,7 +219,8 @@ make llvm-tools
 ```
 
 The programs have debug information, so `lldb` or `gdb` can step through the
-Action source. See section 2.10 of the Action language guide for the
+Action source. See section 2.10 of the
+[Action language guide](Documentation/action-language-guide.md) for the
 options and for what differs from Particle, and section 2.11 for writing a
 program for both Particle and LLVM.
 

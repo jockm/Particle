@@ -56,6 +56,21 @@ Macros support parameter substitution via `%parameter` syntax and unique local l
 
 ---
 
+## Pseudo-Instructions
+
+### `JUMP <label>`
+An unconditional jump to `<label>` at any distance. The assembler chooses the smallest form that reaches the target:
+
+| Distance to the target | Assembled as | Size |
+|---|---|---|
+| Up to 255 halfwords forward or back | `FBRA <label>` / `BBRA <label>` | 1 halfword |
+| Further, target below `0x10000` | `LDI R14, <label>` + `JMP R14, R0` | 3 halfwords |
+| Further, any target | `LDI R14, <label> >> 16` + `PUSH8` + `PUSH8` + `JMP R14, R0` | 5 halfwords |
+
+The longer forms overwrite `R14`. A `JUMP`'s size depends on where its target ends up, and other `JUMP`s change those addresses, so pass 1 repeats until no `JUMP` needs to grow. The Action compiler writes its unconditional jumps this way.
+
+---
+
 ## Register Syntax
 Registers are specified as `R0` through `R15` (case-insensitive) or `SP` (alias for `R15`).
 * `R0`: Hardwired Zero.
@@ -63,4 +78,4 @@ Registers are specified as `R0` through `R15` (case-insensitive) or `SP` (alias 
 * `R5`–`R10`: Callee-saved general registers.
 * `R11`–`R13`: Caller-saved scratchpad registers.
 * `R14`: Return address link register and immediate loading accumulator.
-* `R15`: Architectural stack pointer (full-descending).
+* `R15`: Stack pointer by convention (full-descending, 4-byte aligned).

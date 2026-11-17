@@ -11,7 +11,9 @@ String compileSource(String source,
     {List<String> defines = const [],
     Map<String, String> extraFiles = const {},
     bool boundsCheck = true,
-    bool referenceCheck = true}) {
+    bool referenceCheck = true,
+    int stackTop = defaultStackTop,
+    List<CompileNote>? notes}) {
   final dir = Directory.systemTemp.createTempSync('action_test_');
   try {
     final main = File('${dir.path}/main.act')..writeAsStringSync(source);
@@ -25,7 +27,9 @@ String compileSource(String source,
             includeDirs: [dir.path],
             defines: defines,
             boundsCheck: boundsCheck,
-            referenceCheck: referenceCheck));
+            referenceCheck: referenceCheck,
+            stackTop: stackTop),
+        notes: notes);
   } finally {
     dir.deleteSync(recursive: true);
   }

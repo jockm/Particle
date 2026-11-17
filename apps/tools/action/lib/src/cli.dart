@@ -7,9 +7,11 @@
 //
 //   action [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR]
 //          [-fbounds-check] [-fno-bounds-check]
-//          [-freference-check] [-fno-reference-check] sources [sources ...]
+//          [-freference-check] [-fno-reference-check] [--stack-top ADDR]
+//          sources [sources ...]
 //
-// action_llvm takes the same options, and -g / -g0 for debug information.
+// action_llvm takes the same options except --stack-top, and -g / -g0 for
+// debug information.
 
 import 'dart:io';
 
@@ -23,7 +25,7 @@ const String llvmToolName = 'action_llvm';
 const String usageLine =
     'usage: $toolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-fbounds-check]\n'
     '              [-fno-bounds-check] [-freference-check] [-fno-reference-check]\n'
-    '              sources [sources ...]';
+    '              [--stack-top ADDR] sources [sources ...]';
 
 const String helpText = '''$usageLine
 
@@ -41,7 +43,9 @@ options:
   -fbounds-check        Enable runtime array bounds checking (default)
   -fno-bounds-check     Disable runtime array bounds checking
   -freference-check     Enable runtime null reference checking (default)
-  -fno-reference-check  Disable runtime null reference checking''';
+  -fno-reference-check  Disable runtime null reference checking
+  --stack-top ADDR      Initial stack pointer, set at startup (default 0x00010000);
+                        a multiple of 4''';
 
 const String llvmUsageLine =
     'usage: $llvmToolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-g] [-g0]\n'
@@ -74,6 +78,7 @@ const _displayName = {
   'output': '-o/--output',
   'define': '-D/--define',
   'include': '-I/--include-dir',
+  'stack': '--stack-top',
 };
 
 /// Parsed command-line arguments.
@@ -86,6 +91,9 @@ class CliArgs {
   bool referenceCheck = true;
   bool debugInfo = true;
   bool help = false;
+
+  /// --stack-top, when given
+  int? stackTop;
 }
 
 /// Raised for invalid command-line usage (argparse exits with status 2).
@@ -110,7 +118,8 @@ CliArgs parseArgs(List<String> argv, {bool llvm = false}) {
     return argv[i];
   }
 
-  const valueOpts = {
+  final valueOpts = {
+    if (!llvm) '--stack-top': 'stack',
     '-o': 'output',
     '--output': 'output',
     '-D': 'define',
@@ -127,6 +136,15 @@ CliArgs parseArgs(List<String> argv, {bool llvm = false}) {
         a.defines.add(value);
       case 'include':
         a.includeDirs.add(value);
+      case 'stack':
+        final v = value.toLowerCase().startsWith('0x')
+            ? int.tryParse(value.substring(2), radix: 16)
+            : int.tryParse(value);
+        if (v == null || v <= 0 || v > 0xFFFFFFFF || v % 4 != 0) {
+          throw UsageError("argument --stack-top: '$value' is not an address that is a "
+              'multiple of 4 (such as 0x00010000)');
+        }
+        a.stackTop = v;
     }
   }
 
@@ -216,7 +234,8 @@ int runCli(List<String> argv, {bool llvm = false}) {
       includeDirs: args.includeDirs,
       defines: args.defines,
       boundsCheck: args.boundsCheck,
-      referenceCheck: args.referenceCheck);
+      referenceCheck: args.referenceCheck,
+      stackTop: args.stackTop ?? defaultStackTop);
   try {
     final code = llvm
         ? compileLlvm(args.sources, notes: notes, options: options, debugInfo: args.debugInfo)

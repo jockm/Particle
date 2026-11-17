@@ -9,7 +9,7 @@ import 'symbols.dart';
 
 const _keywords = [
   'asm', 'break', 'case', 'const', 'continue', 'default', 'else', 'enum',
-  'extern', 'fn', 'for', 'if', 'import', 'inline', 'ref', 'return', 'sizeof',
+  'extern', 'fast', 'fn', 'for', 'if', 'import', 'inline', 'ref', 'return', 'sizeof',
   'switch', 'task', 'type', 'verify', 'void', 'volatile', 'while',
 ];
 
@@ -369,7 +369,7 @@ class Features {
       final dims = d.dimExprs.isNotEmpty
           ? (d.arrayDims != null ? d.arrayDims!.map((n) => '[$n]').join() : '[...]')
           : (d.isPtr ? '[]' : '');
-      return '${d.isVolatile && d.boundAddr == null ? 'volatile ' : ''}${d.typeName} ${d.name}$dims'
+      return '${d.isFast ? 'fast ' : ''}${d.isVolatile && d.boundAddr == null ? 'volatile ' : ''}${d.typeName} ${d.name}$dims'
           '${d.boundAddr != null ? ' @ 0x${d.boundAddr!.toRadixString(16).toUpperCase()}' : ''}';
     }
     return '${s.type ?? '?'} ${s.name}${s.isArray ? '[]' : ''}';

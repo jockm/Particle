@@ -98,64 +98,28 @@ class ParticleAssembler {
     // -------------------------------------------------------------------------
     // PASS 1: Symbol Calculation & Address Resolution
     // -------------------------------------------------------------------------
-    pc = 0x00000100;
-    var imageEnd = pc;
-    for (final entry in processedLines) {
-      var line = entry.$3;
-
-      // Extract all labels preceding the instruction or directive
-      while (true) {
-        final (labelPart, rest) = splitLabel(line);
-        if (labelPart == null) break;
-        if (labelPart.isNotEmpty) {
-          if (labelPart == imageEndSymbol) {
-            throw AssemblerError(
-                "'$imageEndSymbol' is defined by the assembler and cannot be used as a label",
-                entry.$1,
-                entry.$2);
-          }
-          symbols[labelPart] = pc;
+    // A JUMP's size depends on how far its target is, and the addresses
+    // depend on the sizes, so pass 1 repeats until no JUMP needs to grow.
+    // JUMPs start at their shortest form and only ever grow, so this ends.
+    _jumpSizes.clear();
+    var imageEnd = 0;
+    for (var round = 0;; round++) {
+      final jumpAddrs = <int, int>{};
+      imageEnd = _pass1(processedLines, jumpAddrs);
+      var grew = false;
+      for (final j in jumpAddrs.entries) {
+        final target = _tryJumpTarget(processedLines[j.key].$3);
+        if (target == null) continue;
+        final need = jumpSize(j.value, target);
+        if (need > (_jumpSizes[j.key] ?? 2)) {
+          _jumpSizes[j.key] = need;
+          grew = true;
         }
-        line = rest;
-        if (line.isEmpty) break;
       }
-
-      if (line.isEmpty) continue;
-
-      if (line.startsWith('.')) {
-        final parts = line.split(RegExp(r'\s+'));
-        final d = parts[0].toLowerCase();
-        final arg =
-            parts.length > 1 ? line.substring(parts[0].length).trim() : '';
-
-        if (d == '.org') {
-          pc = prep.parseExpr(arg, symbols);
-        } else if (d == '.align') {
-          final boundary = prep.parseExpr(arg, symbols);
-          final rem = pc % boundary;
-          if (rem != 0) {
-            pc += (boundary - rem);
-          }
-        } else if (d == '.byte') {
-          pc += arg.split(',').length;
-        } else if (d == '.half') {
-          pc += arg.split(',').length * 2;
-        } else if (d == '.word') {
-          pc += arg.split(',').length * 4;
-        } else if (d == '.asciz' || d == '.string') {
-          final m = RegExp(r'"(.*)"').firstMatch(arg);
-          final rawStr = m != null ? m.group(1)! : '';
-          final decoded = _unescapeAsciz(rawStr);
-          pc += decoded.length + 1; // null terminator byte
-        }
-      } else {
-        final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
-        // LDI and LDIS are 32-bit (2-word / 4-byte) instructions; all others are 16-bit
-        pc += (mnem == 'LDI' || mnem == 'LDIS') ? 4 : 2;
+      if (!grew) break;
+      if (round > 1000) {
+        throw AssemblerError('JUMP sizes did not settle');
       }
-      // Highest address reached; an .org back to a lower address does not
-      // lower the end of the image
-      if (pc > imageEnd) imageEnd = pc;
     }
 
     // End of the whole image, across all source files, aligned to 4
@@ -169,7 +133,8 @@ class ParticleAssembler {
     final listingLines = <String>[];
     int maxAddr = pc;
 
-    for (final entry in processedLines) {
+    for (var index = 0; index < processedLines.length; index++) {
+      final entry = processedLines[index];
       final fname = entry.$1;
       final lno = entry.$2;
       final origLine = entry.$3;
@@ -248,7 +213,10 @@ class ParticleAssembler {
           pc += 1;
         }
       } else {
-        final words = encodeInstructionWords(line, pc, fname, lno);
+        final isJump = line.split(RegExp(r'\s+'))[0].toUpperCase() == 'JUMP';
+        final words = isJump
+            ? _encodeJump(line, pc, _jumpSizes[index] ?? 2, fname, lno)
+            : encodeInstructionWords(line, pc, fname, lno);
         for (final w in words) {
           final b0 = w & 0xFF;
           final b1 = (w >> 8) & 0xFF;
@@ -277,6 +245,138 @@ class ParticleAssembler {
 
     return (binaryData, maxAddr, listingLines);
   }
+
+  /// Bytes chosen for each JUMP, by its index in the processed lines.
+  final Map<int, int> _jumpSizes = {};
+
+  /// One run of pass 1: lays out every line, defining the labels, and
+  /// records the address of each JUMP in [jumpAddrs]. Returns the end of
+  /// the image.
+  int _pass1(List<(String, int, String)> processedLines, Map<int, int> jumpAddrs) {
+    pc = 0x00000100;
+    var imageEnd = pc;
+    for (var index = 0; index < processedLines.length; index++) {
+      final entry = processedLines[index];
+      var line = entry.$3;
+
+      // Extract all labels preceding the instruction or directive
+      while (true) {
+        final (labelPart, rest) = splitLabel(line);
+        if (labelPart == null) break;
+        if (labelPart.isNotEmpty) {
+          if (labelPart == imageEndSymbol) {
+            throw AssemblerError(
+                "'$imageEndSymbol' is defined by the assembler and cannot be used as a label",
+                entry.$1,
+                entry.$2);
+          }
+          symbols[labelPart] = pc;
+        }
+        line = rest;
+        if (line.isEmpty) break;
+      }
+
+      if (line.isEmpty) continue;
+
+      if (line.startsWith('.')) {
+        final parts = line.split(RegExp(r'\s+'));
+        final d = parts[0].toLowerCase();
+        final arg =
+            parts.length > 1 ? line.substring(parts[0].length).trim() : '';
+
+        if (d == '.org') {
+          pc = prep.parseExpr(arg, symbols);
+        } else if (d == '.align') {
+          final boundary = prep.parseExpr(arg, symbols);
+          final rem = pc % boundary;
+          if (rem != 0) {
+            pc += (boundary - rem);
+          }
+        } else if (d == '.byte') {
+          pc += arg.split(',').length;
+        } else if (d == '.half') {
+          pc += arg.split(',').length * 2;
+        } else if (d == '.word') {
+          pc += arg.split(',').length * 4;
+        } else if (d == '.asciz' || d == '.string') {
+          final m = RegExp(r'"(.*)"').firstMatch(arg);
+          final rawStr = m != null ? m.group(1)! : '';
+          final decoded = _unescapeAsciz(rawStr);
+          pc += decoded.length + 1; // null terminator byte
+        }
+      } else {
+        final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
+        if (mnem == 'JUMP') {
+          jumpAddrs[index] = pc;
+          pc += _jumpSizes[index] ?? 2;
+        } else {
+          // LDI and LDIS are 32-bit (2-word / 4-byte) instructions; all others are 16-bit
+          pc += (mnem == 'LDI' || mnem == 'LDIS') ? 4 : 2;
+        }
+      }
+      // Highest address reached; an .org back to a lower address does not
+      // lower the end of the image
+      if (pc > imageEnd) imageEnd = pc;
+    }
+    return imageEnd;
+  }
+
+  /// The address a JUMP line goes to, or null while its label is not yet
+  /// defined (in an early run of pass 1).
+  int? _tryJumpTarget(String line) {
+    var rest = line;
+    while (true) {
+      final (lbl, r) = splitLabel(rest);
+      if (lbl == null) break;
+      rest = r;
+    }
+    final op = rest.trim().substring(4).trim();
+    try {
+      return prep.parseExpr(op, symbols);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Bytes a JUMP at [from] needs to reach [to]: 2 for a branch (FBRA or
+  /// BBRA, up to 255 halfwords away), 6 for LDI R14 + JMP (a target below
+  /// 64K) and 10 for LDI R14 + 2 PUSH8 + JMP (any target).
+  static int jumpSize(int from, int to) {
+    final halfwords = (to - from).abs() ~/ 2;
+    if (halfwords <= 255) return 2;
+    if (to >= 0 && to <= 0xFFFF) return 6;
+    return 10;
+  }
+
+  /// Encodes `JUMP label` at [curPc] in [size] bytes (see [jumpSize]).
+  List<int> _encodeJump(String line, int curPc, int size, String fname, int lno) {
+    final tokens = line.split(RegExp(r'\s+'));
+    final opStr = line.substring(tokens[0].length).trim();
+    if (opStr.isEmpty || opStr.contains(',')) {
+      throw AssemblerError('JUMP expects 1 operand: JUMP <label>', fname, lno);
+    }
+    final to = prep.parseExpr(opStr, symbols) & 0xFFFFFFFF;
+    if (to.isOdd) {
+      throw AssemblerError('JUMP target 0x${to.toRadixString(16)} is not even', fname, lno);
+    }
+    const jmpR14 = (0xA0 << 8) | (14 << 4); // JMP R14, R0
+    switch (size) {
+      case 2:
+        final back = to < curPc;
+        final halfwords = (to - curPc).abs() ~/ 2;
+        return [((back ? 0xC0 : 0xB0) << 8) | halfwords];
+      case 6:
+        return [(0x07 << 8) | 14, to & 0xFFFF, jmpR14];
+      default:
+        return [
+          (0x07 << 8) | 14, (to >> 16) & 0xFFFF, // LDI   R14, to >> 16
+          (0x06 << 8) | ((to >> 8) & 0xFF), // PUSH8 R14, (to >> 8) & 0xFF
+          (0x06 << 8) | (to & 0xFF), // PUSH8 R14, to & 0xFF
+          jmpR14,
+        ];
+    }
+  }
+
 
   /// Decodes escape sequences (\n, \r, \t, \0, \\, \", \') inside string literals.
   List<int> _unescapeAsciz(String s) {

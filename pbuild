@@ -60,6 +60,8 @@ Options:
                          Enable null reference checking (default)
       --no-reference-check, -fno-reference-check
                          Disable null reference checking
+      --stack-top <addr> Initial stack pointer set by the startup code of an
+                         Action program (default 0x00010000)
       --sim              Run psim simulator after successful build
       --debug            Pass --debug to psim when running with --sim
       --base <addr>      Pass --base <addr> to psim when running with --sim
@@ -153,6 +155,14 @@ while [[ $# -gt 0 ]]; do
         --no-reference-check|-fno-reference-check)
             ACT16_FLAGS+=("-fno-reference-check")
             shift
+            ;;
+        --stack-top)
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: Option --stack-top requires an argument." >&2
+                exit 1
+            fi
+            ACT16_FLAGS+=("--stack-top" "$2")
+            shift 2
             ;;
         --sim)
             RUN_SIM=1

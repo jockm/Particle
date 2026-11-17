@@ -8,21 +8,27 @@
 
 .org 0x00000100
 
+; Every vector fits in 8 halfwords. The reset vector jumps to the startup
+; code; a trap vector jumps to its handler, which returns from the trap
+; itself with FAST_EXIT_TRAP.
 _vector_reset:
-    LOAD32  R15, 0x00010000
-    LOAD32  R14, _main
-    JMP      R14, R0
-    .align  64
+    LOAD_R14_32 _start
+    JMP     R14, R0
+    .align  TRAP_STRIDE_BYTES
 
 _vector_mbox:
     FAST_ENTER_TRAP
-    LOAD32  R14, _on_mbox_trap
-    JMP     R14, R14
-    FAST_EXIT_TRAP
-    .align  64
+    LOAD_R14_32 _on_mbox_trap
+    JMP     R14, R0
+    .align  TRAP_STRIDE_BYTES
+
+_start:
+    LOAD32  R15, 0x00010000
+    LOAD32  R14, _main
+    JMP     R14, R0
 
 _on_mbox_trap:
-    RRET
+    FAST_EXIT_TRAP
 
 _on_alignment_error:
 _panic_align_loop:

@@ -171,6 +171,11 @@ class VarDeclNode extends AstNode {
   bool isConst;
   bool isVolatile;
 
+  /// `fast T name;`: a global the Particle compiler places in the zero page
+  /// (0x0004 to 0x00FF), where its address loads in one instruction. The
+  /// LLVM compiler places it as any other global.
+  bool isFast = false;
+
   /// Array dimensions as written (constant expressions).
   List<AstNode> dimExprs = [];
 

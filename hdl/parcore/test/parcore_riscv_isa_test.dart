@@ -115,15 +115,15 @@ int main(int argc, char** argv) {
         if (drain > 0) {
             if (--drain == 0) break;
         } else if ((cyc & 0x3F) == 0) {
-            uint32_t x31 = read_c1_word(0x0C00 + 31 * 4);
+            uint32_t x31 = read_c1_word(0x0000 + 31 * 4);
             if (x31 == 0xCAFE0001 || (x31 & 0xFFFF0000) == 0xDEAD0000) {
                 drain = 32;
             }
         }
     }
-    uint32_t x31 = read_c1_word(0x0C00 + 31 * 4);
-    uint32_t gp  = read_c1_word(0x0C00 + 3 * 4);
-    uint32_t a0  = read_c1_word(0x0C00 + 10 * 4);
+    uint32_t x31 = read_c1_word(0x0000 + 31 * 4);
+    uint32_t gp  = read_c1_word(0x0000 + 3 * 4);
+    uint32_t a0  = read_c1_word(0x0000 + 10 * 4);
     std::printf("RESULT x31=0x%08x gp=%u a0=0x%08x cyc=%d\\n", x31, gp, a0, cyc);
     delete top;
     return 0;
@@ -340,7 +340,7 @@ void main() {
             reset.put(1);
             uartRx.put(1);
 
-            const regBase = 0x0C00;
+            const regBase = 0x0000;
             final c1Tcm = top.subModules
                 .firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
 
@@ -388,7 +388,7 @@ void main() {
                     stallWindows++;
                     final tpNow = c1Tcm.readWord(regBase + 4 * 4) & 0xFFFFFFFF;
                     final t0Now = c1Tcm.readWord(regBase + 5 * 4) & 0xFFFFFFFF;
-                    final sbNow = c1Tcm.readWord(0x0C80) & 0xFFFFFFFF;
+                    final sbNow = c1Tcm.readWord(0x0080) & 0xFFFFFFFF;
                     stderr.writeln(
                       '  [STALL DIAG] tp=$tpNow t0=$t0Now sb=0x${sbNow.toRadixString(16)} '
                       'c0_pc=0x${c0Core.output('memPortAAddr').value.toInt().toRadixString(16)} '

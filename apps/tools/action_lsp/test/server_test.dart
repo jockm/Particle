@@ -281,6 +281,16 @@ void main() {
       await c.close();
     });
 
+    test('hover on a fast global shows fast', () async {
+      const src = 'fast u32 ticks;\nvoid main() {\n    ticks += 1;\n}\n';
+      final c = await TestClient.start({'fast.act': src});
+      expect(await c.open('fast.act'), isEmpty);
+      final (l, ch) = find(src, 'ticks += 1');
+      final h = asMap(await c.result('textDocument/hover', c.at('fast.act', l, ch)));
+      expect(asMap(h['contents'])['value'] as String, contains('fast u32 ticks'));
+      await c.close();
+    });
+
     test('hover follows block scopes', () async {
       const src = 'void main() {\n    u32 x = 1;\n    {\n        u8 x = 2;\n        x += 1;\n    }\n    x += 5;\n}\n';
       final c = await TestClient.start({'scoped.act': src});

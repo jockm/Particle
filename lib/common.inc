@@ -60,6 +60,24 @@
     LDI     R14, %value
 .endmacro
 
+; --- Zero Page (0x0000..0x00FF) Single-Instruction Pointer Macros ---
+; Loads an 8-bit Zero Page address into R14 (or reg) in 1 instruction (2 bytes).
+; Note: When reg is R14, prefer `LD R14, zp_addr` directly.
+.macro LDZP reg, zp_addr
+    LD      R14, (%zp_addr) & 0xFF
+    LD      %reg, R14
+.endmacro
+
+.macro LDZP32 reg, zp_addr
+    LD      R14, (%zp_addr) & 0xFF
+    LD32    %reg, (R14)
+.endmacro
+
+.macro STZP32 zp_addr, reg
+    LD      R14, (%zp_addr) & 0xFF
+    ST32    (R14), %reg
+.endmacro
+
 .macro START_PROGRAM
     LOAD32  R15, 0x00010000
     LDI     R14, _main

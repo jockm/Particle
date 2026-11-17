@@ -207,6 +207,17 @@ class Parser {
       decl.isAsm = true;
       return decl;
     }
+    // fast Type name;  -- a global placed in the zero page (Particle)
+    if (peek().val == 'fast') {
+      final fastTok = consume();
+      final decl = parseTopLevel();
+      if (decl is! VarDeclNode) {
+        throw CompileError(
+            "${fastTok.loc}: 'fast' must be followed by a global variable, such as 'fast u32 ticks;'");
+      }
+      decl.isFast = true;
+      return decl;
+    }
     // extern ReturnType name(params);  -- a C function (LLVM compiler only)
     if (peek().val == 'extern') {
       final externTok = consume();
@@ -756,6 +767,10 @@ class Parser {
     var tok = peek();
     if (tok.val == 'verify') {
       return parseVerify();
+    }
+    if (tok.val == 'fast' && tok.type == 'KEYWORD') {
+      throw CompileError(
+          "${tok.loc}: 'fast' applies only to global variables, declared outside functions");
     }
     if (tok.val == ';') {
       consume('PUNCT', ';');

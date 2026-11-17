@@ -408,10 +408,14 @@ class Checker {
     // Register global types and dims (constants may take their sizes)
     for (final d in dataDecls) {
       try {
+        if (d.isConst && d.isFast) {
+          throw CompileError("constant '${d.name}' cannot be 'fast': it has no storage");
+        }
         if (d.isConst) continue;
         _resolveVarDecl(d);
         _validateBackendType(d.typeName, "global variable '${d.name}'");
         if (d.isRefArray) _checkRefArrayElem(d.name, d.typeName, d.loc);
+        if (d.isFast) _checkFast(d);
         if (d.isVolatile || d.boundAddr != null) {
           volatiles.add(d.name);
         }
@@ -535,6 +539,31 @@ class Checker {
   String cleanName(Object? t) {
     final c = cleanType(t);
     return c is String ? c : '';
+  }
+
+  /// `fast` is for a global holding one value: a number, bool, function
+  /// value or reference.
+  void _checkFast(VarDeclNode d) {
+    final what = "'${d.name}'";
+    if (d.boundAddr != null) {
+      throw CompileError("$what has an address (@); 'fast' chooses its address itself");
+    }
+    final dims = d.arrayDims ?? (d.arrayDim != null ? [d.arrayDim!] : const <int>[]);
+    final clean = cleanName(d.typeName);
+    String? kind;
+    if (d.typeName is List) {
+      kind = 'a tuple';
+    } else if (dims.isNotEmpty || d.isRefArray) {
+      kind = 'an array';
+    } else if (clean == 'string') {
+      kind = 'a string';
+    } else if (structs.containsKey(clean) && !d.isPtr && !d.isRefDecl) {
+      kind = "a '$clean' record";
+    }
+    if (kind != null) {
+      throw CompileError("$what is $kind; 'fast' applies only to single values "
+          '(numbers, bool, function values and references)');
+    }
   }
 
   static const _builtinTypeNames = {

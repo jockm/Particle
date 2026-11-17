@@ -182,6 +182,7 @@ const Map<String, String> mnemonicDocs = {
   "RJUMP": "`RJUMP Roffset, Rlink` (`0xA1`) — PC-relative jump by signed byte offset in `Roffset`, saving `PC + 2` into `Rlink`.",
   "TRAP": "`TRAP Rr` | `TRAP Imm4` (`0xA2` / `0xA3`) — Triggers exception vector `0..15` (base `0x00000100`, 64-byte stride), saving `PC + 2` in `R14`.",
   "BRANCH": "`BRANCH Rr` (`0xA4`) — Branches to address in register `Rr`.",
+  "JUMP": "`JUMP <label>` (pseudo-instruction) — Jumps to `<label>` at any distance. The assembler picks the smallest form that reaches it: `FBRA`/`BBRA` (1 halfword, up to 255 halfwords away), `LDI R14, label` + `JMP R14, R0` (3 halfwords, target below 64K), or `LDI` + 2 `PUSH8` + `JMP R14, R0` (5 halfwords). The longer forms overwrite `R14`.",
   "FBRA": "`FBRA <label>` (`0xB0`) — Unconditional forward PC-relative branch (`0..255` halfwords ahead).",
   "FBRA.Z": "`FBRA.Z Rr, <label>` (`0xB4` / `0xB7` for `R14`) — Forward branch if `Rr == 0` (`0..15` halfwords, or `0..255` when `Rr` is `R14`).",
   "FBRA.N": "`FBRA.N Rr, <label>` (`0xB5` / `0xB8` for `R14`) — Forward branch if `Rr < 0` (bit 31 set).",

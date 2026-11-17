@@ -6,7 +6,7 @@
 .include "lib/common.inc"
 
 .org 0x00000100
-.define CSR_BASE         0x0E00
+.define CSR_BASE         0x0000  ; Zero Page CSR block (0x0000..0x003F)
 .define CSR_OFS_CYCLE    0x00    ; 0xC00 (cycle), 0xC01 (time)
 .define CSR_OFS_CYCLEH   0x04    ; 0xC80 (cycleh), 0xC81 (timeh)
 .define CSR_OFS_INSTRET  0x08    ; 0xC02 (instret)
@@ -20,8 +20,8 @@ _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 1 (ID)
     LD      R2, 1               ; FIFO Ch1: Outbound to Core 3 (MEM)
 
-    ; Zero-initialize 16-word CSR block (0x0700..0x073C)
-    LOAD16  R4, CSR_BASE
+    ; Zero-initialize 16-word CSR block (0x0000..0x003F)
+    LD      R4, CSR_BASE
     LOAD16  R5, 16              ; 16 words
     LD      R6, 0
 ._zero_csr_loop:
@@ -31,9 +31,9 @@ _reset_vector:
     BBRA.NZ R5, ._zero_csr_loop
 
     ; Set default trap vector address mtvec = 0x00000480
-    LOAD16  R4, CSR_BASE + CSR_OFS_MTVEC
     LOAD32  R5, 0x00000480
-    ST32    (R4), R5
+    LD      R14, CSR_BASE+CSR_OFS_MTVEC
+    ST32    (R14), R5
 
 ; ==============================================================================
 ; Main Execution Loop
@@ -1124,11 +1124,11 @@ _dispatch_system:
     JMP     R14, R0
 
 ._do_ecall:
-    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
-    ST32    (R6), R13
-    LOAD16  R6, CSR_BASE + CSR_OFS_MCAUSE
+    LD      R14, CSR_BASE+CSR_OFS_MEPC
+    ST32    (R14), R13
     LOAD16  R7, 11
-    ST32    (R6), R7
+    LD      R14, CSR_BASE+CSR_OFS_MCAUSE
+    ST32    (R14), R7
     LOAD16  R14, ._system_trap_redirect
     JMP     R14, R0
 
@@ -1142,11 +1142,11 @@ _dispatch_system:
     JMP     R14, R0
 
 ._do_ebreak:
-    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
-    ST32    (R6), R13
-    LOAD16  R6, CSR_BASE + CSR_OFS_MCAUSE
+    LD      R14, CSR_BASE+CSR_OFS_MEPC
+    ST32    (R14), R13
     LOAD16  R7, 3
-    ST32    (R6), R7
+    LD      R14, CSR_BASE+CSR_OFS_MCAUSE
+    ST32    (R14), R7
     LOAD16  R14, ._system_trap_redirect
     JMP     R14, R0
 
@@ -1160,15 +1160,15 @@ _dispatch_system:
     JMP     R14, R0
 
 ._do_mret:
-    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
-    LD32    R14, (R6)
+    LD      R14, CSR_BASE+CSR_OFS_MEPC
+    LD32    R14, (R14)
     MBOX    R14, 1
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0
 
 ._system_trap_redirect:
-    LOAD16  R6, CSR_BASE + CSR_OFS_MTVEC
-    LD32    R14, (R6)
+    LD      R14, CSR_BASE+CSR_OFS_MTVEC
+    LD32    R14, (R14)
     FBRA.Z  R14, ._use_default_mtvec
     LOAD16  R4, ._do_trap_strobe
     JMP     R4, R0
@@ -1183,7 +1183,7 @@ _dispatch_system:
 
 ._chk_csr_ops:
     ; 0xC00: cycle
-    LOAD16  R6, CSR_BASE + CSR_OFS_CYCLE
+    LD      R14, CSR_BASE+CSR_OFS_CYCLE
     LOAD16  R7, 0xC00
     LD      R8, R12
     SUB     R8, R7
@@ -1202,7 +1202,7 @@ _dispatch_system:
 
 ._c2:
     ; 0xC80: cycleh
-    LOAD16  R6, CSR_BASE + CSR_OFS_CYCLEH
+    LD      R14, CSR_BASE+CSR_OFS_CYCLEH
     LOAD16  R7, 0xC80
     LD      R8, R12
     SUB     R8, R7
@@ -1221,7 +1221,7 @@ _dispatch_system:
 
 ._c4:
     ; 0xC02: instret
-    LOAD16  R6, CSR_BASE + CSR_OFS_INSTRET
+    LD      R14, CSR_BASE+CSR_OFS_INSTRET
     LOAD16  R7, 0xC02
     LD      R8, R12
     SUB     R8, R7
@@ -1231,7 +1231,7 @@ _dispatch_system:
 
 ._c5:
     ; 0x300: mstatus
-    LOAD16  R6, CSR_BASE + CSR_OFS_STATUS
+    LD      R14, CSR_BASE+CSR_OFS_STATUS
     LOAD16  R7, 0x300
     LD      R8, R12
     SUB     R8, R7
@@ -1241,7 +1241,7 @@ _dispatch_system:
 
 ._c6:
     ; 0x305: mtvec
-    LOAD16  R6, CSR_BASE + CSR_OFS_MTVEC
+    LD      R14, CSR_BASE+CSR_OFS_MTVEC
     LOAD16  R7, 0x305
     LD      R8, R12
     SUB     R8, R7
@@ -1251,7 +1251,7 @@ _dispatch_system:
 
 ._c7:
     ; 0x340: mscratch
-    LOAD16  R6, CSR_BASE + CSR_OFS_MSCRATCH
+    LD      R14, CSR_BASE+CSR_OFS_MSCRATCH
     LOAD16  R7, 0x340
     LD      R8, R12
     SUB     R8, R7
@@ -1261,7 +1261,7 @@ _dispatch_system:
 
 ._c8:
     ; 0x341: mepc
-    LOAD16  R6, CSR_BASE + CSR_OFS_MEPC
+    LD      R14, CSR_BASE+CSR_OFS_MEPC
     LOAD16  R7, 0x341
     LD      R8, R12
     SUB     R8, R7
@@ -1271,7 +1271,7 @@ _dispatch_system:
 
 ._c9:
     ; 0x342: mcause
-    LOAD16  R6, CSR_BASE + CSR_OFS_MCAUSE
+    LD      R14, CSR_BASE+CSR_OFS_MCAUSE
     LOAD16  R7, 0x342
     LD      R8, R12
     SUB     R8, R7
@@ -1285,7 +1285,7 @@ _dispatch_system:
     JMP     R14, R0
 
 ._read_csr_val:
-    LD32    R15, (R6)           ; R15 = Old CSR Value
+    LD32    R15, (R14)          ; R15 = Old CSR Value
 
     ; Compute New CSR Value in R4 based on uop in R3
     LOAD16  R7, 0x43            ; CSRRW
@@ -1326,7 +1326,7 @@ _dispatch_system:
     JMP     R14, R0
 
 ._do_st_csr:
-    ST32    (R6), R4
+    ST32    (R14), R4
 
 ._finish_csr:
     LOAD16  R14, _forward_to_mem

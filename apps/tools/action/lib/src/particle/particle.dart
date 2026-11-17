@@ -38,10 +38,14 @@ class ParticleAsmBackend extends Backend {
   @override
   void emitImmediate(int reg, int val) {
     final v = val & 0xFFFFFFFF;
+    // The same 32 bits read as a signed number, for the sign-extending loads
+    final signed = v >= 0x80000000 ? v - 0x100000000 : v;
     if (0 <= val && val <= 15) {
       emit('LD      R$reg, $val', 'Imm4 load ($val)');
-    } else if (-15 <= val && val < 0) {
-      emit('LD      R$reg, -${val.abs()}', '-Imm4 load ($val)');
+    } else if (-15 <= signed && signed < 0) {
+      emit('LD      R$reg, -${signed.abs()}', '-Imm4 load ($signed)');
+    } else if (-32768 <= signed && signed < 0) {
+      emit('LOAD16S R$reg, $signed', 'LOAD16S sign-extended ($signed)');
     } else if (v <= 0xFFFF) {
       emit('LOAD16  R$reg, 0x${_hex(v, 4)}', 'LOAD16 tiered ($val)');
     } else if (v <= 0xFFFFFF) {

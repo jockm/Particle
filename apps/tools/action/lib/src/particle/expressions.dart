@@ -6,7 +6,7 @@ extension _Expressions on CodeGen {
       final name = node.name;
       final isRef = typeOf(name).isRef;
       if (boundAddrs.containsKey(name)) {
-        emitImmediate(targetReg, boundAddrs[name]!);
+        _emitFixedAddr(targetReg, boundAddrs[name]!);
       } else if (locals.containsKey(name)) {
         final offset = stackOffset - locals[name]!;
         emitImmediate(targetReg, offset);
@@ -15,7 +15,7 @@ extension _Expressions on CodeGen {
           emit('LD32    R$targetReg, (R$targetReg)', "Dereference ref param '$name'");
         }
       } else {
-        emit('LOAD32  R$targetReg, _$name');
+        _emitGlobalAddr(targetReg, name);
         if (isRef) {
           emit('LD32    R$targetReg, (R$targetReg)', "Dereference global reference '$name'");
           if (referenceCheck) backend.genNullTrap(targetReg, "global '$name'");
@@ -131,7 +131,7 @@ extension _Expressions on CodeGen {
             emitImmediate(14, lenOff);
             emit('ADD     R14, R15');
           } else {
-            emit('LOAD32  R14, _$baseName', "Address of global '$baseName'");
+            _emitGlobalAddr(14, baseName, "Address of global '$baseName'");
           }
           emit('LD32    R14, (R14)', "Load heap pointer for '$baseName'");
           if (isGlobal && referenceCheck) {
@@ -213,7 +213,7 @@ extension _Expressions on CodeGen {
       emit('ADD     R$addrReg, R15');
       emit('LD32    R$addrReg, (R$addrReg)', "Dereference open array base '$baseName'");
     } else if (baseName != null && boundAddrs.containsKey(baseName)) {
-      emitImmediate(addrReg, boundAddrs[baseName]!);
+      _emitFixedAddr(addrReg, boundAddrs[baseName]!);
     } else if (baseName != null && locals.containsKey(baseName)) {
       final offset = stackOffset - locals[baseName]!;
       emitImmediate(addrReg, offset);
@@ -226,7 +226,7 @@ extension _Expressions on CodeGen {
             "Dereference pointer/param base '$baseName'");
       }
     } else if (baseName != null && globals.contains(baseName)) {
-      emit('LOAD32  R$addrReg, _$baseName', "Base of global array '$baseName'");
+      _emitGlobalAddr(addrReg, baseName, "Base of global array '$baseName'");
       final tInfo = typeOf(baseName);
       if (tInfo.isPtr && !arrayDims.containsKey(baseName) && !arrayLens.containsKey(baseName)) {
         // A global array reference (`T g[]`) holds the heap address
@@ -422,7 +422,7 @@ extension _Expressions on CodeGen {
         emit('ADD     R14, R15');
         emit('ST32    (R14), R0', "Zero out destroyed affine reference '$targetVar'");
       } else if (targetVar != null && globals.contains(targetVar)) {
-        emit('LOAD32  R14, _$targetVar');
+        _emitGlobalAddr(14, targetVar);
         emit('ST32    (R14), R0', "Zero out destroyed global reference '$targetVar'");
       } else if (field != null) {
         _emitLvalueAddr(expr.expr, 14);
@@ -488,7 +488,7 @@ extension _Expressions on CodeGen {
         emit('ADD     R14, R1');
         emit('ST32    (R14), R0', 'Null reference');
         emit('ADD     R3, 1');
-        emit('BBRA    $lblLoop');
+        emit('JUMP    $lblLoop');
         emitLabel(lblDone);
       }
 
@@ -499,7 +499,7 @@ extension _Expressions on CodeGen {
         emit('ADD     R14, R15');
         emit('ST32    (R14), R1', "Update local reference '$targetVar' after resize");
       } else if (targetVar != null && globals.contains(targetVar)) {
-        emit('LOAD32  R14, _$targetVar');
+        _emitGlobalAddr(14, targetVar);
         emit('ST32    (R14), R1', "Update global reference '$targetVar' after resize");
       } else if (field != null) {
         emit('PUSH32  R1', 'Preserve resized pointer');
@@ -542,7 +542,7 @@ extension _Expressions on CodeGen {
           emit('ADD     R14, R15');
           emit('LD32    R$targetReg, (R14)', "Read reference for .exists() ('$varName')");
         } else if (globals.contains(varName)) {
-          emit('LOAD32  R14, _$varName');
+          _emitGlobalAddr(14, varName);
           emit('LD32    R$targetReg, (R14)',
               "Read global reference for .exists() ('$varName')");
         } else {
@@ -581,7 +581,7 @@ extension _Expressions on CodeGen {
       }
       final t = typeOf(name);
       if (boundAddrs.containsKey(name)) {
-        emitImmediate(14, boundAddrs[name]!);
+        _emitFixedAddr(14, boundAddrs[name]!);
         if (arrayLens.containsKey(name)) {
           emit('LD      R$targetReg, R14', "Address of bound array '$name'");
         } else {
@@ -597,7 +597,7 @@ extension _Expressions on CodeGen {
           _emitLoadTyped(targetReg, 14, t.name, t.isPtr);
         }
       } else {
-        emit('LOAD32  R14, _$name', "Address of global '$name'");
+        _emitGlobalAddr(14, name, "Address of global '$name'");
         if (arrayLens.containsKey(name)) {
           emit('LD      R$targetReg, R14', "Address of global array '$name'");
         } else {
@@ -617,7 +617,7 @@ extension _Expressions on CodeGen {
         genExpr(expr.operand, 1);
         emit('FBRA.Z  R1, $lblTrue');
         emit('LD      R$targetReg, 0');
-        emit('FBRA    $lblDone');
+        emit('JUMP    $lblDone');
         emitLabel(lblTrue);
         emit('LD      R$targetReg, 1');
         emitLabel(lblDone);
@@ -634,13 +634,13 @@ extension _Expressions on CodeGen {
         final name = lhs.name;
         final t = typeOf(name);
         if (boundAddrs.containsKey(name)) {
-          emitImmediate(14, boundAddrs[name]!);
+          _emitFixedAddr(14, boundAddrs[name]!);
         } else if (locals.containsKey(name)) {
           final offset = stackOffset - locals[name]!;
           emitImmediate(14, offset);
           emit('ADD     R14, R15');
         } else {
-          emit('LOAD32  R14, _$name');
+          _emitGlobalAddr(14, name);
         }
         _emitLoadTyped(1, 14, t.name, t.isPtr);
         emit('POP32   R2', 'Restore compound RHS');
@@ -1010,7 +1010,7 @@ extension _Expressions on CodeGen {
     emit('LD8     (R14), R12', 'Store byte');
     emit('ADD     R13, 1');
     emit('ADD     R14, 1');
-    emit('BBRA    $lblLoop');
+    emit('JUMP    $lblLoop');
     emitLabel(lblDone);
   }
 
@@ -1036,7 +1036,7 @@ extension _Expressions on CodeGen {
     emit('ADD     R1, 1', 'src++');
     emit('ADD     R13, 1', 'dst++');
     emit('SUB     R3, 1', 'room--');
-    emit('BBRA    $lblLoop', 'Copy next byte');
+    emit('JUMP    $lblLoop', 'Copy next byte');
     emitLabel(lblDone);
     emit('LD8     (R13), R0', 'Store null terminator');
   }
@@ -1049,7 +1049,7 @@ extension _Expressions on CodeGen {
       final lblEnd = newLabel('sc_and_end');
       final lblRhs = newLabel('sc_and_rhs');
       emit('FBRA.NZ R$targetReg, $lblRhs', 'Hop to RHS if LHS true');
-      emit('FBRA    $lblEnd', 'Short-circuit AND: exit with 0');
+      emit('JUMP    $lblEnd', 'Short-circuit AND: exit with 0');
       emitLabel(lblRhs);
       genExpr(expr.right, targetReg);
       emit('NEZ     R$targetReg', 'Normalize boolean result');
@@ -1061,11 +1061,11 @@ extension _Expressions on CodeGen {
       final lblEnd = newLabel('sc_or_end');
       final lblRhs = newLabel('sc_or_rhs');
       emit('FBRA.Z  R$targetReg, $lblRhs', 'Hop to RHS if LHS false');
-      emit('FBRA    $lblTrue', 'Short-circuit OR: exit with 1');
+      emit('JUMP    $lblTrue', 'Short-circuit OR: exit with 1');
       emitLabel(lblRhs);
       genExpr(expr.right, targetReg);
       emit('NEZ     R$targetReg', 'Normalize boolean result');
-      emit('FBRA    $lblEnd');
+      emit('JUMP    $lblEnd');
       emitLabel(lblTrue);
       emitImmediate(targetReg, 1);
       emitLabel(lblEnd);
@@ -1141,7 +1141,7 @@ extension _Expressions on CodeGen {
         }
         final t = typeOf(name);
         if (boundAddrs.containsKey(name)) {
-          emitImmediate(14, boundAddrs[name]!);
+          _emitFixedAddr(14, boundAddrs[name]!);
           _emitStoreTyped(14, 1, t.name, t.isPtr);
         } else if (locals.containsKey(name)) {
           final offset = stackOffset - locals[name]!;
@@ -1149,7 +1149,7 @@ extension _Expressions on CodeGen {
           emit('ADD     R14, R15');
           _emitStoreTyped(14, 1, t.name, t.isPtr);
         } else {
-          emit('LOAD32  R14, _$name');
+          _emitGlobalAddr(14, name);
           _emitStoreTyped(14, 1, t.name, t.isPtr);
         }
       }

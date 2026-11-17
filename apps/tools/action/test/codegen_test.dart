@@ -96,8 +96,8 @@ void main() {
         while (i < 3) { i += 1; continue; }
         for (u32 j : 0..3) { continue; }
       '''));
-      expect(asm, contains('BBRA    ._while_start'));
-      expect(asm, matches(r'FBRA    \._for_step_\d+ +; Continue: next loop iteration'));
+      expect(asm, contains('JUMP    ._while_start'));
+      expect(asm, matches(r'JUMP    \._for_step_\d+ +; Continue: next loop iteration'));
     });
 
     test('continue outside a loop or switch is an error', () {
@@ -424,11 +424,138 @@ void main() {
         void main() { trap(3); }
       ''');
       final v3 = asm.substring(asm.indexOf('_vector_3:'), asm.indexOf('_vector_4:'));
-      expect(v3, contains('RCALL   _on_serial'));
+      expect(v3, contains('LOAD_R14_32 _on_serial'));
+      expect(v3, contains('JMP     R14, R0'));
+      expect(v3, isNot(contains('FAST_EXIT_TRAP')));
       final v15 = asm.substring(asm.indexOf('_vector_15:'));
-      expect(v15.substring(0, v15.indexOf('.align')), contains('RCALL   _on_fault'));
+      expect(v15.substring(0, v15.indexOf('.align')), contains('LOAD_R14_32 _on_fault'));
       final v4 = asm.substring(asm.indexOf('_vector_4:'), asm.indexOf('_vector_5:'));
-      expect(v4, isNot(contains('RCALL')));
+      expect(v4, isNot(contains('LOAD_R14_32')));
+      expect(v4, contains('FAST_EXIT_TRAP'));
+      // The handler returns from the trap itself, and keeps no return address
+      final h = functionBody(asm, 'on_serial');
+      expect(h, contains('FAST_EXIT_TRAP'));
+      expect(h, isNot(contains('PUSH32  R14')));
+      expect(h, isNot(contains('RRET')));
+    });
+
+    test('every vector fits in 8 halfwords, aligned with TRAP_STRIDE_BYTES', () {
+      final asm = compileSource('''
+        trap(5) h() { }
+        void main() { }
+      ''');
+      int halfwords(String vector) {
+        final start = asm.indexOf('$vector:') + vector.length + 1;
+        final body = asm.substring(start, asm.indexOf('.align', start));
+        var n = 0;
+        for (final line in body.split('\n')) {
+          final op = line.trim().split(RegExp(r'\s+')).first;
+          n += switch (op) {
+            '' => 0,
+            'LOAD_R14_32' => 4, // LDI + 2 PUSH8
+            'FAST_EXIT_TRAP' => 2, // XCHGMOST + JMP
+            _ => 1,
+          };
+        }
+        return n;
+      }
+      expect(halfwords('_vector_reset') <= 8, isTrue, reason: '_vector_reset');
+      expect(halfwords('_vector_5') <= 8, isTrue, reason: '_vector_5');
+      expect(halfwords('_vector_6') <= 8, isTrue, reason: '_vector_6');
+      expect(asm, isNot(contains('.align  64')));
+      expect('.align  TRAP_STRIDE_BYTES'.allMatches(asm).length, 16);
+    });
+  });
+
+  group('startup code', () {
+    test('the reset vector jumps to _start, which sets SP and jumps to main', () {
+      final asm = compileSource('void main() { }');
+      final reset = asm.substring(asm.indexOf('_vector_reset:'), asm.indexOf('_vector_mbox:'));
+      expect(reset, contains('LOAD_R14_32 _start'));
+      final start = asm.substring(asm.indexOf('_start:'), asm.indexOf('JUMP    _main'));
+      expect(start, contains('LOAD24  R15, 0x010000'));
+      // main no longer sets the stack pointer itself
+      expect(functionBody(asm, 'main'), isNot(contains('LD      R15, R14')));
+    });
+
+    test('--stack-top sets the starting stack pointer', () {
+      final asm = compileSource('void main() { }', stackTop: 0x2000);
+      final start = asm.substring(asm.indexOf('_start:'), asm.indexOf('JUMP    _main'));
+      expect(start, contains('LOAD16  R15, 0x2000'));
+      expect(start, contains('0x00002000 (--stack-top)'));
+    });
+  });
+
+  group('fast globals', () {
+    test('are placed in the zero page from 0x0004, and their addresses load in one instruction', () {
+      final asm = compileSource('''
+        fast u32 ticks;
+        fast u8 flag = 3;
+        type Op = fn(u32) -> u32;
+        u32 dbl(u32 x) { return x * 2; }
+        fast Op op = dbl;
+        u32 slow;
+        void main() { ticks = 1; flag = 2; slow = ticks; }
+      ''');
+      final main = functionBody(asm, 'main');
+      expect(main, contains("LD      R14, 4"));
+      expect(main, contains("LD      R14, 8"));
+      expect(main, contains('LOAD32  R14, _slow'));
+      expect(asm, isNot(contains('_ticks:')));
+      expect(asm, contains('_slow:'));
+      // _start stores the starting values that are not zero
+      final start = asm.substring(asm.indexOf('_start:'), asm.indexOf('JUMP    _main'));
+      expect(start, contains("LD8     (R14), R1"));
+      expect(start, contains("LOAD32  R1, _dbl"));
+      expect(start, contains("LD      R14, 12"));
+    });
+
+    test('a global at a fixed address below 0x100 also loads in one instruction', () {
+      final asm = compileSource('u32 hot @ 0x40;\nvoid main() { hot = 1; }');
+      expect(functionBody(asm, 'main'), contains('LD      R14, 64'));
+    });
+
+    test('only single values can be fast, and only globals', () {
+      expect(compileErrorOf('fast u32 a[4];\nvoid main() { }'),
+          contains("'a' is an array; 'fast' applies only to single values"));
+      expect(compileErrorOf('fast string s[8];\nvoid main() { }'), contains("'s' is an array"));
+      expect(compileErrorOf('type P { u32 x; }\nfast P p;\nvoid main() { }'),
+          contains("'p' is a 'P' record"));
+      expect(compileErrorOf('fast const u32 K = 1;\nvoid main() { }'),
+          contains("constant 'K' cannot be 'fast'"));
+      expect(compileErrorOf('fast u32 x @ 0x80;\nvoid main() { }'),
+          contains("'x' has an address (@)"));
+      expect(compileErrorOf('void main() { fast u32 x; }'),
+          contains("'fast' applies only to global variables"));
+      expect(compileErrorOf('fast void f() { }\nvoid main() { }'),
+          contains("'fast' must be followed by a global variable"));
+      expect(compileErrorOf('type P { u32 x; }\nfast ref P r;\nvoid main() { }'), isNull);
+    });
+
+    test('when the zero page is full, the rest go to ordinary memory with a warning', () {
+      final decls = [for (var i = 0; i < 64; i++) 'fast u32 v$i;'].join('\n');
+      final notes = <CompileNote>[];
+      final asm = compileSource('$decls\nvoid main() { v63 = 1; }', notes: notes);
+      expect(notes.single.message,
+          contains("fast global 'v63' is placed in ordinary memory: the zero page (0x0004 to 0x00FF) is full"));
+      expect(asm, contains('_v63:'));
+      expect(asm, isNot(contains('_v62:')));
+    });
+
+    test('a program without main has no startup code to store a starting value', () {
+      final notes = <CompileNote>[];
+      final asm = compileSource('fast u32 a = 5;\nfast u32 b;\nu32 f() { return a + b; }', notes: notes);
+      expect(notes.single.message, contains("fast global 'a' is placed in ordinary memory"));
+      expect(asm, contains('_a:'));
+      expect(asm, isNot(contains('_b:')));
+    });
+  });
+
+  group('constants', () {
+    test('small negative numbers load with LOAD16S', () {
+      final asm = compileSource('void main() { s32 a = -300; s32 b = -5; }');
+      expect(functionBody(asm, 'main'), contains('LOAD16S R1, -300'));
+      expect(functionBody(asm, 'main'), contains('LD      R1, -5'));
     });
 
     test('handler errors', () {

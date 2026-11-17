@@ -63,7 +63,7 @@ This document has three parts:
 
 ## 1.1 Your first program
 
-Action programs start at `main`. On bare metal there is nowhere to "return to", so when `main` finishes, the processor sits in a halt loop.
+Action programs start at `main`, after the startup code has set up the stack. On bare metal there is nowhere to "return to", so when `main` finishes, the processor sits in a halt loop.
 
 Save this as `hello.act`:
 
@@ -803,6 +803,7 @@ build/tools/action [options] source.act [more.act ...]     # {tktk fix me}
 | `-fno-bounds-check` | Disable run-time bounds checks. |
 | `-freference-check` | Enable run-time reference checks (the default). |
 | `-fno-reference-check` | Disable run-time reference checks. |
+| `--stack-top ADDR` | The stack pointer the startup code sets (decimal or `0x` hex, a multiple of 4). Default: `0x00010000`. The stack grows down from it. |
 | `-h`, `--help` | Show usage. |
 
 The compiler stops at the first error, printing `action: error: …` and exiting with status 1. A command-line mistake exits with status 2.
@@ -827,7 +828,7 @@ The usual file extension is `.act`.
 ./pbuild main.act drivers.act asmlib.asm -o build/fw.bin # {tktk fix me}
 ```
 
-It accepts `.act` and `.asm` sources together, and passes `-D`, `-I`, the bounds-check flags and the reference-check flags through to the tools. `--sim` runs the binary in psim, `--debug` runs it under psim's debugger, and `--no-exit-on-reset` is passed to psim. If a tool it needs has not been built, pbuild says which `make` target builds it. If a tool fails, pbuild exits with that tool's status; after `--sim` it exits with psim's status (see [2.7](#27-running-in-the-simulator)).
+It accepts `.act` and `.asm` sources together, and passes `-D`, `-I`, `--stack-top`, the bounds-check flags and the reference-check flags through to the tools. `--sim` runs the binary in psim, `--debug` runs it under psim's debugger, and `--no-exit-on-reset` is passed to psim. If a tool it needs has not been built, pbuild says which `make` target builds it. If a tool fails, pbuild exits with that tool's status; after `--sim` it exits with psim's status (see [2.7](#27-running-in-the-simulator)).
 
 ## 2.2 Multi-file projects
 
@@ -903,15 +904,19 @@ A failed check executes `TRAP 15`, like a failed bounds check. `-fno-reference-c
 The generated assembly is organized as follows:
 
 1. A header comment, then `.include "lib/common.inc"`.
-2. **If the program defines `main`:** the trap vector table at `.org 0x00000100`, one vector every 64 bytes:
-   - vector 0, `_vector_reset`: sets the stack pointer to `0x00010000` and jumps to `_main`
-   - vectors 1–15 (`_vector_mbox`, then `_vector_2` … `_vector_15`): each is `FAST_ENTER_TRAP`, then `RCALL` of the trap handler if one is declared, then `FAST_EXIT_TRAP`
+2. **If the program defines `main`:** the trap vector table at `.org 0x00000100`, one vector every `TRAP_STRIDE_BYTES` (from `lib/common.inc`, 64 bytes today). Each vector fits in 8 halfwords:
+   - vector 0, `_vector_reset`: `LOAD_R14_32 _start` and `JMP R14, R0`, a jump to the startup code
+   - vectors 1–15 (`_vector_mbox`, then `_vector_2` … `_vector_15`): with a trap handler, `FAST_ENTER_TRAP`, `LOAD_R14_32` of the handler and `JMP R14, R0`, a jump to the handler, which returns from the trap itself; without one, `FAST_ENTER_TRAP` then `FAST_EXIT_TRAP`
 
-   Every vector is emitted, so no trap can land in the middle of code. The program's code starts at `0x500`.
+   Every vector is emitted, so no trap can land in the middle of code.
+
+   The **startup code**, `_start`, follows the table. It sets the stack pointer (R15) to `--stack-top` (default `0x00010000`), stores the starting values of the `fast` globals, and jumps to `_main`.
 3. One block per function, with label `_name`. Methods use the label `_Type.method`, and lambdas `_outer.name` (such as `_main.pow`).
-4. **Global variable section**: one label `_name` per global, each a whole number of words.
+4. **Global variable section**: one label `_name` per global, each a whole number of words. `fast` globals are not here: they are in the zero page and have no label (see [3.4](#34-declarations)).
 5. **String literal table**: `.asciz` entries.
 6. `.include "lib/alloc.asm"` for the heap runtime.
+
+Unconditional jumps are written `JUMP label`, a `pasm` instruction that assembles to a one-halfword `FBRA`/`BBRA` when the target is close enough and to a longer jump through R14 when it is not, so a function of any size assembles.
 
 Inline functions and prototypes produce no code of their own. `const` and `enum` produce no data.
 
@@ -945,17 +950,18 @@ You need this when you write `asm(...)` blocks or link to hand-written assembly.
 |----------|------|
 | R0 | always zero |
 | R1–R4 | argument slots 1–4, in order. R1 holds the return value. R1–R4 hold tuple return values. |
+| R5–R10 | preserved: compiled code never uses them (callee-saved, as in the Particle specification) |
 | R13 | compiler scratch |
-| R14 | link register (return address) and compiler scratch. The `LOAD16`/`LOAD24`/`LOAD32` and `RCALL` macros overwrite it. |
-| R15 | stack pointer (grows downward) |
+| R14 | link register (return address) and compiler scratch. The `LOAD16`/`LOAD24`/`LOAD32` and `RCALL` macros and long `JUMP`s overwrite it. |
+| R15 | stack pointer, by software convention (grows downward; set by the startup code, see `--stack-top`) |
 
 - Calls use `RCALL _name`, and returns use `RRET`. The callee pushes R14 on entry and restores it before returning.
 - Indirect calls through function values use `JMP Rn, R14`.
 - Scalars are passed by value. Instances of user-defined types are passed by **address**. An open array takes **two** slots: data address, then length. A method's receiver (`this`) takes the first slot.
 - **Slots 1–4** go in R1–R4. **Slots 5 and up** go on the stack: before evaluating the arguments, the caller reserves 4 bytes per extra slot below its stack pointer, with slot 5 at the lowest address, and releases the area after the call. The callee finds slot 5 just above its saved return address.
-- **No registers are preserved across calls.** Assume R1–R14 are clobbered.
+- **R5–R10 are preserved across calls**, because compiled code never uses them. Inline assembly and assembly routines must preserve them too. Assume R1–R4 and R11–R14 are clobbered.
 - Labels: functions and globals are `_name`. Methods are `_Type.method` and lambdas `_outer.name`. A name in Action cannot contain `.`, so these never collide with a function's own name: a function may be called `Point_move` alongside the method `Point.move`.
-- **Trap handlers** are called from their vector after `FAST_ENTER_TRAP` swaps R1–R14 with the shadow registers, so the interrupted code's registers are untouched.
+- **Trap handlers** are jumped to from their vector after `FAST_ENTER_TRAP` swaps R1–R14 with the shadow registers, so the interrupted code's registers are untouched. A handler keeps no return address of its own: it ends with `FAST_EXIT_TRAP`, which swaps the registers back and returns to the interrupted code.
 
 Inline assembly is copied verbatim into the output, one instruction per line:
 
@@ -1058,6 +1064,9 @@ Every error is printed as `action: error: …`. A message about the program star
 | `method '…' of '…' is not declared` | A method call on a type that has no such method (for a string, no string function of that name; see [1.5](#15-arrays-and-strings)). Arrays and numbers have no methods. |
 | `global array '…' is given its values in braces` | A global array was given something other than a brace initializer (or, for a string, a string literal). |
 | `Redefinition of function 'f' in …` | `f` is defined in two source files. |
+| `'…' is an array; 'fast' applies only to single values …` | `fast` was put on an array, string, tuple or record stored in place (see [3.4](#34-declarations)). |
+| `'fast' applies only to global variables, declared outside functions` | `fast` was used inside a function. |
+| `fast global '…' is placed in ordinary memory: …` | A warning: the zero page is full, or the program has no `main` to store the starting value. The variable works as an ordinary global. |
 | `Imported file '…' not found` | No search location contains the file. |
 | `'struct' is deprecated; use 'type Name { ... }'` | Old syntax was used. |
 | `Circular dependency or unknown type in struct/type definition` | Types contain each other by value, or a field's type is undefined. |
@@ -1151,7 +1160,7 @@ make llvm-tools                       # builds build/tools/action_llvm
 | `-l LIB`, `-L DIR`, `file.c`, `file.o`, `file.a` | Linked in by clang. |
 | `-O0` … `-O3`, `-Os` | Optimization (default `-O0`). |
 | `-g` / `-g0` | Debug information (default on). |
-| `-fno-bounds-check`, `-fno-reference-check` | As for the compiler. |
+| `-fno-bounds-check`, `-fno-reference-check` | As for the compiler. (`--stack-top` is for Particle only: the program uses the stack the operating system gives it.) |
 | `--emit-llvm` | Stop after the `.ll`. |
 | `--run [-- ARGS]` | Run the program; `llbuild` exits with its exit status. |
 | `CLANG=…` | Use another clang. |
@@ -1425,6 +1434,23 @@ ref Type name[D];              // array of references (see 3.9)
 - `ref Type name;` declares a reference that starts **empty**; `Type name = 0;` is an error (there is no null).
 - **Bound variables** (`@`) allocate no storage. Every access goes to the given address. Bound variables can be declared at the top level or inside functions.
 - `volatile` is accepted before a top-level declaration and has no effect. Accesses to bound variables are never optimized away.
+
+### `fast` globals
+
+```
+fast Type name;
+fast Type name = constant;
+```
+
+`fast` before a global puts it in the **zero page**, the first 256 bytes of memory below the vector table, where its address loads in one instruction (`LD R14, address`) instead of a `LOAD32`. Use it for the few globals a program touches most.
+
+- Only globals holding a single value can be `fast`: numbers, `bool`, function values and references. An array, string, tuple or record stored in place, a constant, and a variable with an `@` address are errors, and so is `fast` inside a function.
+- Each `fast` global takes one word, from `0x0004` up to `0x00FF` (63 of them), in declaration order. The first word is left unused, so a null reference never points at a variable.
+- When the zero page is full, the remaining `fast` globals are placed in ordinary memory, with a warning.
+- The zero page is not part of the program image, so the startup code stores the starting values (`fast u32 n = 5;`). One with no value, or `0`, starts zero. A program without `main` has no startup code, so a `fast` global with a starting value is placed in ordinary memory there, with a warning.
+- A `fast` global has no label in the assembly.
+- A global bound with `@` to an address below `0x100` gets the same one-instruction address load.
+- The LLVM compiler places `fast` globals like any other global.
 
 ### Brace initializers
 
@@ -1713,7 +1739,7 @@ A lambda is a function value, written where one is expected: given to a variable
 
 **Prototypes:** a function must be declared before the program can call it: by its definition (anywhere in the program) or by a prototype. Calling an undeclared name is an error. Every prototype must be matched by a definition in the Action sources, which may come later or in another file. A routine written in assembly is declared with `asm` in front of its prototype instead; it must not also be defined in Action. Its label is `_name`, and it follows the calling convention in [2.6](#26-calling-convention-and-inline-assembly).
 
-**`main`** is special. It sets up the stack and runs, and when it returns the processor enters a halt loop. `main` may be declared `void` or `u32`. It takes no parameters, or the command line as `ref string args[]`:
+**`main`** is special. The startup code sets up the stack (at `--stack-top`) and jumps to it, and when it returns the processor enters a halt loop. `main` may be declared `void` or `u32`. It takes no parameters, or the command line as `ref string args[]`:
 
 ```c
 u32 main(ref string args[]) {
@@ -2025,7 +2051,7 @@ Constant expressions are computed **exactly**, with no limit on size: `-1 < 0` i
 
 ## 3.14 Keywords
 
-**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `extern` `f32` `f64` `false` `fn` `for` `if` `import` `inline` `ref` `return` `s8` `s16` `s32` `s64` `sizeof` `string` `switch` `true` `type` `u8` `u16` `u32` `u64` `verify` `void` `volatile` `while`
+**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `extern` `f32` `f64` `false` `fast` `fn` `for` `if` `import` `inline` `ref` `return` `s8` `s16` `s32` `s64` `sizeof` `string` `switch` `true` `type` `u8` `u16` `u32` `u64` `verify` `void` `volatile` `while`
 
 **Built-in names** (identifiers with special meaning): `this`, `trap`, `readFifo`, `writeFifo`, `tryReadFifo`, `peek8`, `peek16`, `peek32`, `poke8`, `poke16`, `poke32`, `callAddr`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `unset`, `sameAs`, `copyFrom`, `len`, `capacity`. `task` starts a task declaration when it is followed by a name and `(`. `yield`, `waitUntil` and `pkExit` are task operations when `lib/protokernel.act` is imported.
 

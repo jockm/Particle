@@ -639,4 +639,106 @@ void main() {
           contains("a lambda cannot be a global's starting value"));
     });
   });
+
+  // From apps/tools/test_tuple_diagnostics.py and
+  // tools/test_method_fn_ptr_negatives.py, which these replace
+  group('tuple and method reference errors', () {
+    test('Bare tuple in scalar expression', () {
+      expect(checkErrorOf('''void main() {
+    u32 x = 1 + (2, 3);
+}
+'''),
+          contains('Bare tuple expression not permitted in scalar expression context'));
+    });
+    test('Scalar function returning tuple', () {
+      expect(checkErrorOf('''u32 bad_scalar() {
+    return (1, 2);
+}
+void main() {}
+'''),
+          contains("has scalar return type 'u32', cannot return tuple"));
+    });
+    test('Tuple function returning scalar', () {
+      expect(checkErrorOf('''(u32, u32) bad_tuple() {
+    return 42;
+}
+void main() {}
+'''),
+          contains('declared with tuple return of arity 2, cannot return scalar or void'));
+    });
+    test('Tuple function returning void', () {
+      expect(checkErrorOf('''(u32, u32) bad_void() {
+    return;
+}
+void main() {}
+'''),
+          contains('declared with tuple return of arity 2, cannot return scalar or void'));
+    });
+    test('Tuple return arity mismatch (too few)', () {
+      expect(checkErrorOf('''(u32, u32, u32) bad_arity() {
+    return (1, 2);
+}
+void main() {}
+'''),
+          contains("Tuple return arity mismatch in 'bad_arity': expected 3, got 2"));
+    });
+    test('Tuple return arity mismatch (too many)', () {
+      expect(checkErrorOf('''(u32, u32) bad_arity_high() {
+    return (1, 2, 3);
+}
+void main() {}
+'''),
+          contains("Tuple return arity mismatch in 'bad_arity_high': expected 2, got 3"));
+    });
+    test('Exceeding ABI capacity (> 4 scalar return values)', () {
+      expect(checkErrorOf('''(u32, u32, u32, u32, u32) bad_abi() {
+    return (1, 2, 3, 4, 5);
+}
+void main() {}
+'''),
+          contains('Maximum 4 scalar return values supported in Particle ABI'));
+    });
+    const calculator = '''type Calculator {
+    u32 base;
+};
+
+type CalcMethod = fn(Calculator, u32) -> u32;
+
+u32 Calculator.add(u32 val) {
+    return this.base + val;
+}
+''';
+    test('Instance method extraction rejected', () {
+      expect(checkErrorOf(calculator + '''void main() {
+    Calculator calc;
+    calc.base = 10;
+    CalcMethod op = calc.add;
+}
+'''),
+          contains("Cannot extract unbound method reference from instance 'calc'"));
+    });
+    test('Signature mismatch (missing receiver) rejected', () {
+      expect(checkErrorOf(calculator + '''type BadMethod = fn(u32, u32) -> u32;
+
+void main() {
+    BadMethod bad = Calculator.add;
+}
+'''),
+          contains("Function signature mismatch: cannot assign 'Calculator.add'"));
+    });
+    test('Untyped u32 assignment rejected', () {
+      expect(checkErrorOf(calculator + '''void main() {
+    u32 raw_ptr = Calculator.add;
+}
+'''),
+          contains("Cannot implicitly convert function reference to non-function type 'u32'"));
+    });
+    test('Nonexistent method reference rejected', () {
+      expect(checkErrorOf(calculator + '''void main() {
+    CalcMethod op = Calculator.nonexistent;
+}
+'''),
+          contains("Type 'Calculator' has no method 'nonexistent'"));
+    });
+  });
 }

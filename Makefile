@@ -428,6 +428,10 @@ vscode-ext:
 	@command -v npm > /dev/null || { echo "[FAIL] npm not found: install Node.js 20 or later (it includes npm)"; exit 1; }
 	@mkdir -p $(BUILD_DIR)
 	@for e in $(VSCODE_EXTS); do \
+		if [ ! -f "$(VSCODE_DIR)/$$e/package.json" ]; then \
+			echo "[FAIL] $(VSCODE_DIR)/$$e/package.json is missing: the extension's source is incomplete."; \
+			exit 1; \
+		fi; \
 		echo "==> Packaging the $$e VS Code extension..."; \
 		( cd $(VSCODE_DIR)/$$e && npm install --no-audit --no-fund && npm run compile && \
 		  npx vsce package --skip-license --allow-missing-repository -o ../../../$(BUILD_DIR)/$$e.vsix ) || exit 1; \

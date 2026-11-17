@@ -14,7 +14,7 @@ extension _Statements on CodeGen {
       }
       return;
     } else if (stmt is BreakNode) {
-      emit('FBRA    ${breakStack.last}', 'Break jump');
+      emit('JUMP    ${breakStack.last}', 'Break jump');
       return;
     } else if (stmt is ContinueNode) {
       final ctx = flowStack.last;
@@ -23,10 +23,10 @@ extension _Statements on CodeGen {
         final next = ctx.currentCase + 1;
         final target =
             next < ctx.caseLabels.length ? ctx.caseLabels[next] : ctx.endLabel!;
-        emit('FBRA    $target', 'Continue: fall through to next case');
+        emit('JUMP    $target', 'Continue: fall through to next case');
       } else {
         // A while loop re-tests its condition above; a for loop steps below.
-        final op = ctx.continueBackward ? 'BBRA' : 'FBRA';
+        const op = 'JUMP';
         emit('$op    ${ctx.loopTarget}', 'Continue: next loop iteration');
       }
       return;
@@ -60,15 +60,15 @@ extension _Statements on CodeGen {
         emitImmediate(2, val);
         emit('SUB     R3, R2');
         emit('FBRA.Z  R3, $lblMatch', 'Hop if matched (1 instruction)');
-        emit('FBRA    $lblSkip', 'Skip to next case check (8-bit)');
+        emit('JUMP    $lblSkip', 'Skip to next case check');
         emitLabel(lblMatch);
-        emit('FBRA    $cLbl', 'Wide dispatch to case $val (8-bit)');
+        emit('JUMP    $cLbl', 'Wide dispatch to case $val');
         emitLabel(lblSkip);
       }
 
       // Default or exit branch
       final targetDefault = defaultHolder[0] ?? lblEnd;
-      emit('FBRA    $targetDefault', 'Dispatch default or exit');
+      emit('JUMP    $targetDefault', 'Dispatch default or exit');
 
       // Emit nested body (which contains the CaseLabelNodes and code).
       // Each case ends with an implicit break; 'continue' falls through.
@@ -133,13 +133,13 @@ extension _Statements on CodeGen {
         final name = lhs.name;
         final t = typeOf(name);
         if (boundAddrs.containsKey(name)) {
-          emitImmediate(14, boundAddrs[name]!);
+          _emitFixedAddr(14, boundAddrs[name]!);
         } else if (locals.containsKey(name)) {
           final offset = stackOffset - locals[name]!;
           emitImmediate(14, offset);
           emit('ADD     R14, R15');
         } else {
-          emit('LOAD32  R14, _$name');
+          _emitGlobalAddr(14, name);
         }
         _emitLoadTyped(1, 14, t.name, t.isPtr);
         emit('POP32   R2', 'Restore compound RHS');
@@ -185,7 +185,7 @@ extension _Statements on CodeGen {
       emit('LD16     (R14), R1', 'Set continuation counter');
       final yielded = _pkStatus('PK_YIELDED');
       emitImmediate(1, yielded);
-      emit('FBRA     ._epilogue_$currentFuncName');
+      emit('JUMP    ._epilogue_$currentFuncName');
       emitLabel('._step_${currentFuncName}_${stmt.stepConst}');
       return;
     } else if (stmt is WaitUntilNode) {
@@ -200,7 +200,7 @@ extension _Statements on CodeGen {
       emit('LD16     (R14), R1', 'Set continuation counter');
       final waiting = _pkStatus('PK_WAITING');
       emitImmediate(1, waiting);
-      emit('FBRA     ._epilogue_$currentFuncName');
+      emit('JUMP    ._epilogue_$currentFuncName');
       emitLabel(lblContinue);
       return;
     } else if (stmt is PkExitNode) {
@@ -209,7 +209,7 @@ extension _Statements on CodeGen {
       emit('LD16     (R14), R0', 'Reset continuation counter (lc = 0)');
       final exited = _pkStatus('PK_EXITED');
       emitImmediate(1, exited);
-      emit('FBRA     ._epilogue_$currentFuncName', 'Exit coroutine');
+      emit('JUMP    ._epilogue_$currentFuncName', 'Exit coroutine');
       return;
     } else if (stmt is VerifyNode) {
       return;
@@ -235,7 +235,7 @@ extension _Statements on CodeGen {
           stackOffset -= 4;
         }
       }
-      emit('FBRA    ._epilogue_$currentFuncName');
+      emit('JUMP    ._epilogue_$currentFuncName');
     } else if (stmt is TupleAssignNode) {
       // Save return registers if RHS is evaluated
       genExpr(stmt.expr, 1);
@@ -258,7 +258,7 @@ extension _Statements on CodeGen {
           }
           _emitStoreTyped(14, regSrc, t.name, t.isPtr);
         } else if (globals.contains(name)) {
-          emit('LOAD32  R14, _$name');
+          _emitGlobalAddr(14, name);
           _emitStoreTyped(14, regSrc, t.name, t.isPtr);
         }
       }
@@ -266,7 +266,7 @@ extension _Statements on CodeGen {
       final retTypeInfo = currentFuncRet;
       if (currentFuncIsTask && inlineReturnStack.isEmpty) {
         // A task's result is always its status: 'return;' ends the task
-        emit('FBRA    ._task_end_$currentFuncName', 'End the task');
+        emit('JUMP    ._task_end_$currentFuncName', 'End the task');
         return;
       }
       if (stmt.expr != null) {
@@ -280,9 +280,9 @@ extension _Statements on CodeGen {
           emitImmediate(14, frameExtra);
           emit('ADD     R15, R14', 'Unwind inline stack frame on return');
         }
-        emit('FBRA    $lblInlineEnd', 'Return from inline function');
+        emit('JUMP    $lblInlineEnd', 'Return from inline function');
       } else {
-        emit('FBRA    ._epilogue_$currentFuncName');
+        emit('JUMP    ._epilogue_$currentFuncName');
       }
     } else if (stmt is IfNode) {
       // Attempt compile-time constant branch pruning (replaces preprocessor #if/#ifdef)
@@ -312,7 +312,7 @@ extension _Statements on CodeGen {
 
       genStmt(stmt.thenBody);
       if (stmt.elseBody != null) {
-        emit('FBRA     $lblEnd');
+        emit('JUMP    $lblEnd');
         emitLabel(lblElse);
         genStmt(stmt.elseBody!);
       }
@@ -328,7 +328,7 @@ extension _Statements on CodeGen {
       flowStack.add(_FlowContext.loop(lblLoop));
       genStmt(stmt.body);
       flowStack.removeLast();
-      emit('BBRA     $lblLoop', 'Loop back');
+      emit('JUMP    $lblLoop', 'Loop back');
       emitLabel(lblEnd);
       breakStack.removeLast();
     } else if (stmt is ForRangeNode) {
@@ -371,7 +371,7 @@ extension _Statements on CodeGen {
         emit('SLT     R1, R2', 'Loop condition i < end');
       }
       emit('FBRA.NZ R1, $lblBody', 'Enter for body if true');
-      emit('FBRA    $lblEnd', 'Exit for loop if false');
+      emit('JUMP    $lblEnd', 'Exit for loop if false');
 
       // 4. Body
       emitLabel(lblBody);
@@ -392,7 +392,7 @@ extension _Statements on CodeGen {
       emit('ST32    (R14), R1');
 
       // 6. Branch back
-      emit('BBRA    $lblLoop', 'Loop back');
+      emit('JUMP    $lblLoop', 'Loop back');
 
       // 7. Epilogue
       emitLabel(lblEnd);
@@ -413,7 +413,7 @@ extension _Statements on CodeGen {
     if (ctx != null) {
       final idx = ctx.caseLabels.indexOf(label);
       if (idx > 0 || (idx == 0 && ctx.currentCase >= 0)) {
-        emit('FBRA    ${ctx.endLabel}', 'Implicit break at end of case');
+        emit('JUMP    ${ctx.endLabel}', 'Implicit break at end of case');
       }
       if (idx >= 0) ctx.currentCase = idx;
     }
@@ -424,7 +424,7 @@ extension _Statements on CodeGen {
     // A condition that is an operation on constants is decided now
     final folded = _foldedCondition(condExpr);
     if (folded != null) {
-      if (!folded) emit('FBRA     $falseTarget', 'Constant condition is false');
+      if (!folded) emit('JUMP    $falseTarget', 'Constant condition is false');
       return;
     }
     // Optimized control-flow branch fusion for relational comparisons and short-circuiting
@@ -484,16 +484,16 @@ extension _Statements on CodeGen {
       emit('FBRA.Z   R1, $lblHop', 'Hop if condition false');
     }
 
-    emit('FBRA     $lblCont', 'Enter body');
+    emit('JUMP    $lblCont', 'Enter body');
     emitLabel(lblHop);
-    emit('FBRA     $falseTarget', 'Wide branch to target (8-bit)');
+    emit('JUMP    $falseTarget', 'Wide branch to target');
     emitLabel(lblCont);
   }
 
   void _genCondJumpTrue(AstNode condExpr, String trueTarget) {
     final folded = _foldedCondition(condExpr);
     if (folded != null) {
-      if (folded) emit('FBRA    $trueTarget', 'Constant condition is true');
+      if (folded) emit('JUMP    $trueTarget', 'Constant condition is true');
       return;
     }
     // Jump to true_target if cond_expr evaluates to TRUE (!= 0)
@@ -510,9 +510,9 @@ extension _Statements on CodeGen {
       final lblCont = newLabel('hop_cont');
       final lblHop = newLabel('hop_true');
       emit('FBRA.NZ R1, $lblHop', 'Hop if condition true (!= 0)');
-      emit('FBRA    $lblCont', 'Fall through');
+      emit('JUMP    $lblCont', 'Fall through');
       emitLabel(lblHop);
-      emit('FBRA    $trueTarget', 'Wide branch to true target (8-bit)');
+      emit('JUMP    $trueTarget', 'Wide branch to true target');
       emitLabel(lblCont);
     }
   }

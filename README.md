@@ -21,6 +21,7 @@
 particle/
 ├── README.md                          # Project root overview and quickstart
 ├── Documentation/
+│   ├── action-language-guide.md       # Action language guide and reference
 │   ├── particle_spec.md               # Master architectural specification
 │   ├── pasm_assembler.md              # Macro assembler documentation
 │   ├── psim_simulator.md              # Simulator & p4db debugger reference
@@ -52,7 +53,6 @@ particle/
 │       ├── pasm_lsp/                  # Assembly language server
 │       ├── psim/                      # Instruction-accurate simulator & p4db
 │       └── vscode/                    # VS Code extensions for Action and Particle assembly
-└── tools/                             # The original Python tools (act16c.py, pasm.py, psim.py)
 ```
 
 ---
@@ -125,7 +125,8 @@ optimization levels (`-O0` to `-O3`); the programs carry debug information for
 `lldb`/`gdb`. The language is the same, with additions only the LLVM compiler
 has so far (`u64`/`s64`, `f32`/`f64`, and `extern` C functions such as
 `printf`); Particle hardware features (inline assembly, FIFOs, trap handlers)
-are not available. See section 2.10 of the Action language guide.
+are not available. See section 2.10 of the
+[Action language guide](Documentation/action-language-guide.md).
 
 One program can target both: a file that starts with `//act:build llvm` (or
 `particle`) is compiled only for that target, and `pbuild` and `llbuild`

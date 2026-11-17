@@ -5,9 +5,10 @@
 ; ==============================================================================
 .include "lib/common.inc"
 
-.define REG_BASE        0x0C00  ; Local TCM base for x0..x31 (32 words = 128 bytes)
-.define SCOREBOARD_MASK 0x0C80  ; Local TCM address for 32-bit in-flight bitmask
-.define BRANCH_SAVED_MASK 0x0C84  ; Scoreboard snapshot before latest branch/jump
+; Zero Page Layout (0x0000..0x00FF) - Single-instruction access via LD R14, addr8
+.define REG_BASE          0x0000  ; Local TCM base for x0..x31 (32 words = 128 bytes: 0x00..0x7F)
+.define SCOREBOARD_MASK   0x0080  ; Local TCM address for 32-bit in-flight bitmask
+.define BRANCH_SAVED_MASK 0x0084  ; Scoreboard snapshot before latest branch/jump
 
 .org 0x00000100
 _reset_vector:
@@ -18,7 +19,7 @@ _reset_vector:
     ; --------------------------------------------------------------------------
     ; Initialize Architectural Register File (x0..x31 = 0)
     ; --------------------------------------------------------------------------
-    LOAD16  R4, REG_BASE
+    LD      R4, REG_BASE
     LD      R5, 0               ; Zero value
     LOAD16  R6, 32              ; 32 registers
 _init_rf_loop:
@@ -27,10 +28,10 @@ _init_rf_loop:
     BBRA.NZ R6, _init_rf_loop
 
     ; Clear Scoreboard mask & branch snapshot (no registers in flight)
-    LOAD16  R4, SCOREBOARD_MASK
-    ST32    (R4), R5
-    LOAD16  R4, BRANCH_SAVED_MASK
-    ST32    (R4), R5
+    LD      R14, SCOREBOARD_MASK
+    ST32    (R14), R5
+    LD      R14, BRANCH_SAVED_MASK
+    ST32    (R14), R5
 
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
@@ -42,10 +43,10 @@ _init_rf_loop:
 .org 0x00000140
 _branch_flush_handler:
     ; Restore Scoreboard mask to pre-branch snapshot (preserves older in-flight instructions)
-    LOAD16  R4, BRANCH_SAVED_MASK
-    LD32    R5, (R4)
-    LOAD16  R4, SCOREBOARD_MASK
-    ST32    (R4), R5
+    LD      R14, BRANCH_SAVED_MASK
+    LD32    R5, (R14)
+    LD      R14, SCOREBOARD_MASK
+    ST32    (R14), R5
 
     ; Jump back to main decode loop
     LOAD16  R14, _id_main_loop
@@ -72,26 +73,24 @@ _do_wb_read:
     ; Check if Rd == 0 (x0 is hardwired zero; skip write to register file)
     FBRA.Z    R4, _clear_wb_scoreboard
 
-    ; Commit to local architectural register: REG_BASE + (Rd << 2)
-    LOAD16    R6, REG_BASE
+    ; Commit to local architectural register: REG_BASE (0x0000) + (Rd << 2)
     LD        R7, R4
     SHIFTL    R7, 2
-    ADD       R6, R7
-    ST32      (R6), R5          ; Store committed value
+    ST32      (R7), R5          ; Store committed value directly in Page Zero
 
 _clear_wb_scoreboard:
     ; Clear bit in scoreboard & branch snapshot: mask &= ~(1 << Rd)
     LD      R7, 1
     SHIFTL  R7, R4              ; R7 = 1 << Rd
     NOT     R7                  ; R7 = ~(1 << Rd)
-    LOAD16  R6, SCOREBOARD_MASK
-    LD32    R8, (R6)
+    LD      R14, SCOREBOARD_MASK
+    LD32    R8, (R14)
     AND     R8, R7
-    ST32    (R6), R8
-    LOAD16  R6, BRANCH_SAVED_MASK
-    LD32    R8, (R6)
+    ST32    (R14), R8
+    LD      R14, BRANCH_SAVED_MASK
+    LD32    R8, (R14)
     AND     R8, R7
-    ST32    (R6), R8
+    ST32    (R14), R8
 
 _poll_fetch_queue:
     ; --------------------------------------------------------------------------
@@ -117,9 +116,9 @@ _fetch_empty:
 _drain_flush_token:
     FIFO.R  R11, R1             ; Discard instruction word
     ; Pipeline bubble: clear scoreboard mask on flush
-    LOAD16  R6, SCOREBOARD_MASK
+    LD      R14, SCOREBOARD_MASK
     LD      R7, 0
-    ST32    (R6), R7
+    ST32    (R14), R7
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -164,8 +163,8 @@ _decode_fields:
     ; 4. Data Hazard Interlocking (Scoreboard Resolution)
     ; --------------------------------------------------------------------------
 _check_hazard:
-    LOAD16  R6, SCOREBOARD_MASK
-    LD32    R9, (R6)
+    LD      R14, SCOREBOARD_MASK
+    LD32    R9, (R14)
 
     ; --- Test Rs1 dependency ---
     LD      R6, 0
@@ -235,49 +234,44 @@ _do_stall_wait:
     FIFO.R    R5, R3            ; Pop committed data
 
     FBRA.Z  R4, _clear_stalled_bit
-    LOAD16  R6, REG_BASE
+    ; Commit to Page Zero register table: REG_BASE (0x0000) + (Rd << 2)
     LD      R8, R4
     SHIFTL  R8, 2
-    ADD     R6, R8
-    ST32    (R6), R5            ; Update register table
+    ST32    (R8), R5            ; Update register table
 
 _clear_stalled_bit:
     LD      R8, 1
     SHIFTL  R8, R4
     NOT     R8
-    LOAD16  R6, SCOREBOARD_MASK
-    LD32    R9, (R6)
+    LD      R14, SCOREBOARD_MASK
+    LD32    R9, (R14)
     AND     R9, R8
-    ST32    (R6), R9
-    LOAD16  R6, BRANCH_SAVED_MASK
-    LD32    R9, (R6)
+    ST32    (R14), R9
+    LD      R14, BRANCH_SAVED_MASK
+    LD32    R9, (R14)
     AND     R9, R8
-    ST32    (R6), R9
+    ST32    (R14), R9
     LOAD16  R14, _check_hazard  ; Re-evaluate hazard state (R7/Rs2 preserved)
     JMP     R14, R0
 
 _hazard_clear:
     ; --------------------------------------------------------------------------
-    ; 5. Read Architectural Operands
+    ; 5. Read Architectural Operands (Zero Page REG_BASE = 0x0000)
     ; --------------------------------------------------------------------------
     ; Read OpA (Rs1)
     LD      R5, 0               ; x0 is hardwired to 0
     FBRA.Z  R15, _read_rs2
-    LOAD16  R6, REG_BASE
     LD      R9, R15
     SHIFTL  R9, 2
-    ADD     R6, R9
-    LD32    R5, (R6)            ; R5 = Rs1 Value
+    LD32    R5, (R9)            ; R5 = Rs1 Value
 
 _read_rs2:
     ; Read OpB (Rs2)
     LD      R6, 0               ; x0 is hardwired to 0
     FBRA.Z  R7, ._skip_rs2_read
-    LOAD16  R14, REG_BASE
     LD      R9, R7
     SHIFTL  R9, 2
-    ADD     R14, R9
-    LD32    R6, (R14)           ; R6 = Rs2 Value
+    LD32    R6, (R9)            ; R6 = Rs2 Value
 ._skip_rs2_read:
 
     ; --------------------------------------------------------------------------
@@ -506,7 +500,7 @@ _pack_imm_ctrl:
 _dispatch_packet:
     ; If Rd != 0, set destination reservation in scoreboard
     FBRA.Z  R13, _push_to_ex
-    LOAD16  R14, SCOREBOARD_MASK
+    LD      R14, SCOREBOARD_MASK
     LD32    R8, (R14)
     LD      R6, 1
     SHIFTL  R6, R13
@@ -747,9 +741,9 @@ _emit_branch:
     OR      R7, 1               ; Valid bit
 
     ; Snapshot scoreboard before branch
-    LOAD16  R14, SCOREBOARD_MASK
+    LD      R14, SCOREBOARD_MASK
     LD32    R8, (R14)
-    LOAD16  R14, BRANCH_SAVED_MASK
+    LD      R14, BRANCH_SAVED_MASK
     ST32    (R14), R8
     ; 4. Push 4-word token packet to Core 2 via Channel 1 (R2)
     FIFO.W  R7, R2              ; Word 0: Control Word
@@ -926,7 +920,7 @@ _emit_jal:
     SHIFTL  R7, 1
     OR      R4, R7              ; R4 = J-Immediate jump offset
 
-    LOAD16  R14, SCOREBOARD_MASK
+    LD      R14, SCOREBOARD_MASK
     LD32    R8, (R14)
     FBRA.Z  R13, ._jal_no_sb
     LD      R7, 1
@@ -934,7 +928,7 @@ _emit_jal:
     OR      R8, R7
     ST32    (R14), R8
 ._jal_no_sb:
-    LOAD16  R14, BRANCH_SAVED_MASK
+    LD      R14, BRANCH_SAVED_MASK
     ST32    (R14), R8
     LOAD16  R7, 0x09            ; JAL uop
     SHIFTL  R7, 12
@@ -951,7 +945,7 @@ _emit_jal:
     JMP     R14, R0
 
 _emit_jalr:
-    LOAD16  R14, SCOREBOARD_MASK
+    LD      R14, SCOREBOARD_MASK
     LD32    R8, (R14)
     FBRA.Z  R13, ._jalr_no_sb
     LD      R7, 1
@@ -959,7 +953,7 @@ _emit_jalr:
     OR      R8, R7
     ST32    (R14), R8
 ._jalr_no_sb:
-    LOAD16  R14, BRANCH_SAVED_MASK
+    LD      R14, BRANCH_SAVED_MASK
     ST32    (R14), R8
     LOAD16  R7, 0x0A            ; JALR uop
     SHIFTL  R7, 12

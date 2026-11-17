@@ -1,0 +1,49 @@
+// test_fast_globals: globals marked 'fast' live in the zero page on
+// Particle (and are ordinary globals with LLVM). Their starting values are
+// stored by the startup code, and they behave like any other global.
+// Passes with trap(0); fails with trap(15).
+
+type Op = fn(u32) -> u32;
+
+type Counter {
+    u32 n;
+};
+
+u32 twice(u32 x) {
+    return x * 2;
+}
+
+fast u32 ticks;
+fast u8 small = 200;
+fast s32 below = -300;
+fast bool ready = true;
+fast Op op = twice;
+fast ref Counter counter;
+u32 ordinary = 7;
+
+void tick() {
+    ticks = ticks + 1;
+}
+
+void main() {
+    u32 ok = 1;
+
+    if (ticks != 0 || small != 200 || below != -300 || !ready || ordinary != 7) ok = 0;
+    if (op(21) != 42) ok = 0;
+
+    tick();
+    tick();
+    if (ticks != 2) ok = 0;
+
+    small = small + 55;
+    if (small != 255) ok = 0;
+
+    counter = Counter.create(n: 5);
+    counter.n = counter.n + ticks;
+    if (counter.n != 7) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}
