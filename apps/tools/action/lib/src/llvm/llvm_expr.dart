@@ -849,7 +849,10 @@ extension _LlvmExpressions on LlvmGen {
     var (targetFunc, embedOffset) = _resolveMethod(sName, mName);
     targetFunc ??= methodFuncName(sName, mName);
     String rcv;
-    if (rcvNode is CallNode) {
+    if (rcvNode is CallNode ||
+        (sName == 'string' && rcvNode is VarAccessNode && !arrayLens.containsKey(rcvNode.name))) {
+      // A string variable that is not a fixed array (a parameter, an open
+      // array, a heap string) holds the string's address
       rcv = _conv(_expr(rcvNode), 'ptr').v;
     } else if (_storedRefName(rcvNode) != null) {
       rcv = _conv(_expr(rcvNode), 'ptr').v;
@@ -867,6 +870,11 @@ extension _LlvmExpressions on LlvmGen {
         len = _load(_slots[lenName(rcvName)]!, 'u32', false);
       } else if (rcvName != null && arrayDims.containsKey(rcvName)) {
         len = _i32(arrayDims[rcvName]!.last);
+      } else if (rcvNode is VarAccessNode &&
+          typeOf(rcvNode.name).isPtr &&
+          !arrayLens.containsKey(rcvNode.name)) {
+        // A heap array or string: the count from its header
+        len = _headerLen(rcv);
       } else {
         len = _i32(arrayLens[rcvName] ?? 0);
       }
@@ -988,7 +996,7 @@ extension _LlvmExpressions on LlvmGen {
       return ['ptr ${_lvalue(arg).$1}', for (final d in dims) 'i32 $d'];
     }
     if (p.isOpen) {
-      final (ptr, len) = _openArg(arg);
+      final (ptr, len) = _openArg(arg, toString: cleanName(p.type) == 'string');
       return ['ptr $ptr', 'i32 ${_conv(len, 'i32').v}'];
     }
     if (p.type != null && p.type!.isNotEmpty && structs.containsKey(p.type) && !p.isPtr) {
@@ -999,6 +1007,7 @@ extension _LlvmExpressions on LlvmGen {
       }
       return ['ptr ${_lvalue(arg).$1}'];
     }
+    if (_isFixedStringField(arg)) return ['ptr ${_lvalue(arg).$1}'];
     final ty = _regTy(p.type, p.isPtr);
     var v = _conv(_expr(arg), ty);
     if (cleanName(p.type) == 'bool' && !p.isPtr) v = _fromBool(_truth(v));
@@ -1007,7 +1016,9 @@ extension _LlvmExpressions on LlvmGen {
 
   /// An open array argument: the address of its first element and its
   /// length.
-  (String, _V) _openArg(AstNode arg) {
+  /// [toString] is true for a `string s[]` parameter, which takes a
+  /// string's capacity; a byte array parameter takes its length.
+  (String, _V) _openArg(AstNode arg, {bool toString = false}) {
     if (arg is SliceNode) {
       final baseExpr = arg.base;
       final baseName = baseExpr.nodeName;
@@ -1061,17 +1072,29 @@ extension _LlvmExpressions on LlvmGen {
       return (p, _headerLen(p));
     }
     if (arg is ArrayAccessNode && cleanType(_getExprType(arg).$1) == 'string') {
-      // One string of an array: its address and its length
-      final p = _isRefElement(arg) ? _conv(_expr(arg), 'ptr').v : _lvalue(arg).$1;
-      if (_isRefElement(arg)) _nullCheck(p, _storedRefName(arg)!);
-      return (p, _strlen(p));
+      // One string of an array: its address, and for a string parameter its
+      // capacity (a heap string's from its header), for bytes its length
+      if (_isRefElement(arg)) {
+        final p = _conv(_expr(arg), 'ptr').v;
+        _nullCheck(p, _storedRefName(arg)!);
+        return (p, toString ? _headerLen(p) : _strlen(p));
+      }
+      final addr = _lvalue(arg).$1;
+      final row = _openRow(arg);
+      final cap = _fixedArgLength(arg);
+      if (toString && row != null) return (addr, _openLen(row.$1, row.$2));
+      return (addr, toString && cap > 0 ? _i32(cap) : _strlen(addr));
     }
     final addr = arg is StringLitNode ? _stringConst(arg.val) : _lvalue(arg).$1;
     final (argT, _) = _getExprType(arg);
     final refElems = _isRefArray(arg);
     final row = _openRow(arg);
     if (row != null) return (addr, _openLen(row.$1, row.$2));
-    if (cleanType(argT) == 'string' && !refElems) return (addr, _strlen(addr));
+    // A string whose capacity is not known here (a parameter, a literal):
+    // its length
+    if (cleanType(argT) == 'string' && !refElems && (!toString || _fixedArgLength(arg) == 0)) {
+      return (addr, _strlen(addr));
+    }
     return (addr, _i32(_fixedArgLength(arg)));
   }
 

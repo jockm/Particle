@@ -1908,7 +1908,7 @@ Open array parameters of 2 or 3 dimensions (`T m[][]`) are described in [3.7](#3
 - **Assigning a string to a buffer copies it:** `s = "xyz";`, `s = other;` and `string s[N] = other;` copy the characters up to the terminator, at most N−1 of them, then a terminator. A literal that does not fit is a compile-time error; a longer string at run time is cut short. A `string` field of a record (`p.name = "Ada";`) is a buffer too.
 - `.len` scans for the null terminator. `.capacity` is N.
 - Indexing gives single bytes. Writes are bounds-checked against N−1.
-- For a `string s[]` open-array parameter, `.capacity` is the length passed by the caller, and `.len` still scans for the terminator.
+- For a `string s[]` open-array parameter, `.capacity` is the string's capacity, passed by the caller: a fixed string's size, a heap string's capacity, or the capacity of a row of an array of strings. A `string s` parameter passed on to one gives its length, since its capacity is not known there. `.len` still scans for the terminator. A string passed to a `u8 b[]` parameter gives its length: `b.len` is the number of characters.
 - A string literal used in an expression evaluates to the address of a read-only copy in the string table. You can pass it to a `string s` or `string s[]` parameter that the function does not write through (writing through one is found at compile time, see [3.7](#37-functions)). Passed to a `string s[]` parameter, its `.len` works but its `.capacity` is 0.
 - Strings are not compared with `==`: use `stringEquals` or `stringCompare` from `lib/string.act`.
 - `string g[N] = "text";` at the top level starts with the text; `const string NAME = "text";` is a string constant (see [3.4](#34-declarations)).

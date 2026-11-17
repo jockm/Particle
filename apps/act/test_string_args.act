@@ -1,0 +1,79 @@
+// test_string_args: strings passed as arguments. A string passed to a
+// 'string dst[]' parameter brings its capacity (a fixed string's size, a
+// heap string's header, a row's length), and a string field passed to a
+// 'string' parameter brings its address.
+// Passes with trap(0); fails with trap(15).
+import "string.act";
+
+type Named {
+    string name[8];
+};
+
+string shared[6];
+
+// Forwards an open string to another open string parameter
+void fill(string dst[], string src) {
+    stringCopy(dst, src);
+}
+
+u32 capacityOf(string s[]) {
+    return s.capacity;
+}
+
+// Copies into each row of an open array of strings
+void fillRows(string rows[][], string src) {
+    for (u32 i : 0..rows.len) {
+        stringCopy(rows[i], src);
+    }
+}
+
+void main() {
+    u32 ok = 1;
+
+    // A fixed local, directly and through another function
+    string copy[8];
+    stringCopy(copy, "ABC");
+    if (stringEquals(copy, "ABC") != 1) ok = 0;
+    string other[8];
+    fill(other, copy);
+    if (stringEquals(other, "ABC") != 1) ok = 0;
+    stringConcat(other, "DE");
+    if (stringEquals(other, "ABCDE") != 1) ok = 0;
+    if (capacityOf(copy) != 8) ok = 0;
+
+    // The capacity limits the copy (room for 3 characters and the end)
+    string small[4];
+    stringCopy(small, "123456");
+    if (stringEquals(small, "123") != 1) ok = 0;
+
+    // A global
+    stringCopy(shared, "glob");
+    if (stringEquals(shared, "glob") != 1 || capacityOf(shared) != 6) ok = 0;
+
+    // A field, as a string and as an open string
+    Named n;
+    stringCopy(n.name, "xyz");
+    if (stringFind(n.name, 122) != 2) ok = 0;
+    if (stringEquals(n.name, "xyz") != 1) ok = 0;
+    if (capacityOf(n.name) != 8) ok = 0;
+
+    // A row of a fixed array of strings
+    string words[2][5];
+    stringCopy(words[1], "cd");
+    if (stringEquals(words[1], "cd") != 1 || capacityOf(words[1]) != 5) ok = 0;
+
+    // Rows of an open array of strings
+    fillRows(words, "row");
+    if (stringEquals(words[0], "row") != 1 || stringEquals(words[1], "row") != 1) ok = 0;
+
+    // A heap string
+    string heap[] = string.createArray(8);
+    stringCopy(heap, "heap");
+    if (stringEquals(heap, "heap") != 1 || capacityOf(heap) != 8) ok = 0;
+    heap.destroyArray();
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

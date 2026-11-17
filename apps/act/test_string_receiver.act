@@ -1,0 +1,56 @@
+// test_string_receiver: string methods called on every kind of string
+// receiver: a local, a parameter, an open array parameter, a heap string, a
+// global, a field and an element of an array of strings.
+// Passes with trap(0); fails with trap(15).
+import "string.act";
+
+type Named {
+    string name[8];
+};
+
+string greeting[8] = "hello";
+
+s32 findIn(string s, u8 ch) {
+    return s.find(ch);
+}
+
+u32 isAbc(string s) {
+    return s.equals("ABC");
+}
+
+// The receiver is an open array parameter
+s32 findInOpen(string s[], u8 ch) {
+    return s.find(ch);
+}
+
+void main() {
+    u32 ok = 1;
+
+    string local[8] = "ABC";
+    if (local.find(66) != 1) ok = 0;
+    if (findIn(local, 67) != 2) ok = 0;
+    if (findIn(local, 90) != -1) ok = 0;
+    if (isAbc(local) != 1) ok = 0;
+    if (findInOpen(local, 65) != 0) ok = 0;
+
+    string heap[] = string.createArray(8);
+    heap.copy("pqr");
+    if (heap.find(114) != 2 || heap.equals("pqr") != 1) ok = 0;
+    heap.destroyArray();
+
+    if (greeting.find(108) != 2) ok = 0;
+    if (findIn(greeting, 111) != 4) ok = 0;
+
+    Named n;
+    n.name = "xyz";
+    if (n.name.find(122) != 2) ok = 0;
+
+    string words[2][4] = {"ab", "cd"};
+    if (words[1].find(100) != 1) ok = 0;
+    if (findIn(words[0], 98) != 1) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

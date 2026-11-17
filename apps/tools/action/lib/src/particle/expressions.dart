@@ -1225,6 +1225,10 @@ extension _Expressions on CodeGen {
       if (rcvNode is CallNode) {
         // Evaluated receiver returned pointer in R1
         genExpr(rcvNode, 1);
+      } else if (sName == 'string' && rcvNode is VarAccessNode && !arrayLens.containsKey(rcvNode.name)) {
+        // A string variable that is not a fixed array (a parameter, an open
+        // array, a heap string) holds the string's address
+        genExpr(rcvNode, 1);
       } else if (_storedRefName(rcvNode) != null) {
         // A reference field or element holds the receiver's address
         genExpr(rcvNode, 1);
@@ -1257,6 +1261,14 @@ extension _Expressions on CodeGen {
           emit('LD32    R2, (R2)', "Dynamic capacity for open array receiver '$rcvName'");
         } else if (rcvName != null && arrayDims.containsKey(rcvName)) {
           emitImmediate(2, arrayDims[rcvName]!.last);
+        } else if (rcvNode is VarAccessNode &&
+            typeOf(rcvNode.name).isPtr &&
+            !arrayLens.containsKey(rcvNode.name)) {
+          // A heap array or string: the count from the heap header just
+          // below it
+          emit('LD      R2, R1');
+          emit('SUB     R2, 4', 'Point to prefix header');
+          emit('LD32    R2, (R2)', "Heap array length for receiver '${rcvNode.name}'");
         } else {
           final arrSz = arrayLens[rcvName] ?? 0;
           emitImmediate(2, arrSz);
@@ -1690,16 +1702,34 @@ extension _Expressions on CodeGen {
           emit('LD32    R${curReg + 1}, (R${curReg + 1})',
               "Heap array length for field '${arg.member}'");
         } else if (arg is ArrayAccessNode && cleanType(_getExprType(arg).$1) == 'string') {
-          // One string of an array: its address, and the length up to its
-          // terminator
+          // One string of an array: its address, and for a string parameter
+          // its capacity (a heap string's from its header), for bytes its
+          // length
           if (_isRefElement(arg)) {
             genExpr(arg, curReg);
             _checkStoredRef(arg, curReg);
+            if (cleanName(pType) == 'string') {
+              emit('LD      R${curReg + 1}, R$curReg');
+              emit('SUB     R${curReg + 1}, 4', 'Point to prefix header');
+              emit('LD32    R${curReg + 1}, (R${curReg + 1})', 'Heap string capacity');
+            } else {
+              emit('LD      R14, R$curReg');
+              _emitStringScanAt14(null, curReg + 1);
+            }
           } else {
             _emitLvalueAddr(arg, curReg);
+            final row = _openRow(arg);
+            final cap = _fixedArgLength(arg);
+            final toString = cleanName(pType) == 'string';
+            if (toString && row != null) {
+              _emitOpenLen(row.$1, row.$2, curReg + 1);
+            } else if (toString && cap > 0) {
+              emitImmediate(curReg + 1, cap);
+            } else {
+              emit('LD      R14, R$curReg');
+              _emitStringScanAt14(null, curReg + 1);
+            }
           }
-          emit('LD      R14, R$curReg');
-          _emitStringScanAt14(null, curReg + 1);
         } else {
           _emitLvalueAddr(arg, curReg);
           final (argT, _) = _getExprType(arg);
@@ -1707,7 +1737,11 @@ extension _Expressions on CodeGen {
           final row = _openRow(arg);
           if (row != null) {
             _emitOpenLen(row.$1, row.$2, curReg + 1);
-          } else if (cleanType(argT) == 'string' && !refElems) {
+          } else if (cleanType(argT) == 'string' &&
+              !refElems &&
+              (cleanName(pType) != 'string' || _fixedArgLength(arg) == 0)) {
+            // A string passed as bytes, or whose capacity is not known here
+            // (a parameter, a literal): its length
             _emitStringScanLen(argName, curReg + 1);
           } else {
             emitImmediate(curReg + 1, _fixedArgLength(arg));
@@ -1722,6 +1756,8 @@ extension _Expressions on CodeGen {
       } else {
         _emitLvalueAddr(arg, curReg);
       }
+    } else if (_isFixedStringField(arg)) {
+      _emitLvalueAddr(arg, curReg);
     } else {
       genExpr(arg, curReg);
       if (!pIsPtr) _normalizeBool(pType, arg, curReg);

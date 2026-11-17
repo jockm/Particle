@@ -486,6 +486,15 @@ extension _TypeRules on Checker {
     return name == null ? 0 : (arrayDims[name]?.first ?? arrayLens[name] ?? 0);
   }
 
+  /// True for a fixed string held in a field (`string name[8]`): its value
+  /// as an argument is its address.
+  bool _isFixedStringField(AstNode arg) {
+    if (arg is! MemberAccessNode || _refField(arg) != null) return false;
+    if (cleanType(_getExprType(arg).$1) != 'string') return false;
+    final (bt, _) = _getExprType(arg.expr);
+    return fieldOf(cleanName(bt), arg.member).dim != null;
+  }
+
   /// For a row of an open array parameter of more dimensions (`m[i]`): the
   /// parameter and which of its lengths is the row's. Null otherwise.
   (String, int)? _openRow(AstNode arg) {
