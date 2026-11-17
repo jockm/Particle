@@ -449,7 +449,7 @@ vscode-ext:
 		fi; \
 		echo "==> Packaging the $$e VS Code extension..."; \
 		( cd $(VSCODE_DIR)/$$e && npm install --no-audit --no-fund && npm run compile && \
-		  npx vsce package --skip-license --allow-missing-repository -o ../../../$(BUILD_DIR)/$$e.vsix ) || exit 1; \
+		  npx vsce package --skip-license --allow-missing-repository -o $(CURDIR)/$(BUILD_DIR)/$$e.vsix ) || exit 1; \
 	done
 	@$(DOT_CLEAN_CMD)
 
