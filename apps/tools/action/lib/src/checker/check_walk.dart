@@ -1533,15 +1533,19 @@ extension _CheckWalk on Checker {
       case _Kind.array:
         throw CompileError("arrays have no method '$mName'");
       case _Kind.string:
-        final helper = 'string${mName[0].toUpperCase()}${mName.substring(1)}';
-        throw CompileError("string method '$mName' is not declared; "
-            "a string's methods are the string functions, so "
-            "s.$mName(...) calls $helper(s, ...)");
+        throw CompileError("string method '$mName' is not declared; the string methods are in "
+            'lib/string.act (import "string.act"), or declare one as \'T string.$mName(...)\'');
       case _Kind.record:
       case _Kind.reference:
         throw CompileError("method '$mName' of '$sName' is not declared; "
             "a method is declared as 'T $sName.$mName(...)'");
       default:
+        // Type.name(...) for a name that is not declared at all
+        if (rcv is VarAccessNode && !_isVariableInScope(rcv.name) && !constants.containsKey(rcv.name) &&
+            !funcSignatures.containsKey(rcv.name)) {
+          throw CompileError("'$shown' is not declared; import the file that declares it"
+              "${rcv.name == 'Integer' ? ' (Integer is in lib/integer.act: import "integer.act")' : ''}");
+        }
         throw CompileError("a '$sName' value has no methods");
     }
   }

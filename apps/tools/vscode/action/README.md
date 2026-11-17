@@ -11,6 +11,11 @@ Language support for the Action language (`.act` files):
 - Completion: names in scope, keywords and types, fields and methods after
   `.`, and a package's `pub` names after its import name (`geo.`)
 - Outline of a file's functions, types, constants and enums
+- Find all references, and rename (every version of an overloaded function)
+- Signature help while typing a call
+- Quick fixes for compiler messages (missing and unused imports, `pub`,
+  ambiguous calls, `exists()` checks, string comparisons, method stubs),
+  organize imports, and extract and inline a constant
 - Checking of the project file `action.json`
 
 It starts the Action language server, `action_lsp`, which it looks for in

@@ -1152,6 +1152,21 @@ It provides:
 - **Go to definition:** for local variables, parameters, globals, functions and methods, types, fields, constants and enum members, across imported files. On an `import` line, it opens the imported file.
 - **Completion:** after `.`, the fields, methods and built-in members (`len`, `exists()`, …) of what is before it; elsewhere, the names in scope, keywords, types and built-in functions.
 - **Outline:** the functions, methods, tasks, trap handlers, types, enums, globals and constants of the file.
+- **Find all references:** every place a name is declared or used, across the program's files and the packages it imports. All the versions of an overloaded function count as one name, and so do a prototype and its definition.
+- **Rename:** renames a name everywhere find all references finds it (every version of an overloaded function, `alias.name` in other packages). A new name that is not a valid name, or is a keyword, is refused, and so is renaming anything declared in a fetched module (the cache or `vendor/`).
+- **Signature help:** while a call is typed, the function's parameters, with the one being typed highlighted; for an overloaded function every version, with the one the compiler chose highlighted.
+- **Quick fixes**, offered on a message:
+  - remove an import that is not used;
+  - add a missing import: `integer.act` or `string.act` for `Integer` and the string methods, or a file in the workspace, its `lib/` or an include folder that declares the name;
+  - make a member or a name `pub` (in your own module only);
+  - for an ambiguous call, one fix per version, converting the arguments that call for it (`u8(x)`);
+  - for "'x' may be empty here", put the statement in `if (x.exists()) { … }`;
+  - turn `a == b` on strings into `a.equals(b)` (and `!=` into `!a.equals(b)`);
+  - name a package like its folder;
+  - for a method that is not declared, write a stub of it, after the type's last method: its parameter types from the call's arguments, its result from what the call is given to.
+- **Organize imports:** file imports first, then package imports, each group alphabetical, with a blank line between; imports that are not used, and duplicates, are removed. A comment on the lines just above an import moves with it.
+- **Extract a constant:** a selected constant value becomes `NEW_CONSTANT`, declared just before the statement (or, with **Extract to a file constant**, after the file's imports), typed from what the value is used as. A rename starts on it at once, so its name can be typed.
+- **Inline a constant:** at a constant's use, replace the use with its value, or every use, removing the declaration.
 
 While the text does not parse, hover, definition, completion and the outline use the last version that did.
 

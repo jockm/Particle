@@ -32,28 +32,22 @@ Future<({Map<int, int> regs, int cycles})> runVerilatorPipeline({
       clk: dummyClk,
       reset: dummyReset,
       uartRx: dummyUartRx,
+      core0Binary: Uint8List(8192),
+      core1Binary: Uint8List(4096),
+      core2Binary: Uint8List(4096),
+      core3Binary: Uint8List(4096),
     );
     await top.build();
     var sv = top.generateSynth();
     await Simulator.reset();
 
     final tcmRegex = RegExp(
-      r'module\s+(ParcoreTcm(?:_\d+)?)\s*\([^;]*\);[\s\S]*?endmodule',
+      r'(module\s+ParcoreTcm(?:_\d+)?\s*\([^;]*\);)[\s\S]*?endmodule',
     );
     sv = sv.replaceAllMapped(tcmRegex, (m) {
-      final modName = m.group(1)!;
+      final header = m.group(1)!;
       return """
-module $modName (
-  input logic clk,
-  input logic [15:0] addrA,
-  output logic [15:0] rDataA,
-  input logic [15:0] addrB,
-  input logic [31:0] wDataB,
-  input logic [3:0] bEnB,
-  input logic wEnB,
-  input logic rEnB,
-  output logic [31:0] rDataB
-);
+$header
   logic [7:0] mem [0:16383];
   string hexfile;
   initial begin
@@ -61,9 +55,9 @@ module $modName (
     \$sformat(hexfile, "/tmp/parcore_pipeline_verilator/%m.hex");
     \$readmemh(hexfile, mem);
   end
-  wire [13:0] bAddrA = {addrA[12:0], 1'b0};
+  wire [13:0] bAddrA = {14'(addrA), 1'b0};
   assign rDataA = {mem[bAddrA + 14'd1], mem[bAddrA]};
-  wire [13:0] bAddrB = {addrB[11:0], 2'b00};
+  wire [13:0] bAddrB = {14'(addrB), 2'b00};
   always_ff @(posedge clk) begin
     if (wEnB) begin
       if (bEnB[0]) mem[bAddrB] <= wDataB[7:0];
@@ -139,7 +133,12 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::printf("CYCLES=%d\\n", cyc);
+    std::printf("CYCLES=%d C0_PC=0x%04x C1_PC=0x%04x C2_PC=0x%04x C3_PC=0x%04x\\n",
+                cyc,
+                top->rootp->ParcoreTop__DOT__core0_if__DOT__pc,
+                top->rootp->ParcoreTop__DOT__core1_id__DOT__pc,
+                top->rootp->ParcoreTop__DOT__core2_ex__DOT__pc,
+                top->rootp->ParcoreTop__DOT__core3_mem__DOT__pc);
     for (int r = 0; r < 32; r++) {
         uint32_t addr = r * 4;
         uint32_t val = uint32_t(c1_mem[addr]) | (uint32_t(c1_mem[addr+1]) << 8) |
@@ -185,6 +184,7 @@ int main(int argc, char** argv) {
     File(path).writeAsStringSync(sb.toString());
   }
 
+  writeHex('${tmpDir.path}/TOP.ParcoreTop.conductor_tcm.hex', const []);
   writeHex('${tmpDir.path}/TOP.ParcoreTop.core0_tcm.hex', c0Merged);
   writeHex('${tmpDir.path}/ParcoreTop.core0_tcm.hex', c0Merged);
   writeHex('${tmpDir.path}/TOP.ParcoreTop.core1_tcm.hex', c1Kernel);
@@ -264,7 +264,7 @@ void main() {
         maxCycles: 35000,
       );
       final regs = res.regs;
-      print('Completed in ${res.cycles} cycles');
+      print('Completed in ${res.cycles} cycles | regs=$regs');
       expect(regs[1]! & 0xFFFFFFFF, equals(0xFFFFFFF0));
       expect(regs[2]! & 0xFFFFFFFF, equals(0x4));
       expect(regs[3]! & 0xFFFFFFFF, equals(0x20));

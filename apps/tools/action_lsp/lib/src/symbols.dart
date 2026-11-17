@@ -129,8 +129,15 @@ class ProgramIndex {
   /// Function definitions with bodies, with their locals and parameters.
   final List<(Sym, List<Sym>)> bodies = [];
 
+  /// Declarations of a name declared more than once (a prototype and its
+  /// definition) that [globals] does not hold.
+  final List<Sym> otherDecls = [];
+
   /// Where each body in [bodies] ends (its closing brace).
   final Map<Sym, Pos> _bodyEnd = Map.identity();
+
+  /// Where the body of [s] ends (its closing brace), or null.
+  Pos? bodyEnd(Sym s) => _bodyEnd[s];
 
   /// Every file in the program.
   final Set<String> files = {};
@@ -176,6 +183,29 @@ class ProgramIndex {
 
   /// The methods of type [typeName] (including those of embedded types),
   /// by method name.
+  /// The declaration whose name is written at [pos] in [path] (a field or
+  /// a constant in a type's body, say, where the name is not in scope).
+  Sym? declaredAt(String path, Pos pos) {
+    Sym? found;
+    void walk(Sym s, Set<Sym> seen) {
+      if (found != null || !seen.add(s)) return;
+      final a = s.at;
+      if (a != null && a.path == path && a.start.line == pos.line && a.start.character == pos.character) {
+        found = s;
+        return;
+      }
+      for (final c in s.children) {
+        walk(c, seen);
+      }
+    }
+
+    final seen = <Sym>{};
+    for (final g in globals.values) {
+      walk(g, seen);
+    }
+    return found;
+  }
+
   /// The constants and static functions of type [typeName] (written
   /// `Type.NAME`, `Type.name(...)`), by name; an overloaded function's
   /// versions together.
@@ -201,7 +231,7 @@ class ProgramIndex {
     if (base == s.key) return [s];
     return [
       for (final g in globals.values)
-        if (withoutOverload(g.key) == base) g
+        if (withoutOverload(g.key) == base && g.container == s.container) g
     ];
   }
 
@@ -350,7 +380,10 @@ class ProgramIndex {
     // A prototype does not hide the definition
     final prev = globals[f.name];
     if (topLevel && (prev == null || prev.kind == SymKind.prototype)) {
+      if (prev != null) otherDecls.add(prev);
       globals[f.name] = s;
+    } else if (topLevel) {
+      otherDecls.add(s);
     }
     final end = parseLoc(f.body?.endLoc)?.$2;
     if (end != null) _bodyEnd[s] = end;

@@ -59,7 +59,7 @@ void main() {
 
     test('unknown requests are answered with an error', () async {
       final c = await TestClient.start({});
-      final r = await c.request('textDocument/rename', {});
+      final r = await c.request('textDocument/formatting', {});
       expect(asMap(r['error'])['code'], equals(-32601));
       await c.close();
     });
@@ -681,6 +681,251 @@ void main() {
       (l, ch) = find(prog, 'Integer.MAX_U8', 8);
       final loc = asMap(await c.result('textDocument/definition', c.at('main.act', l, ch)));
       expect(loc['uri'], equals(c.uri('lib/integer.act')));
+      await c.close();
+    });
+  });
+
+  group('references and rename', () {
+    const prog = '''type Point {
+    u32 x;
+    u32 y;
+};
+
+u32 twice(u32 v);
+
+u32 Point.sum() {
+    return this.x + this.y;
+}
+
+u32 twice(u32 v) {
+    return v * 2;
+}
+
+u32 twice(u8 v) {
+    return v * 3;
+}
+
+u32 total;
+
+void main() {
+    Point p;
+    p.x = 1;
+    u32 count = p.sum();
+    count = count + twice(p.x) + twice(u8(1));
+    total = count;
+}
+''';
+
+    List<String> refs(TestClient c, Object? r) => [
+          for (final l in r as List)
+            '${asMap(asMap(asMap(l)['range'])['start'])['line']}:${asMap(asMap(asMap(l)['range'])['start'])['character']}'
+        ];
+
+    Future<List<String>> references(TestClient c, String needle, [int offset = 0, bool decl = true]) async {
+      final (l, ch) = find(prog, needle, offset);
+      final r = await c.result('textDocument/references', {
+        ...c.at('main.act', l, ch),
+        'context': {'includeDeclaration': decl}
+      });
+      return refs(c, r);
+    }
+
+    test('references of a local, a field, a method, a type and every version of a function', () async {
+      final c = await TestClient.start({});
+      await c.open('main.act', prog);
+      expect(await references(c, 'count = p.sum'), equals(['24:8', '25:4', '25:12', '26:12']));
+      expect(await references(c, 'x;'), equals(['1:8', '8:16', '23:6', '25:28']));
+      expect(await references(c, 'sum()', 0), equals(['7:10', '24:18']));
+      expect(await references(c, 'Point {'), equals(['0:5', '7:4', '22:4']));
+      // twice: the prototype, both definitions and both calls
+      expect(await references(c, 'twice(p.x)'), equals(['5:4', '11:4', '15:4', '25:20', '25:33']));
+      expect(await references(c, 'twice(p.x)', 0, false), equals(['25:20', '25:33']));
+      await c.close();
+    });
+
+    test('rename replaces every reference; a bad name or nothing to rename is refused', () async {
+      final c = await TestClient.start({});
+      await c.open('main.act', prog);
+      var (l, ch) = find(prog, 'total = count');
+      final r = asMap(await c.result('textDocument/rename', {...c.at('main.act', l, ch), 'newName': 'sum2'}));
+      final edits = asMap(r['changes'])[c.uri('main.act')] as List;
+      expect(edits.length, equals(2));
+      expect(asMap(edits.first)['newText'], equals('sum2'));
+      final bad = await c.request('textDocument/rename', {...c.at('main.act', l, ch), 'newName': 'while'});
+      expect(asMap(bad['error'])['message'], equals("'while' is a keyword"));
+      (l, ch) = find(prog, 'return v * 2');
+      final none = await c.request('textDocument/prepareRename', c.at('main.act', l, ch));
+      expect(asMap(none['error'])['message'], equals('there is nothing here to rename'));
+      (l, ch) = find(prog, 'twice(u8');
+      final prep = asMap(await c.result('textDocument/prepareRename', c.at('main.act', l, ch)));
+      expect(prep['placeholder'], equals('twice'));
+      await c.close();
+    });
+  });
+
+  group('code actions and signature help', () {
+    final integer = File('${Directory.current.path}/../../../lib/integer.act').readAsStringSync();
+    final strings = File('${Directory.current.path}/../../../lib/string.act').readAsStringSync();
+
+    /// [text] with the TextEdits [edits] applied.
+    String apply(String text, List edits) {
+      final ls = text.split('\n');
+      int offset(Map pos) {
+        var o = 0;
+        for (var l = 0; l < (pos['line'] as int); l++) {
+          o += ls[l].length + 1;
+        }
+        return o + (pos['character'] as int);
+      }
+
+      final sorted = [for (final e in edits) asMap(e)]
+        ..sort((a, b) => offset(asMap(asMap(b['range'])['start'])).compareTo(offset(asMap(asMap(a['range'])['start']))));
+      var out = text;
+      for (final e in sorted) {
+        final r = asMap(e['range']);
+        out = out.replaceRange(offset(asMap(r['start'])), offset(asMap(r['end'])), e['newText'] as String);
+      }
+      return out;
+    }
+
+    /// The code actions for [diag] (or for the range [l]:[c]-[l2]:[c2]).
+    Future<List<Map<String, Object?>>> actions(TestClient c, String file,
+        {Object? diag, int l = 0, int ch = 0, int? l2, int? ch2, List<String>? only}) async {
+      final range = diag != null
+          ? asMap(diag)['range']
+          : {
+              'start': {'line': l, 'character': ch},
+              'end': {'line': l2 ?? l, 'character': ch2 ?? ch}
+            };
+      final r = await c.result('textDocument/codeAction', {
+        'textDocument': {'uri': c.uri(file)},
+        'range': range,
+        'context': {
+          'diagnostics': [if (diag != null) diag],
+          if (only != null || diag != null) 'only': only ?? ['quickfix'],
+        },
+      }) as List;
+      return [for (final a in r) asMap(a)];
+    }
+
+    String applied(TestClient c, String file, String text, Map<String, Object?> action) =>
+        apply(text, asMap(asMap(action['edit'])['changes'])[c.uri(file)] as List);
+
+    test('quick fixes: unused and missing imports, string ==, exists() and versions', () async {
+      final c = await TestClient.start({'lib/integer.act': integer, 'lib/string.act': strings, 'helpers.act': 'u32 helper(u32 x) { return x; }\n'});
+      // A missing import of integer.act, and of the file declaring helper
+      var src = 'void main() {\n    u32 a = Integer.max(1, 2);\n}\n';
+      var d = await c.open('main.act', src);
+      var a = await actions(c, 'main.act', diag: d.first);
+      expect(a.single['title'], equals('Import "integer.act"'));
+      expect(applied(c, 'main.act', src, a.single), startsWith('import "integer.act";\nvoid main() {'));
+      src = 'void main() {\n    u32 a = helper(1);\n}\n';
+      d = await c.change('main.act', src, 2);
+      a = await actions(c, 'main.act', diag: d.first);
+      expect(a.single['title'], equals('Import "helpers.act"'));
+      // Strings compared with == and !=
+      src = 'import "string.act";\nvoid main() {\n    string a[4] = "x";\n    u32 e = 0;\n    if (a != "y") { e = 1; }\n}\n';
+      d = await c.change('main.act', src, 3);
+      a = await actions(c, 'main.act', diag: d.first);
+      expect(applied(c, 'main.act', src, a.single), contains('if (!a.equals("y")) { e = 1; }'));
+      // A reference that may be empty
+      src = 'type N { u32 v; };\nN find(u32 id) { if (id == 0) { ref N none; return none; } N n = N.create(); return n; }\n'
+          'void main() {\n    N a = find(1);\n    a.v = 2;\n}\n';
+      d = await c.change('main.act', src, 4);
+      a = await actions(c, 'main.act', diag: d.first);
+      expect(applied(c, 'main.act', src, a.single), contains('    if (a.exists()) {\n        a.v = 2;\n    }'));
+      // An ambiguous call: one fix per version
+      src = 'u8 f(u8 x, u8 y) { return 1; }\nu16 f(u16 x, u16 y) { return 2; }\nvoid main() {\n    u8 a = 1;\n    u16 b = 2;\n    u32 r = f(a, b);\n}\n';
+      d = await c.change('main.act', src, 5);
+      a = await actions(c, 'main.act', diag: d.first);
+      expect([for (final x in a) x['title']], equals(['Call f(u8, u8)', 'Call f(u16, u16)']));
+      expect(applied(c, 'main.act', src, a.first), contains('u32 r = f(a, u8(b));'));
+      expect(applied(c, 'main.act', src, a.last), contains('u32 r = f(u16(a), b);'));
+      await c.close();
+    });
+
+    test('quick fixes: pub, the package name, an unused import and a method stub', () async {
+      final c = await TestClient.start({
+        'action.json': '{ "action": { "module": { "name": "example.com/m" } } }',
+        'lib/integer.act': integer,
+        'lib/string.act': strings,
+        'geo/geo.act': 'package geo;\n\npub type Point {\n    pub u32 x;\n    u32 hidden;\n};\n',
+        'other/o.act': 'package o;\npub u32 one() { return 1; }\n',
+      });
+      var src = 'package main;\nimport "example.com/m/geo";\nimport "example.com/m/other";\nvoid main() {\n    geo.Point p;\n    u32 h = p.hidden;\n}\n';
+      var d = await c.open('main.act', src);
+      final notPub = d.firstWhere((x) => '${asMap(x)['message']}'.contains('is not pub'));
+      var a = await actions(c, 'main.act', diag: notPub);
+      expect(a.single['title'], equals("Make 'hidden' pub"));
+      final geoEdits = asMap(asMap(a.single['edit'])['changes'])[c.uri('geo/geo.act')] as List;
+      expect(apply('package geo;\n\npub type Point {\n    pub u32 x;\n    u32 hidden;\n};\n', geoEdits), contains('    pub u32 hidden;'));
+      // The unused import, once the error is gone
+      src = 'package main;\nimport "example.com/m/geo";\nimport "example.com/m/other";\nvoid main() {\n    geo.Point p;\n}\n';
+      d = await c.change('main.act', src, 6);
+      final unused = d.firstWhere((x) => '${asMap(x)['message']}'.contains('is not used'));
+      a = await actions(c, 'main.act', diag: unused);
+      expect(applied(c, 'main.act', src, a.single), isNot(contains('example.com/m/other')));
+      // A method that is not declared: a stub after the type
+      src = 'package main;\nimport "example.com/m/geo";\nvoid main() {\n    geo.Point p;\n    u32 n = 3;\n    u32 r = p.scale(n, 2);\n}\n';
+      d = await c.change('main.act', src, 7);
+      a = await actions(c, 'main.act', diag: d.first);
+      final stub = asMap(asMap(a.single['edit'])['changes'])[c.uri('geo/geo.act')] as List;
+      expect(apply('package geo;\n\npub type Point {\n    pub u32 x;\n    u32 hidden;\n};\n', stub),
+          contains('};\n\nu32 Point.scale(u32 n, u32 b) {\n    return 0;\n}\n'));
+      await c.close();
+    });
+
+    test('organize imports: files then packages, alphabetical; unused and duplicates removed', () async {
+      final c = await TestClient.start({
+        'action.json': '{ "action": { "module": { "name": "example.com/m" } } }',
+        'lib/integer.act': integer,
+        'lib/string.act': strings,
+        'b.act': 'u32 bee() { return 1; }\n',
+        'a.act': 'u32 ay() { return 1; }\n',
+        'zed/z.act': 'package zed;\npub u32 z() { return 1; }\n',
+        'geo/g.act': 'package geo;\npub u32 g() { return 1; }\n',
+        'other/o.act': 'package other;\npub u32 o() { return 1; }\n',
+      });
+      const src = 'package main;\n// zed first\nimport "example.com/m/zed";\nimport "b.act";\nimport "example.com/m/other";\n'
+          'import "example.com/m/geo";\nimport "a.act";\nimport "b.act";\n\nvoid main() { u32 v = zed.z() + geo.g() + ay() + bee(); }\n';
+      await c.open('main.act', src);
+      final a = await actions(c, 'main.act', only: ['source.organizeImports']);
+      expect(applied(c, 'main.act', src, a.single),
+          startsWith('package main;\nimport "a.act";\nimport "b.act";\n\nimport "example.com/m/geo";\n'
+              '// zed first\nimport "example.com/m/zed";\n\nvoid main()'));
+      await c.close();
+    });
+
+    test('extract a constant (with a rename on it) and inline one', () async {
+      final c = await TestClient.start({});
+      const src = 'const u32 LIMIT = 40;\n\nvoid main() {\n    u8 w = 20 + 2;\n    u32 x = LIMIT * 2;\n    u32 y = LIMIT;\n}\n';
+      await c.open('main.act', src);
+      // Select "20 + 2"
+      var a = await actions(c, 'main.act', l: 3, ch: 11, ch2: 17, only: ['refactor.extract']);
+      expect([for (final x in a) x['title']], equals(['Extract to a constant', 'Extract to a file constant']));
+      expect(applied(c, 'main.act', src, a.first), contains('    const u8 NEW_CONSTANT = 20 + 2;\n    u8 w = NEW_CONSTANT;'));
+      expect(asMap(a.first['command'])['command'], equals('action.renameAt'));
+      expect(asMap(a.first['command'])['arguments'], equals([c.uri('main.act'), 4, 11]));
+      expect(applied(c, 'main.act', src, a.last), startsWith('const u8 NEW_CONSTANT = 20 + 2;\n\nconst u32 LIMIT = 40;'));
+      // Inline LIMIT here, and everywhere
+      a = await actions(c, 'main.act', l: 4, ch: 13, only: ['refactor.inline']);
+      expect([for (final x in a) x['title']],
+          equals(["Inline 'LIMIT' here", "Inline every use of 'LIMIT' and remove it"]));
+      expect(applied(c, 'main.act', src, a.first), contains('u32 x = 40 * 2;\n    u32 y = LIMIT;'));
+      expect(applied(c, 'main.act', src, a.last), equals('\nvoid main() {\n    u8 w = 20 + 2;\n    u32 x = 40 * 2;\n    u32 y = 40;\n}\n'));
+      await c.close();
+    });
+
+    test('signature help shows every version, with the one the compiler chose active', () async {
+      final c = await TestClient.start({'lib/integer.act': integer});
+      const src = 'import "integer.act";\nvoid main() {\n    s16 a = 1;\n    s16 m = Integer.max(a, 2);\n}\n';
+      await c.open('main.act', src);
+      final (l, ch) = find(src, ', 2)', 1);
+      final h = asMap(await c.result('textDocument/signatureHelp', c.at('main.act', l, ch)));
+      final sigs = [for (final s in h['signatures'] as List) asMap(s)['label']];
+      expect(sigs.length, equals(6));
+      expect(sigs[h['activeSignature'] as int], equals('s16 Integer.max(s16 a, s16 b)'));
+      expect(h['activeParameter'], equals(1));
       await c.close();
     });
   });

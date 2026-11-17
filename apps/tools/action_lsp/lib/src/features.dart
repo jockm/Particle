@@ -230,6 +230,12 @@ class Features {
     }
     if (s != null) {
       v = _valOf(s);
+    } else if (base == 'this' && pkg == null) {
+      // In a method, a value of the method's type
+      final fn = index.functionAt(path, pos)?.$1;
+      if (fn != null && fn.kind == SymKind.method && fn.container != null) {
+        v = Val(_clean(fn.container!), isArray: fn.container == 'string');
+      }
     } else if (_builtinTypes.containsKey(base)) {
       v = Val(base, isTypeName: true);
     }
@@ -508,6 +514,13 @@ class Features {
       if (target == null) return null;
       return SrcLoc(target, const Pos(0, 0), const Pos(0, 0)).toLocationJson();
     }
+    return symbolAt(pos)?.at?.toLocationJson();
+  }
+
+  /// The declaration the word at [pos] refers to, or null.
+  Sym? symbolAt(Pos pos) {
+    if (pos.line >= lines.length) return null;
+    final line = lines[pos.line];
     final (start, end, chain) = wordAt(line, pos.character);
     if (start == end) return null;
     final word = line.substring(start, end);
@@ -527,7 +540,102 @@ class Features {
                 : (index.fieldOf(base.type, word) ?? index.methodsOf(base.type)[word]);
       }
     }
-    return s?.at?.toLocationJson();
+    return s ?? index.declaredAt(path, Pos(pos.line, start));
+  }
+
+  // ------------------------------------------------------- signature help
+
+  /// The signatures of the function being called at [pos]: every version
+  /// of an overloaded one, with the version the compiler chose (or the
+  /// first that takes this many arguments) active.
+  Map<String, Object?>? signatureHelp(Pos pos) {
+    if (pos.line >= lines.length) return null;
+    final line = lines[pos.line];
+    // The unclosed '(' before the cursor, and the argument it is in
+    var depth = 0, commas = 0, open = -1;
+    for (var i = pos.character.clamp(0, line.length) - 1; i >= 0; i--) {
+      final c = line[i];
+      if (c == ')' || c == ']') depth++;
+      if (c == '(' || c == '[') {
+        if (depth == 0) {
+          if (c == '(') open = i;
+          break;
+        }
+        depth--;
+      }
+      if (c == ',' && depth == 0) commas++;
+    }
+    if (open <= 0) return null;
+    var nameEnd = open;
+    while (nameEnd > 0 && line[nameEnd - 1] == ' ') {
+      nameEnd--;
+    }
+    if (nameEnd == 0 || !isWordChar(line[nameEnd - 1])) return null;
+    final s = symbolAt(Pos(pos.line, nameEnd - 1));
+    if (s == null || !const {SymKind.function, SymKind.prototype, SymKind.method, SymKind.task}.contains(s.kind)) {
+      return null;
+    }
+    final versions = s.key == withoutOverload(s.key) ? [s] : index.versionsOf(s);
+    // The compiler's choice for this call, recorded by place
+    var active = -1;
+    final (wordStart, _, _) = wordAt(line, nameEnd - 1);
+    var chainStart = wordStart;
+    while (chainStart > 1 && line[chainStart - 1] == '.' && isWordChar(line[chainStart - 2])) {
+      chainStart -= 2;
+      while (chainStart > 0 && isWordChar(line[chainStart - 1])) {
+        chainStart--;
+      }
+    }
+    for (final e in index.program.callChoices.entries) {
+      final loc = parseLoc(e.key);
+      if (loc == null || loc.$1 != path || loc.$2.line != pos.line) continue;
+      if (loc.$2.character < chainStart || loc.$2.character > open) continue;
+      active = versions.indexWhere((v) => v.key == e.value || e.value.endsWith('.${v.key}'));
+    }
+    if (active < 0) {
+      active = versions.indexWhere((v) => _paramsOf(v).length > commas);
+      if (active < 0) active = 0;
+    }
+    return {
+      'signatures': [
+        for (final v in versions)
+          {
+            'label': _signature(v),
+            'parameters': [
+              for (final p in _paramRanges(_signature(v))) {'label': p}
+            ],
+            if (v.doc != null) 'documentation': {'kind': 'markdown', 'value': v.doc},
+          }
+      ],
+      'activeSignature': active,
+      'activeParameter': commas,
+    };
+  }
+
+  List<Param> _paramsOf(Sym s) {
+    final d = s.decl;
+    if (d is! FuncDeclNode) return const [];
+    return [for (final p in d.params) if (p.name != 'this' || d.isStatic) p];
+  }
+
+  /// The [start, end] of each parameter in a signature's text.
+  List<List<int>> _paramRanges(String sig) {
+    final open = sig.indexOf('(');
+    final close = sig.lastIndexOf(')');
+    if (open < 0 || close <= open + 1) return const [];
+    final out = <List<int>>[];
+    var start = open + 1;
+    for (var i = open + 1; i <= close; i++) {
+      if (i == close || sig[i] == ',') {
+        var s = start;
+        while (s < i && sig[s] == ' ') {
+          s++;
+        }
+        out.add([s, i]);
+        start = i + 1;
+      }
+    }
+    return out;
   }
 
   // ----------------------------------------------------------- completion

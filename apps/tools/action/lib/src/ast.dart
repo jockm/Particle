@@ -184,6 +184,10 @@ class ProgramNode extends AstNode {
   /// The package each file of an imported package belongs to (the
   /// program's own files, and the prelude, are not here).
   final Map<String, PackageInfo> filePackages = {};
+
+  /// The version each call of an overloaded function calls, by the call's
+  /// place (`file:line:col`), for editors.
+  final Map<String, String> callChoices = {};
 }
 
 /// One field of a `type` declaration.

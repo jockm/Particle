@@ -144,6 +144,7 @@ class Checker {
   final Set<String> _pubFuncs = {};
   final Set<String> _pubFields = {};
   final Map<String, TypeDefNode> _typeDefs = {};
+  final Map<String, String> _callChoices = {};
 
   /// The prelude's functions the program does not use, which are not
   /// compiled (see [_findUnusedPrelude]).

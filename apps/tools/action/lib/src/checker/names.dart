@@ -197,6 +197,7 @@ extension _NameRules on Checker {
     }
     types = savedTypes;
     locals = savedLocals;
+    root.callChoices.addAll(_callChoices);
   }
 
   /// Resolves the calls and function values in [node], part of [owner] (a
@@ -287,7 +288,7 @@ extension _NameRules on Checker {
           throw CompileError("type '${sourceName(t)}' has no static function '$m'");
         }
         final args = call.args.sublist(1);
-        final chosen = _choose(base, versions, args, skipThis: false);
+        final chosen = _choose(base, versions, args, skipThis: false, loc: call.loc);
         _checkPubMember(base, _pubFuncs.contains(chosen), owner, call.loc);
         call.name = chosen;
         call.args
@@ -307,7 +308,9 @@ extension _NameRules on Checker {
       }
       final base = methodFuncName(declType!, m);
       final chosen =
-          methods.length == 1 && !_overloads.containsKey(base) ? methods.single : _choose(base, methods, call.args.sublist(1), skipThis: true);
+          methods.length == 1 && !_overloads.containsKey(base)
+              ? methods.single
+              : _choose(base, methods, call.args.sublist(1), skipThis: true, loc: call.loc);
       _checkPubMember(base, _pubFuncs.contains(chosen), owner, call.loc);
       if (chosen != base) call.name = methodCallName(chosen.substring(declType.length + 1));
       _pickArgFunctionValues(call, chosen, 1);
@@ -315,7 +318,7 @@ extension _NameRules on Checker {
     }
     final versions = _overloads[call.name];
     if (versions != null && !_isVariableInScope(call.name)) {
-      final chosen = _choose(call.name, versions, call.args, skipThis: false);
+      final chosen = _choose(call.name, versions, call.args, skipThis: false, loc: call.loc);
       call.name = chosen;
       _pickArgFunctionValues(call, chosen, 0);
     } else if (funcSignatures.containsKey(call.name) && !_isVariableInScope(call.name)) {
@@ -390,8 +393,14 @@ extension _NameRules on Checker {
   }
 
   /// The version of [base] (one of [versions]) the arguments [args] call.
-  String _choose(String base, List<String> versions, List<AstNode> args, {required bool skipThis}) {
+  String _choose(String base, List<String> versions, List<AstNode> args, {required bool skipThis, String? loc}) {
     if (versions.length == 1 && !_overloads.containsKey(base)) return versions.single;
+    final chosen = _chooseVersion(base, versions, args, skipThis: skipThis);
+    if (loc != null) _callChoices[loc] = chosen;
+    return chosen;
+  }
+
+  String _chooseVersion(String base, List<String> versions, List<AstNode> args, {required bool skipThis}) {
     final taking = <String>[];
     final exact = <String>[];
     final scores = <String, int>{};

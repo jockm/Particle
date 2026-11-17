@@ -94,6 +94,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await stopServer();
       await startServer();
     }),
+    // Starts renaming the name at a place: the server's "extract constant"
+    // runs it on the constant it made, so its name can be typed at once
+    vscode.commands.registerCommand(
+      'action.renameAt',
+      async (uri: string, line: number, character: number) => {
+        const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri));
+        const editor = await vscode.window.showTextDocument(doc);
+        const pos = new vscode.Position(line, character);
+        editor.selection = new vscode.Selection(pos, pos);
+        await vscode.commands.executeCommand('editor.action.rename');
+      },
+    ),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration('action.serverPath')) {
         await stopServer();

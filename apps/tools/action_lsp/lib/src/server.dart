@@ -12,10 +12,12 @@ import 'dart:io';
 
 import 'package:action/action.dart';
 
+import 'code_actions.dart';
 import 'connection.dart';
 import 'documents.dart';
 import 'features.dart';
 import 'project.dart';
+import 'refactor.dart';
 import 'symbols.dart';
 
 const serverVersion = '1.0.0';
@@ -132,6 +134,16 @@ class ActionLanguageServer {
         return _features(p)?.hover(Pos.fromJson(p['position']));
       case 'textDocument/definition':
         return _features(p)?.definition(Pos.fromJson(p['position']));
+      case 'textDocument/references':
+        return _references(p);
+      case 'textDocument/prepareRename':
+        return _prepareRename(p);
+      case 'textDocument/rename':
+        return _rename(p);
+      case 'textDocument/codeAction':
+        return _codeActions(p);
+      case 'textDocument/signatureHelp':
+        return _features(p)?.signatureHelp(Pos.fromJson(p['position']));
       case 'textDocument/completion':
         return {
           'isIncomplete': false,
@@ -219,6 +231,15 @@ class ActionLanguageServer {
         'hoverProvider': true,
         'definitionProvider': true,
         'documentSymbolProvider': true,
+        'referencesProvider': true,
+        'renameProvider': {'prepareProvider': true},
+        'codeActionProvider': {
+          'codeActionKinds': ['quickfix', 'refactor.extract', 'refactor.inline', 'source.organizeImports'],
+        },
+        'signatureHelpProvider': {
+          'triggerCharacters': ['(', ','],
+          'retriggerCharacters': [','],
+        },
         'completionProvider': {
           'triggerCharacters': ['.'],
         },
@@ -429,6 +450,7 @@ class ActionLanguageServer {
       ..clear()
       ..addAll(byFile.keys);
     for (final path in toPublish) {
+      _lastDiagnostics[path] = byFile[path] ?? const [];
       _notify('textDocument/publishDiagnostics', {
         'uri': pathToUri(path),
         'diagnostics': byFile[path] ?? const [],
@@ -535,6 +557,95 @@ class ActionLanguageServer {
       message.contains(' is declared but never defined');
 
   // ------------------------------------------------------------- features
+
+  /// Whether [path] is in a fetched module (the cache, or a module's
+  /// vendor/), whose files are not the user's to change.
+  bool _isReadOnly(String path) {
+    final cache = canonicalPath(cacheRoot());
+    if (path.startsWith('$cache/')) return true;
+    final i = path.lastIndexOf('/vendor/');
+    return i > 0 && File('${path.substring(0, i)}/action.json').existsSync();
+  }
+
+  /// The references and rename of the program the request's file is in.
+  (Features, Refactor)? _refactor(Map<String, Object?> p) {
+    final f = _features(p);
+    if (f == null) return null;
+    Features? other(String path) {
+      if (path == f.path) return f;
+      final doc = _texts.openDocument(path);
+      final lines = doc?.lines ?? _texts.lines(path);
+      return lines == null ? null : Features(f.index, path, lines, _resolveImport);
+    }
+
+    return (f, Refactor(f.index, other, _isReadOnly));
+  }
+
+  /// The diagnostics last published for each file.
+  final Map<String, List<Object?>> _lastDiagnostics = {};
+
+  Object? _codeActions(Map<String, Object?> p) {
+    final r = _refactor(p);
+    if (r == null) return const [];
+    final (f, rf) = r;
+    final range = p['range'] as Map<String, Object?>?;
+    if (range == null) return const [];
+    final ctx = p['context'] is Map ? p['context'] as Map : const {};
+    final diags = (ctx['diagnostics'] as List?) ?? const [];
+    final only = (ctx['only'] as List?)?.cast<String>();
+    // The unused imports of this file, from its last check
+    final unused = <String>{
+      for (final d in _lastDiagnostics[f.path] ?? const [])
+        if (d is Map)
+          for (final m in RegExp(r"^import '([^']+)' is not used").allMatches('${d['message']}')) m.group(1)!
+    };
+    final root = _root;
+    final dirs = <String>{
+      if (root != null) ...[root, '$root/lib'],
+      if (root != null) for (final d in _project.includeDirs) d.startsWith('/') ? d : '$root/$d',
+    };
+    return CodeActions(f, rf, dirs.toList(), unused)
+        .actions(Pos.fromJson(range['start']), Pos.fromJson(range['end']), diags, only: only);
+  }
+
+  Object? _references(Map<String, Object?> p) {
+    final r = _refactor(p);
+    if (r == null) return null;
+    final (f, rf) = r;
+    final target = f.symbolAt(Pos.fromJson(p['position']));
+    if (target == null) return null;
+    final ctx = p['context'];
+    final withDecl = ctx is Map && ctx['includeDeclaration'] == true;
+    return [for (final l in rf.references(target, includeDeclaration: withDecl)) l.toLocationJson()];
+  }
+
+  Object? _prepareRename(Map<String, Object?> p) {
+    final r = _refactor(p);
+    if (r == null) return null;
+    final (f, rf) = r;
+    final pos = Pos.fromJson(p['position']);
+    final target = f.symbolAt(pos);
+    if (target == null) throw RpcError(ErrorCodes.invalidRequest, 'there is nothing here to rename');
+    final problem = rf.renameProblem(target, target.name);
+    if (problem != null) throw RpcError(ErrorCodes.invalidRequest, problem);
+    final (start, end, _) = wordAt(f.lines[pos.line], pos.character);
+    return {
+      'range': rangeJson(Pos(pos.line, start), Pos(pos.line, end)),
+      'placeholder': target.name,
+    };
+  }
+
+  Object? _rename(Map<String, Object?> p) {
+    final r = _refactor(p);
+    if (r == null) return null;
+    final (f, rf) = r;
+    final target = f.symbolAt(Pos.fromJson(p['position']));
+    if (target == null) throw RpcError(ErrorCodes.invalidRequest, 'there is nothing here to rename');
+    final newName = p['newName'] as String? ?? '';
+    final problem = rf.renameProblem(target, newName);
+    if (problem != null) throw RpcError(ErrorCodes.invalidRequest, problem);
+    return rf.rename(target, newName);
+  }
 
   Features? _features(Map<String, Object?> p) {
     final td = p['textDocument'] as Map<String, Object?>;

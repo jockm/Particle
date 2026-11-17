@@ -66,8 +66,8 @@ void main() {
             "'len' is not a method: the length is 'a.len', without parentheses",
         'void main() { u32 a[4]; a.sort(); }': "arrays have no method 'sort'",
         'void main() { string a[8] = "hi"; a.shout(); }':
-            "string method 'shout' is not declared; a string's methods are the string functions, "
-                "so s.shout(...) calls stringShout(s, ...)",
+            "string method 'shout' is not declared; the string methods are in lib/string.act "
+                '(import "string.act"), or declare one as \'T string.shout(...)\'',
         'type Point { u32 x; }\nvoid main() { Point p; p.nothing(); }':
             "method 'nothing' of 'Point' is not declared; a method is declared as 'T Point.nothing(...)'",
         'void main() { u32 x = 3; x.foo(); }': "a 'u32' value has no methods",
