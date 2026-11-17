@@ -271,5 +271,6 @@ The Particle extension has the same commands under
 - winget install GnuWin32.Make
 - winget install --id=MartinStorsjo.LLVM-MinGW.UCRT -e
 - winget install -e --id OpenJS.NodeJS.LTS
+- winget install -e --id Microsoft.VisualStudioCode
 - add "C:\Program Files\LLVM\bin" to path
 - add "C:\Program Files (x86)\GnuWin32\bin" to path
