@@ -537,4 +537,53 @@ extension _NameRules on Checker {
     }
     return null;
   }
+
+  // ---------------------------------------------------------------- prelude
+
+  /// The prelude's functions that nothing in the program calls, takes as a
+  /// value or refers to as a method, directly or through other prelude
+  /// functions. A method call is followed by its name alone, which may keep
+  /// a method of another type of the same name: never one too few.
+  void _findUnusedPrelude(ProgramNode root, List<FuncDeclNode> funcs) {
+    final prelude = {for (final f in funcs) if (f.inPrelude) f.name: f};
+    if (prelude.isEmpty) return;
+    final used = <String>{};
+    final queue = <FuncDeclNode>[];
+    void use(String name) {
+      final f = prelude[name];
+      if (f != null && used.add(name)) queue.add(f);
+    }
+
+    void useMethod(String member) {
+      for (final n in prelude.keys) {
+        if (n.endsWith('.$member')) use(n);
+      }
+    }
+
+    void scan(AstNode n) {
+      rewriteTree(n, (x) {
+        if (x is CallNode) {
+          if (isMethodCall(x.name)) {
+            useMethod(methodOfCall(x.name));
+          } else {
+            use(x.name);
+          }
+        } else if (x is VarAccessNode) {
+          use(x.name);
+        } else if (x is MemberAccessNode && x.expr is VarAccessNode) {
+          use(methodFuncName((x.expr as VarAccessNode).name, x.member));
+        }
+        return x;
+      });
+    }
+
+    for (final d in root.decls) {
+      if (d is FuncDeclNode && d.inPrelude) continue;
+      scan(d);
+    }
+    while (queue.isNotEmpty) {
+      scan(queue.removeLast());
+    }
+    unusedPrelude.addAll(prelude.keys.where((n) => !used.contains(n)));
+  }
 }

@@ -144,6 +144,10 @@ class Checker {
   final Set<String> _pubFuncs = {};
   final Set<String> _pubFields = {};
   final Map<String, TypeDefNode> _typeDefs = {};
+
+  /// The prelude's functions the program does not use, which are not
+  /// compiled (see [_findUnusedPrelude]).
+  final Set<String> unusedPrelude = {};
   final Map<String, (List<String>, String)> fnTypes = {};
   String currentFuncName = '';
   (Object?, bool) currentFuncRet = (null, false);
@@ -493,6 +497,7 @@ class Checker {
     // Calls of static functions and of overloaded functions name the
     // function they call (see names.dart)
     _resolveNames(root, funcDecls);
+    _findUnusedPrelude(root, funcDecls);
     _findWrittenParams(rawFuncDecls);
 
     // Coroutine operations become statements (see coroutines.dart)

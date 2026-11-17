@@ -249,6 +249,7 @@ class CodeGen extends Checker {
     }
 
     for (final f in funcDecls) {
+      if (f.inPrelude && unusedPrelude.contains(f.name)) continue;
       if (!f.isInline && f.body != null) genFunc(f);
     }
 

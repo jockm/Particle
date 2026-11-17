@@ -1380,7 +1380,7 @@ void main() {
 
 A package import gives a folder, not a file, and makes its package's `pub` declarations available as `name.declaration`. The name is the one in the package's `package` line, or the name after `as`. Every use of an imported name has that form: an import name cannot be used on its own, and two imports of a file cannot have the same name. An import name cannot be a built-in name or a name declared in the same package, and a local variable cannot hide it. An import that is never used is a warning.
 
-`lib/string.act` and `lib/integer.act` are the **prelude** of a program with packages: they are loaded first, and the string methods and `Integer` can be used everywhere without an import. Their functions are part of every such program, used or not.
+`lib/string.act` and `lib/integer.act` are the **prelude** of a program with packages: they are loaded first, and the string methods and `Integer` can be used everywhere without an import. Only the prelude functions the program uses (calls, takes as a value, or refers to as a method) are compiled into it.
 
 ### Writing a package
 

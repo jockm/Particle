@@ -344,6 +344,10 @@ class FuncDeclNode extends AstNode {
   /// `this`, called as `Type.name(args)`.
   bool isStatic = false;
 
+  /// Declared in the prelude (lib/string.act, lib/integer.act) of a
+  /// program made of packages: compiled only when the program uses it.
+  bool inPrelude = false;
+
   /// The name as declared, before an overloaded function is given its
   /// own name (see [overloadName]).
   late String declaredName = name;

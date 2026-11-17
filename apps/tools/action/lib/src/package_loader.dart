@@ -63,7 +63,11 @@ class PackageLoader {
             '(add its folder with -I)');
       }
       _preludePaths.add(path);
+      final before = decls.length;
       _loadPlain(path);
+      for (final d in decls.sublist(before)) {
+        if (d is FuncDeclNode) d.inPrelude = true;
+      }
     }
   }
   late String _startDir;

@@ -23,7 +23,8 @@ _reset_vector:
     LD      R5, 0               ; Zero value
     LOAD16  R6, 31              ; 31 writable registers (x1..x31)
 _init_rf_loop:
-    LD32    (R4++), R5          ; Clear register word (post-increment)
+    ST32    (R4), R5            ; Clear register word
+    ADD     R4, 4
     SUB     R6, 1
     BBRA.NZ R6, _init_rf_loop
 

@@ -294,6 +294,20 @@ pub u32 Point.sum() {
           contains("'e2.act' says 'package f;', but the other files in its folder say 'package e;'"));
     });
 
+    test('only the prelude functions the program uses are compiled', () {
+      final none = build('${head}void main() { geo.Point p; }\n');
+      expect(none, isNot(contains('_Integer.')));
+      expect(none, isNot(contains('_string.')));
+      final some = build('${head}void main() { geo.Point p; u8 a = 1; u8 b = Integer.min(a, 2); '
+          'string s[4] = "x"; u32 e = s.equals("x"); }\n');
+      expect(some, contains('_Integer.min..u8.u8:'));
+      expect(some, isNot(contains('_Integer.min..u16.u16:')));
+      // string.equals(other) calls the static string.equals(a, b)
+      expect(some, contains('_string.equals..string:'));
+      expect(some, contains('_string.equals..string.string:'));
+      expect(some, isNot(contains('_string.find:')));
+    });
+
     test('an unused import is a warning', () {
       final notes = <CompileNote>[];
       build('${head}void main() { }\n', notes: notes);

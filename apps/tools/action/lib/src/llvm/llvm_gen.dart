@@ -138,6 +138,7 @@ class LlvmGen extends Checker {
       _genGlobal(d);
     }
     for (final f in _funcDecls) {
+      if (f.inPrelude && unusedPrelude.contains(f.name)) continue;
       if (f.isExtern) {
         _declareExtern(f);
       } else if (f.body != null) {
