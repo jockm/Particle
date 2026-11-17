@@ -12,7 +12,7 @@ List<int> loadBinary(String path) {
   return file.readAsBytesSync();
 }
 
-Future<({Map<int, int> regs, int cycles})> runVerilatorPipeline({
+Future<({Map<int, int> regs, int cycles, String stdout})> runVerilatorPipeline({
   required Uint8List c0Merged,
   required List<int> c1Kernel,
   required List<int> c2Kernel,
@@ -55,18 +55,22 @@ $header
     \$sformat(hexfile, "/tmp/parcore_pipeline_verilator/%m.hex");
     \$readmemh(hexfile, mem);
   end
-  wire [13:0] bAddrA = {addrA, 1'b0};
-  wire [13:0] bAddrB = {addrB, 2'b00};
+  wire [13:0] bAddrA = {13'(addrA), 1'b0};
+  assign rDataA = {mem[bAddrA + 14'd1], mem[bAddrA]};
+  wire [13:0] bAddrB = {12'(addrB), 2'b00};
   always_ff @(posedge clk) begin
-    rDataA <= {mem[bAddrA + 14'd1], mem[bAddrA]};
     if (wEnB) begin
       if (bEnB[0]) mem[bAddrB] <= wDataB[7:0];
       if (bEnB[1]) mem[bAddrB + 14'd1] <= wDataB[15:8];
       if (bEnB[2]) mem[bAddrB + 14'd2] <= wDataB[23:16];
       if (bEnB[3]) mem[bAddrB + 14'd3] <= wDataB[31:24];
     end
+  end
+  always_comb begin
     if (rEnB) begin
-      rDataB <= {mem[bAddrB + 14'd3], mem[bAddrB + 14'd2], mem[bAddrB + 14'd1], mem[bAddrB]};
+      rDataB = {mem[bAddrB + 14'd3], mem[bAddrB + 14'd2], mem[bAddrB + 14'd1], mem[bAddrB]};
+    end else begin
+      rDataB = 32'h0;
     end
   end
 endmodule
@@ -74,7 +78,7 @@ endmodule
     });
 
     File('${tmpDir.path}/parcore_top.sv').writeAsStringSync(sv);
-    File('${tmpDir.path}/sim_main.cpp').writeAsStringSync("""
+    File('${tmpDir.path}/sim_main.cpp').writeAsStringSync(r"""
 #include "VParcoreTop.h"
 #include "VParcoreTop___024root.h"
 #include "verilated.h"
@@ -96,6 +100,7 @@ int main(int argc, char** argv) {
     top->guest_text_end = 0x00000800;
     top->eval();
 
+    auto& c0_mem = top->rootp->ParcoreTop__DOT__core0_tcm__DOT__mem;
     auto& c1_mem = top->rootp->ParcoreTop__DOT__core1_tcm__DOT__mem;
     uint32_t prev_regs[32];
     std::memset(prev_regs, 0, sizeof(prev_regs));
@@ -129,7 +134,15 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::printf("CYCLES=%d C0_PC=0x%04x C1_PC=0x%04x C2_PC=0x%04x C3_PC=0x%04x\\n",
+    uint32_t c0_500 = uint32_t(c0_mem[0x500]) | (uint32_t(c0_mem[0x501]) << 8) |
+                      (uint32_t(c0_mem[0x502]) << 16) | (uint32_t(c0_mem[0x503]) << 24);
+    std::printf("C0_500=0x%08x\n", c0_500);
+    for (int a = 0; a < 4096; a += 4) {
+        uint32_t v = uint32_t(c1_mem[a]) | (uint32_t(c1_mem[a+1]) << 8) |
+                     (uint32_t(c1_mem[a+2]) << 16) | (uint32_t(c1_mem[a+3]) << 24);
+        if (v != 0 && a < 0x100) std::printf("C1_MEM[0x%04x]=0x%08x\n", a, v);
+    }
+    std::printf("CYCLES=%d C0_PC=0x%04x C1_PC=0x%04x C2_PC=0x%04x C3_PC=0x%04x\n",
                 cyc,
                 top->rootp->ParcoreTop__DOT__core0_if__DOT__pc,
                 top->rootp->ParcoreTop__DOT__core1_id__DOT__pc,
@@ -139,7 +152,7 @@ int main(int argc, char** argv) {
         uint32_t addr = r * 4;
         uint32_t val = uint32_t(c1_mem[addr]) | (uint32_t(c1_mem[addr+1]) << 8) |
                        (uint32_t(c1_mem[addr+2]) << 16) | (uint32_t(c1_mem[addr+3]) << 24);
-        std::printf("R%d=0x%08x\\n", r, val);
+        std::printf("R%d=0x%08x\n", r, val);
     }
     delete top;
     return 0;
@@ -209,7 +222,7 @@ int main(int argc, char** argv) {
   for (final m in RegExp(r'R(\d+)=0x([0-9a-fA-F]+)').allMatches(out)) {
     regs[int.parse(m.group(1)!)] = int.parse(m.group(2)!, radix: 16);
   }
-  return (regs: regs, cycles: cycles);
+  return (regs: regs, cycles: cycles, stdout: out);
 }
 
 Uint8List mergeCore0WithGuest(List<int> c0Kernel, List<int> guestProg) {
@@ -260,7 +273,7 @@ void main() {
         maxCycles: 35000,
       );
       final regs = res.regs;
-      print('Completed in ${res.cycles} cycles | regs=$regs');
+      print('Completed in ${res.cycles} cycles | stdout:\n${res.stdout}');
       expect(regs[1]! & 0xFFFFFFFF, equals(0xFFFFFFF0));
       expect(regs[2]! & 0xFFFFFFFF, equals(0x4));
       expect(regs[3]! & 0xFFFFFFFF, equals(0x20));

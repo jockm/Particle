@@ -820,6 +820,9 @@ class ParticleCpuCore extends Module {
             ]),
           ]),
           CaseItem(Const(stateFetchImm, width: 2), [
+            rfWData < imm16Extended,
+            rfWEn < Const(1),
+            rfWAddr < immDestReg,
             pc < pc + 4,
             state < Const(stateFetch, width: 2),
           ]),
