@@ -20,19 +20,22 @@
 ```text
 particle/
 ├── README.md                          # Project root overview and quickstart
+├── GettingStarted.md                  # Installing, building and testing, step by step
 ├── Documentation/
 │   ├── action-language-guide.md       # Action language guide and reference
 │   ├── particle_spec.md               # Master architectural specification
+│   ├── particle_processor_architecture_specification.md  # Processor architecture specification
 │   ├── pasm_assembler.md              # Macro assembler documentation
-│   ├── psim_simulator.md              # Simulator & p4db debugger reference
+│   ├── particle_simulator_documentation.md  # Simulator & p4db debugger reference
 │   ├── act16_compiler.md              # Action systems language specification
 │   ├── hdl_architecture.md            # Pure ROHD datapath, memory & execution model
 │   ├── configuration_guide.md         # CpuConfig parameters and synthesis flow
 │   └── memory_map_and_conventions.md  # Vector layout, ABI, and calling conventions
 ├── Makefile                           # Build, test and tool targets ('make help')
 ├── action.json                        # Project file for the Action language server
-├── pbuild                             # Build (and run) a Particle program in one step
-├── llbuild                            # Build (and run) an Action program for this computer
+├── pbuild, pbuild.cmd                 # Build (and run) a Particle program in one step
+├── llbuild, llbuild.cmd               # Build (and run) an Action program for this computer
+├── pdev.cmd                           # Windows: opens a Git Bash shell set up for this project
 ├── hdl/
 │   ├── particle/                      # Particle core in ROHD (lib, test, bin/generate.dart)
 │   └── parcore/                       # Multi-core Parcore fabric in ROHD
@@ -40,9 +43,11 @@ particle/
 │   └── parcore/                       # Parcore pipeline microkernels (assembly)
 ├── lib/
 │   ├── common.inc                     # Architectural macros, vector defines & tiered loads
-│   ├── particle_runtime.asm           # Direct stride vector table & cold-boot entry
+│   ├── particle_runtime.asm           # Vector table & cold-boot entry for hand-written assembly (not used by the compiler)
 │   ├── alloc.asm                      # Heap allocator
-│   └── *.act                          # Action libraries (strings, protokernel, ...)
+│   ├── integer.act, string.act        # The Action prelude: Integer and string methods
+│   ├── protokernel/                   # The protokernel package
+│   └── *.act                          # Other Action libraries
 ├── apps/
 │   ├── asm/                           # Assembly validation suites
 │   ├── act/                           # Action programs and the compiler's test programs
@@ -53,6 +58,10 @@ particle/
 │       ├── pasm_lsp/                  # Assembly language server
 │       ├── psim/                      # Instruction-accurate simulator & p4db
 │       └── vscode/                    # VS Code extensions for Action and Particle assembly
+├── TableGen/                          # LLVM backend description of the Particle ISA
+├── third_party/
+│   └── riscv-tests/                   # Official RISC-V ISA tests (git submodule)
+└── Notes/                             # Project notes and proposals
 ```
 
 ---
@@ -63,11 +72,14 @@ For complete setup instructions, VS Code installation, and test commands, see
 [Getting Started](GettingStarted.md).
 
 ### For Windows Users
-Please invoke the script ParticalDev.cmd at the root of the project to have a bash shell configured for this project.
+Run `pdev.cmd`, at the root of the project, to open a Git Bash shell set up for
+this project, and run every command below from that shell. See the Windows
+section of [Getting Started](GettingStarted.md#windows).
 
 ### Prerequisites
-* **Dart SDK** `>= 3.0.0 < 4.0.0` (the hardware uses `rohd: ^0.5.0`)
-* **clang** (LLVM 15 or later), only to build Action programs for your computer
+See [Prerequisites](GettingStarted.md#prerequisites) and
+[Installing dependencies](GettingStarted.md#installing-dependencies) in Getting
+Started for what to install on macOS and Windows.
 
 ### 0. Clone this project
 ```bash
@@ -93,7 +105,7 @@ make tools                             # compiler, assembler, linter, simulator,
 ```
 
 `pbuild` compiles, lints, assembles and, with `--sim`, runs the program in the
-simulator; `--debug` runs it under the p4db debugger instead. The tools can
+simulator; `--sim --debug` runs it under the p4db debugger instead. The tools can
 also be run one at a time:
 
 ```bash
@@ -135,8 +147,9 @@ section 2.11 of the guide.
 
 ### 5. Run ROHD Hardware Tests & Generate SystemVerilog
 ```bash
-cd hdl/particle
-dart pub get
-dart test
-dart run bin/generate.dart   # Emits synthesizable particle_top.sv
+make test-particle                     # Particle ROHD tests
+make generate-particle                 # emits synthesizable particle_top.sv
 ```
+
+Both fetch the hardware's Dart dependencies first (`make setup`). `make test`
+and `make generate` cover Parcore as well.

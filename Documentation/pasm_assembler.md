@@ -1,24 +1,26 @@
-# Particle Macro Assembler (`pasm.py`)
+# Particle Macro Assembler (`pasm`)
 
-`pasm.py` is the official two-pass macro assembler for the Particle 32-bit RISC processor. It parses human-readable assembly source files, resolves forward/backward labels and symbols, expands macros, processes nested conditionals, and emits raw binary images, Intel-style hexadecimal listings, or C header arrays.
+`pasm` is the two-pass macro assembler for the Particle 32-bit RISC processor, written in Dart (`apps/tools/pasm`, built into `build/tools/pasm` by `make pasm` or `make tools`). It parses assembly source files, resolves forward and backward labels and symbols, expands macros, processes nested conditionals, and emits a raw binary image or 16-bit hexadecimal words, with a listing file beside it.
 
 ---
 
 ## Command-Line Usage
 
 ```bash
-python3 tools/pasm.py <source.asm> [options]
+build/tools/pasm [options] <source.asm> [<source.asm> ...]
 ```
 
 ### Arguments and Flags
-* `<source.asm>`: Primary assembly input file.
+* `<source.asm>`: One or more assembly source files, assembled as one image in the order given.
+* `-h`, `--help`: Show the usage and exit.
 * `-o`, `--output <file>`: Output emission destination (default: `a.out`).
 * `-I`, `--include <dir>`: Add directory to include search path for `.include` directives.
-* `-D`, `--define <SYM>[=<VAL>]`: Predefine symbols/macros before parsing (e.g. `-DDEBUG`, `-DCORE_ID=1`).
-* `--format {bin,hex,c}`: Output format:
+* `-D`, `--define <SYM>[=<VAL>]`: Predefine a symbol before parsing (e.g. `-DDEBUG`, `-DCORE_ID=1`). `<VAL>` is a decimal number; without one the symbol is 1.
+* `--format {bin,hex}`: Output format (default: `bin`):
   * `bin`: Raw little-endian machine code binary.
-  * `hex`: 16-bit hexadecimal words per line (for FPGA Block RAM initialization).
-  * `c`: C-style array `const uint16_t particle_rom[] = { ... };`.
+  * `hex`: One 16-bit hexadecimal word per line (for FPGA Block RAM initialization).
+
+A listing, with each line's address, bytes and source line number and a symbol table, is always written beside the output, with the same name and the extension `.lst`.
 
 ---
 
@@ -33,13 +35,13 @@ python3 tools/pasm.py <source.asm> [options]
 * `.byte <v1>, <v2>, ...`: Emits one or more 8-bit bytes.
 * `.half <v1>, <v2>, ...`: Emits one or more 16-bit halfwords (little-endian).
 * `.word <v1>, <v2>, ...`: Emits one or more 32-bit words (little-endian).
-* `.asciz "<string>"`: Emits a null-terminated UTF-8 ASCII string.
+* `.asciz "<string>"` (or `.string`): Emits a null-terminated UTF-8 ASCII string.
 
 ### File Inclusion
 * `.include "<filename>"`: Searches current directory and `-I` search paths to inline include source files (e.g. `.include "lib/common.inc"`).
 
 ### Preprocessor Conditionals
-Conditionals may be nested up to 16 levels deep:
+Conditionals may be nested:
 * `.ifdef <symbol>` ... `.else` ... `.endif`
 * `.ifndef <symbol>` ... `.else` ... `.endif`
 * `.if <expression>` ... `.else` ... `.endif`
