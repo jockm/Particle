@@ -1,7 +1,7 @@
 # Particle Processor Architecture & System Engineering Specification
 
 ## 1. Overview
-Particle is a high-efficiency 32-bit load/store RISC processor architecture utilizing compact, fixed-width 16-bit instructions, inspired by the Hitachi SH-2, ARM Thumb, and MiniRISC4 architectures. It is implemented in pure Intel ROHD (Rapid Open Hardware Development in Dart) without legacy Verilog codebases, synthesizing directly to SystemVerilog for modern FPGA platforms (such as Lattice ECP5 on the ULX3S).
+Particle is a high-efficiency 32-bit load/store RISC processor architecture utilizing compact 16-bit instructions (plus 32-bit two-word immediate load instructions `LDI` and `LDIS`), inspired by the Hitachi SH-2, ARM Thumb, and MiniRISC4 architectures. It is implemented in pure Intel ROHD (Rapid Open Hardware Development in Dart) without legacy Verilog codebases, synthesizing directly to SystemVerilog for modern FPGA platforms (such as Lattice ECP5 on the ULX3S).
 
 This revision of the specification is aligned with the reference simulator `psim.py`. Where the two disagree, the simulator's behaviour is normative.
 
@@ -49,9 +49,9 @@ $$\text{Target} = \text{TRAP\_TABLE\_BASE} + (\text{Vector} \times 64)$$
 ---
 
 ## 4. Complete Instruction Set Architecture (ISA) Map
-Instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. Imm8 forms use `[7:0]` for the immediate and operate implicitly on `R14`. In `pasm.py`, stores are assembled using load mnemonics with a memory destination (`LD32 (Rr), Rl`) or `ST*` mnemonics.
+Standard instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. Imm8 forms use `[7:0]` for the immediate and operate implicitly on `R14`. `LDI` (`0x07`) and `LDIS` (`0x08`) are 32 bits wide (2 little-endian 16-bit words): Word 0 encodes `[15:8] Opcode`, `[7:4] 0000`, `[3:0] Rl`, and Word 1 (`PC + 2`) holds the 16-bit immediate `Imm16`. In `pasm`, stores are assembled using load mnemonics with a memory destination (`LD32 (Rr), Rl`) or `ST*` mnemonics.
 
-### 4.1 Loads & Immediates (0x00 - 0x06)
+### 4.1 Loads & Immediates (0x00 - 0x08)
 - `0x00`: `LD Rr, Rl` — $Rr \leftarrow Rl$ (`LD R0, R0` = `0x0000` is the canonical NOP)
 - `0x01`: `LD Rr, Imm4` — $Rr \leftarrow \text{zero\_ext}(Imm4)$
 - `0x02`: `LD R14, Imm8` — $R14 \leftarrow \text{zero\_ext}(Imm8)$
@@ -59,6 +59,8 @@ Instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. I
 - `0x04`: `LD R14, -Imm8` — $R14 \leftarrow -Imm8$
 - `0x05`: `PUSH4 Rr, Imm4` — $Rr \leftarrow (Rr \ll 4) \mid Imm4$
 - `0x06`: `PUSH8 R14, Imm8` — $R14 \leftarrow (R14 \ll 8) \mid Imm8$
+- `0x07`: `LDI Rl, Imm16` — 32-bit (2-word) unsigned immediate load: $Rl \leftarrow \text{zero\_ext}(\text{Mem16}[PC + 2]);\ PC \leftarrow PC + 4$
+- `0x08`: `LDIS Rl, Imm16` — 32-bit (2-word) signed immediate load: $Rl \leftarrow \text{sign\_ext}(\text{Mem16}[PC + 2]);\ PC \leftarrow PC + 4$
 
 ### 4.2 Memory Loads & Stores (0x10 - 0x39)
 Register-indirect addressing only (no displacement modes). Each width uses the same ten-slot layout; increment/decrement steps equal the access size (1, 2, or 4 bytes). Loads write `Rr` from memory addressed by `Rl`; stores write `Rl` to memory addressed by `Rr`. Byte and halfword loads zero-extend.
@@ -266,6 +268,9 @@ These behaviours are specific to the simulator and are not architectural:
 ---
 
 ## Revision Notes
+Added `LDI` (`0x07`) and `LDIS` (`0x08`) per Addendum 03:
+- §4 / §4.1: Documented 32-bit (2-word) instruction layout and semantics for `LDI Rl, Imm16` and `LDIS Rl, Imm16`.
+
 Aligned with `psim.py`:
 - §4.2: Memory opcode layout replaced. Pre-increment and post-decrement forms were added. The base+offset and SP+offset forms were removed.
 - §4.10: FIFO opcodes moved to `0xE4`–`0xE7`. Register-channel forms were added, and TRYR/TRYW now report status in R14.
