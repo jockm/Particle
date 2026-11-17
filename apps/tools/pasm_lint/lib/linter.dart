@@ -110,7 +110,7 @@ const Set<String> unaryRegisterOps = {
 /// Instructions where parenthesized indirect memory operands are forbidden.
 const Set<String> memIndirectDisallowed = {
   "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR",
-  "LD", "ADD", "SUB", "AND", "OR", "XOR", "SHIFTL", "SHIFTR", "ASHIFTR",
+  "LD", "LDI", "LDIS", "ADD", "SUB", "AND", "OR", "XOR", "SHIFTL", "SHIFTR", "ASHIFTR",
   "ROTL", "ROTR", "MULL", "MULH", "SMULH", "MULHU", "MULHSU",
   "REV32", "NEG", "NOT", "NEZ", "CLZ", "BEXTR", "SEXT8", "SEXT16",
   "SLT", "SSLT", "SLE", "SSLE", "SEQ", "SNE", "BSET", "BCLR", "BINV", "BGET"
@@ -128,7 +128,7 @@ const Set<String> loadWidthOps = {"LD8", "LD16", "LD32"};
 const Set<String> writesFirstOperand = {
   ...imm4Shifts, ...imm4ArithLogic,
   "REV32", "NEG", "NOT", "NEZ", "CLZ", "SEXT8", "SEXT16", "BEXTR",
-  "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R", "XCHG",
+  "LDI", "LDIS", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R", "XCHG",
 };
 
 /// Macros that leave R14 holding something else (they build values in it).
@@ -162,7 +162,7 @@ const Set<String> allValidMnemonics = {
   "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR", "MBOX",
 
   // Memory Operations
-  "LD", "LD8", "LD16", "LD32", "ST8", "ST16", "ST32", "TAS",
+  "LD", "LDI", "LDIS", "LD8", "LD16", "LD32", "ST8", "ST16", "ST32", "TAS",
 
   // Arithmetic & Logic
   "ADD", "SUB", "DIV", "MOD",
@@ -720,6 +720,32 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
       }
     }
 
+    // 10a. Validate LDI / LDIS operand arity and 16-bit immediate bounds
+    if (mnem == "LDI" || mnem == "LDIS") {
+      if (ops.length != 2) {
+        errors.add((lno, "$mnem expects 2 operands ($mnem Rl, <imm16>), but got ${ops.length}."));
+      } else {
+        final destReg = ops[0].toUpperCase();
+        if (!validRegisters.contains(destReg)) {
+          errors.add((lno, "Invalid destination register '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
+        }
+        if (validRegisters.contains(ops[1].toUpperCase())) {
+          errors.add((lno, "$mnem immediate operand cannot be a register ('${ops[1]}')."));
+        } else {
+          final imm = parseNumeric(ops[1]);
+          if (mnem == "LDI") {
+            if (imm != null && (imm < 0 || imm > 0xFFFF)) {
+              errors.add((lno, "Immediate $imm (${ops[1]}) out of 16-bit unsigned range (0..65535) for LDI."));
+            }
+          } else {
+            if (imm != null && (imm < -32768 || imm > 0xFFFF)) {
+              errors.add((lno, "Immediate $imm (${ops[1]}) out of 16-bit signed range (-32768..32767) for LDIS."));
+            }
+          }
+        }
+      }
+    }
+
     // 11. Enforce branch directions (FBRA forward, BBRA backward) and unresolved target detection
     if (branchForward.contains(mnem) || branchBackward.contains(mnem)) {
       String? targetLabel;
@@ -909,7 +935,7 @@ bool _isMem(String op) => op.startsWith("(") && op.endsWith(")");
     }
     if (k == 0) {
       // A destination that is only written
-      final pureWrite = const {"LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||
+      final pureWrite = const {"LDI", "LDIS", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||
           (mnem == "LD" && ops.length == 2) ||
           (const {"LD8", "LD16", "LD32"}.contains(mnem) && ops.length == 2 && _isMem(ops[1]));
       if (pureWrite) {
