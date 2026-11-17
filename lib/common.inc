@@ -30,58 +30,54 @@
 .define TRAP_ILLEGAL        15
 
 .macro LOAD16 reg, value
-    LD      R14, ((%value) >> 8) & 0xFF
-    PUSH8   R14, (%value) & 0xFF
-    LD      %reg, R14
+    LDI     %reg, %value
+.endmacro
+
+.macro LOAD16S reg, value
+    LDIS    %reg, %value
 .endmacro
 
 .macro LOAD24 reg, value
-    LD      R14, ((%value) >> 16) & 0xFF
-    PUSH8   R14, ((%value) >> 8) & 0xFF
+    LDI     R14, ((%value) >> 8) & 0xFFFF
     PUSH8   R14, (%value) & 0xFF
     LD      %reg, R14
 .endmacro
 
 .macro LOAD_R14_32 value
-    LD      R14, ((%value) >> 24) & 0xFF
-    PUSH8   R14, ((%value) >> 16) & 0xFF
+    LDI     R14, ((%value) >> 16) & 0xFFFF
     PUSH8   R14, ((%value) >> 8) & 0xFF
     PUSH8   R14, (%value) & 0xFF
 .endmacro
 
 .macro LOAD32 reg, value
-    LD      R14, ((%value) >> 24) & 0xFF
-    PUSH8   R14, ((%value) >> 16) & 0xFF
+    LDI     R14, ((%value) >> 16) & 0xFFFF
     PUSH8   R14, ((%value) >> 8) & 0xFF
     PUSH8   R14, (%value) & 0xFF
     LD      %reg, R14
 .endmacro
 
 .macro LOAD_R14_16 value
-    LD      R14, ((%value) >> 8) & 0xFF
-    PUSH8   R14, (%value) & 0xFF
+    LDI     R14, %value
 .endmacro
 
 .macro START_PROGRAM
     LOAD32  R15, 0x00010000
-    LOAD32  R14, _main
+    LDI     R14, _main
     JMP     R14, R0
 .endmacro
 
 .macro LJMP target
-    LD      R14, ((%target) >> 8) & 0xFF
-    PUSH8   R14, (%target) & 0xFF
+    LDI     R14, %target
     JMP     R14, R0
 .endmacro
 
 .macro RLCALL target
-    LD      R14, ((%target) >> 8) & 0xFF
-    PUSH8   R14, (%target) & 0xFF
+    LDI     R14, %target
     JMP     R14, R14
 .endmacro
 
 .macro RCALL target
-    LOAD32  R14, %target
+    LDI     R14, %target
     JMP     R14, R14
 .endmacro
 
