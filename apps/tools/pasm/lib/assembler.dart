@@ -149,8 +149,9 @@ class ParticleAssembler {
           pc += decoded.length + 1; // null terminator byte
         }
       } else {
-        // Native Particle RISC instructions are 16 bits (2 bytes)
-        pc += 2;
+        final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
+        // LDI and LDIS are 32-bit (2-word / 4-byte) instructions; all others are 16-bit
+        pc += (mnem == 'LDI' || mnem == 'LDIS') ? 4 : 2;
       }
       // Highest address reached; an .org back to a lower address does not
       // lower the end of the image
@@ -247,13 +248,15 @@ class ParticleAssembler {
           pc += 1;
         }
       } else {
-        final instWord = encodeInstruction(line, pc, fname, lno);
-        final b0 = instWord & 0xFF;
-        final b1 = (instWord >> 8) & 0xFF;
-        binaryData[pc] = b0;
-        binaryData[pc + 1] = b1;
-        emittedBytes.addAll([b0, b1]);
-        pc += 2;
+        final words = encodeInstructionWords(line, pc, fname, lno);
+        for (final w in words) {
+          final b0 = w & 0xFF;
+          final b1 = (w >> 8) & 0xFF;
+          binaryData[pc] = b0;
+          binaryData[pc + 1] = b1;
+          emittedBytes.addAll([b0, b1]);
+          pc += 2;
+        }
       }
 
       if (pc > maxAddr) maxAddr = pc;
@@ -312,6 +315,45 @@ class ParticleAssembler {
       }
     }
     return out;
+  }
+
+  /// Encodes an instruction into one or two 16-bit machine words (little-endian).
+  List<int> encodeInstructionWords(
+      String line, int curPc, String fname, int lno) {
+    final tokens = line.split(RegExp(r'\s+'));
+    final mnem = tokens[0].toUpperCase();
+    if (mnem == 'LDI' || mnem == 'LDIS') {
+      final opStr = line.length > tokens[0].length
+          ? line.substring(tokens[0].length).trim()
+          : '';
+      final ops = opStr.isNotEmpty
+          ? opStr.split(',').map((o) => o.trim()).toList()
+          : <String>[];
+      if (ops.length != 2) {
+        throw AssemblerError(
+            '$mnem expects 2 operands: $mnem Rl, <imm16>', fname, lno);
+      }
+      final rl = parseReg(ops[0], fname, lno);
+      final val = prep.parseExpr(ops[1], symbols);
+      if (mnem == 'LDI') {
+        if (val < 0 || val > 0xFFFF) {
+          throw AssemblerError(
+              'Immediate value $val out of 16-bit unsigned range (0..65535) for LDI',
+              fname,
+              lno);
+        }
+        return [(0x07 << 8) | rl, val & 0xFFFF];
+      } else {
+        if (val < -32768 || val > 0xFFFF) {
+          throw AssemblerError(
+              'Immediate value $val out of 16-bit signed range (-32768..32767) for LDIS',
+              fname,
+              lno);
+        }
+        return [(0x08 << 8) | rl, val & 0xFFFF];
+      }
+    }
+    return [encodeInstruction(line, curPc, fname, lno)];
   }
 
   /// Encodes a single instruction into a 16-bit machine word.
