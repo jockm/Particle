@@ -80,16 +80,24 @@ void main() {
 }
 ```
 
-Compile it {tktk fix me}:
+Compile it with the compiler directly:
 
 ```sh
-build/tools/action hello.act          # {tktk fix me}
+build/tools/action hello.act          
 ```
 
-This writes Particle assembly to `build/hello.asm`. To get a binary you assemble it with `pasm`, which needs the runtime support files (see [2.5](#25-the-runtime-support-files)). The `pbuild` script does all of this in one step, and can also run the result in the simulator (see [2.1](#21-building-and-running-programs)):
+This writes Particle assembly to `build/hello.asm`. To get a binary you assemble it with `pasm`, which needs the runtime support files (see [2.5](#25-the-runtime-support-files)). 
+
+The `pbuild` script does all of this in one step:
 
 ```sh
-./pbuild hello.act --sim              # {tktk fix me}
+./pbuild hello.act 
+```
+
+and places the `hello.asm` file in the `build/` directory. It can also run the result in the simulator (see [2.1](#21-building-and-running-programs)):
+
+```sh
+./pbuild hello.act --sim           
 ```
 
 The example already shows several features:
@@ -788,10 +796,10 @@ The tools are Dart programs, built into `build/tools` with `make tools` (or one 
 
 ### The compiler
 
-{tktk fix me} The general form is:
+The direct form is:
 
 ```sh
-build/tools/action [options] source.act [more.act ...]     # {tktk fix me}
+build/tools/action [options] source.act [more.act ...]  
 ```
 
 | Option | Meaning |
@@ -809,31 +817,33 @@ build/tools/action [options] source.act [more.act ...]     # {tktk fix me}
 
 The compiler stops at the first error, printing `action: error: …` and exiting with status 1. A command-line mistake exits with status 2.
 
-Examples {tktk fix me}:
+Examples:
 
 ```sh
-build/tools/action main.act                              # {tktk fix me}  -> build/main.asm
-build/tools/action main.act -o out/firmware.asm          # {tktk fix me}
-build/tools/action -D DEBUG -D BAUD=115200 main.act      # {tktk fix me}
-build/tools/action -fno-bounds-check main.act            # {tktk fix me}
+build/tools/action main.act                              # -> build/main.asm
+build/tools/action main.act -o out/firmware.asm          
+build/tools/action -D DEBUG -D BAUD=115200 main.act      
+build/tools/action -fno-bounds-check main.act            
 ```
 
 The usual file extension is `.act`.
 
 ### pbuild
 
-`pbuild` compiles, lints, assembles and optionally simulates in one step {tktk fix me}:
+To make life easier there is the `pbuild` uility.  It compiles, lints, assembles, and can even optionally simulate in one step.  Additionally it makes sure the compiled/assembled output is placed in the `build/` directory
+
+Examples:
 
 ```sh
-./pbuild main.act -o build/main.bin --sim                # {tktk fix me}
-./pbuild main.act drivers.act asmlib.asm -o build/fw.bin # {tktk fix me}
+./pbuild main.act -o build/main.bin --sim                
+./pbuild main.act drivers.act asmlib.asm -o build/fw.bin 
 ```
 
 It accepts `.act` and `.asm` sources together, and passes `-D`, `-I`, `--stack-top`, the bounds-check flags and the reference-check flags through to the tools. `--sim` runs the binary in psim, `--debug` runs it under psim's debugger, and `--no-exit-on-reset` is passed to psim. If a tool it needs has not been built, pbuild says which `make` target builds it. If a tool fails, pbuild exits with that tool's status; after `--sim` it exits with psim's status (see [2.7](#27-running-in-the-simulator)).
 
 ## 2.2 Multi-file projects
 
-There is no linker, so a program is built from **all of its source files at once**: `.act` files named on the command line or brought in with `import`, plus any `.asm` files given to `pbuild`. The Action files are compiled into a **single** assembly file.
+There is no linker (though the use of packages largely eliminates that need), so a program is built from **all of its source files at once**: `.act` files named on the command line or brought in with `import`, plus any `.asm` files given to `pbuild`. The Action files are compiled into a **single** assembly file.
 
 - `import "file.act";` loads another module (see [3.2](#32-modules-and-imports)). Each file is loaded only once, so repeated or circular imports are harmless.
 - All declarations are merged. Types, constants and functions from any file can be used in any other.
@@ -889,7 +899,7 @@ With bounds checking on (the default), every array index is checked:
 
 An out-of-range index executes `TRAP 15`. On hardware, trap 15 goes to its vector, so a `trap(15)` handler can report the fault. In psim, a `TRAP 15` instruction ends the run with exit status 15.
 
-`-fno-bounds-check` {tktk fix me} removes the checks, which makes the code smaller and faster.
+`-fno-bounds-check`  removes the checks, which makes the code smaller and faster.
 
 ### Reference checks
 
@@ -898,7 +908,7 @@ The compiler checks the references in a function's variables at compile time (se
 - Before a reference held in a global or a field is used (a field or element read or written, `.len`, `.capacity`, a method call, passing it to a function, destroying or resizing it), it is checked to have a value.
 - After `create()`, `createArray()`, `string.create()` and `resize()`, the allocator's result is checked, so running out of heap traps rather than giving an empty reference.
 
-A failed check executes `TRAP 15`, like a failed bounds check. `-fno-reference-check` {tktk fix me} removes these checks.
+A failed check executes `TRAP 15`, like a failed bounds check. `-fno-reference-check` removes these checks.
 
 ## 2.4 Understanding the output
 
