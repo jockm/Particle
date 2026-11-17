@@ -1134,6 +1134,7 @@ A file is checked the way the compiler would check it. By default, that means th
 | Key | Meaning |
 |-----|---------|
 | `module` | The module's name, as `{ "name": "github.com/you/project" }`. Programs made of packages need it (see [2.12](#212-packages)). |
+| `requires` | The modules this module uses, and their versions (see [Modules and versions](#modules-and-versions)). The editor shows a required module that cannot be used yet, such as one not fetched, as an error on its entry. |
 | `includeDirs` | Directories searched by `import`, like `-I`. The workspace root and `lib` are always searched. |
 | `defines` | Constants, like `-D NAME=VALUE`. |
 | `programFolders` | Folders whose subfolders are each one program: all the `.act` files in the subfolder, checked together. Adding a folder or a file needs no change to `action.json`. This repository's `action.json` names `apps/act/multi` (see [2.2](#22-multi-file-projects)). |
@@ -1302,7 +1303,7 @@ Packages are found through the **module**, which is named in `action.json` (see 
 }
 ```
 
-A package's **import path** is the module's name followed by the package's folder inside `action.json`'s folder. In this repository, the folder `apps/act/packages/geometry` is the package `github.com/jockm/Particle/apps/act/packages/geometry`. Imports always give the full path, even between packages of the same module. Only packages of the program's own module can be imported for now. Importing a package when `action.json` names no module is an error.
+A package's **import path** is the module's name followed by the package's folder inside `action.json`'s folder. In this repository, the folder `apps/act/packages/geometry` is the package `github.com/jockm/Particle/apps/act/packages/geometry`. Imports always give the full path, even between packages of the same module. Packages of other modules are imported the same way, by their full path, once the module is listed in `requires` (see [Modules and versions](#modules-and-versions) below). Importing a package when `action.json` names no module is an error.
 
 ### A program made of packages
 
@@ -1361,9 +1362,73 @@ pub void init(Point p, u32 x, u32 y) {
 
 ### Names in the output
 
-The program's own declarations keep their names. A package's declarations are given **internal names** made of the package's folder path inside the module, `..`, and the name: the function `init` of `apps/act/packages/geometry` is the label `_apps.act.packages.geometry..init` in Particle assembly, and `@"act.apps.act.packages.geometry..init"` in LLVM IR. Assembly code calls a package's function by that label. `asm` and `extern` prototypes keep their plain names, because they name a label or a C function. Error messages and the editor show these names as the source writes them, `geometry.init`.
+The program's own declarations keep their names. A package's declarations are given **internal names** made of the package's folder path inside the module, `..`, and the name: the function `init` of `apps/act/packages/geometry` is the label `_apps.act.packages.geometry..init` in Particle assembly, and `@"act.apps.act.packages.geometry..init"` in LLVM IR. A package of another module uses its full import path instead, with `/` written `.`, `.` written `_` and `-` written `__`: `print` in `github.com/jockm/plib/console` is `_github_com.jockm.plib.console..print`. Assembly code calls a package's function by that label. `asm` and `extern` prototypes keep their plain names, because they name a label or a C function. Error messages and the editor show these names as the source writes them, `geometry.init`.
 
 In this repository the test packages are in `apps/act/packages/`, and `apps/act/test_packages.act` uses them.
+
+### Modules and versions
+
+A **module** is a collection of packages that is shared and versioned as one unit, usually one git repository. Your program is a module, named in its `action.json`, and so is each library it uses. A module lists the modules it uses under `requires`:
+
+```json
+{
+  "action": {
+    "module": { "name": "github.com/jockm/firmware" },
+    "requires": {
+      "github.com/jockm/plib": { "version": "v1.4.0" },
+      "github.com/jockm/proto": { "path": "../proto" }
+    }
+  }
+}
+```
+
+The program then imports a library's packages by their full path, `import "github.com/jockm/plib/console";`, exactly as it imports its own. Versions appear only in `action.json`, never in the source.
+
+**Module names** follow Go's rules. A name is parts separated by `/`. Each part is letters and digits, with single `.` or `-` between them. A module that is fetched has a dot in its first part, which names its server: `github.com/jockm/plib`. The package folders inside a module follow the rule for folders above (letters and digits, starting with a letter).
+
+**Versions** are git tags of the form `vMAJOR.MINOR.PATCH`, such as `v1.4.0`, optionally with a pre-release part (`v1.5.0-beta.1`). They are ordered as semantic versioning orders them.
+
+**Which version is used.** Each module states the *lowest* version it needs of each module it uses. A build uses, for each module, the highest of the versions asked for anywhere in the requirement graph (Go's *minimal version selection*). The same requirements always give the same versions, and a build never picks up a newer release by itself: to move to a newer version, raise the number in `action.json`. A build can use only one major version of a module; if two modules need different major versions (`v1.x` and `v2.x`), that is an error naming both.
+
+**An entry of `requires`:**
+
+| Key | Meaning |
+|-----|---------|
+| `version` | The lowest version needed. |
+| `git` | The repository to fetch from, when it is not `https://` followed by the module path (a private server, say). |
+| `path` | A folder (relative to `action.json`) to use instead of a fetched version, so you can work on a library and a program that uses it at the same time. The folder's `action.json` must name the same module. A `path` counts only in the main module's `action.json`; in a library's, it is ignored. |
+
+**Fetching.** The compiler never uses the network while building. Fetching is a separate step:
+
+```sh
+action --fetch       # in Particle: make deps
+```
+
+It fetches every version the requirement graph needs into the cache and records a checksum of each one in **`action.sum`**, next to `action.json`. **Fetching needs git**, which the compiler runs to fetch each version (`git clone` of its tag). Other version control systems may be supported in the future. The cache is `~/.cache/action`, or the folder named by the `ACTION_CACHE` environment variable. A cached version is in a folder named for its path and version (`~/.cache/action/github.com/jockm/plib@v1.4.0`), and its files are read-only, so it can't be edited by accident.
+
+**`action.sum`** has one line per module version: its path, its version and a SHA-256 checksum of its files. It is written by `action --fetch`; commit it with the project. A build checks every cached module it uses against it. When a version's contents no longer match (its tag was moved to other code, or the cache was changed), the build and `--fetch` stop with an error showing both checksums. Find out why before changing `action.sum`.
+
+**`vendor/`.** To build without the cache, for example offline, or to keep exactly the code a build used for years:
+
+```sh
+action --vendor      # in Particle: make vendor
+```
+
+It copies the versions the build uses into `vendor/<module path>/` and lists them in `vendor/modules.txt`. When `vendor/` exists, builds use it and nothing else; when `action.json` asks for something `vendor/` does not have, the build says to run `action --vendor` again. Commit `vendor/` if you use it.
+
+**Checking.** `action --verify` checks the cached versions listed in `action.sum`, and the contents of `vendor/`, against `action.sum`, without the network. It reports each one and exits with an error status if any does not match.
+
+All three modes work on the module whose `action.json` is in the current folder or above it, and take no source files. `action_llvm` has the same modes, so a project built only with LLVM needs nothing else. `pbuild` and `llbuild` never fetch.
+
+**Messages.** Whenever something has to be fetched or vendored first, the message names the module, the version and the command to run, for example:
+
+```
+main.act:2:8: module github.com/jockm/plib v1.4.0 is not fetched; run 'action --fetch' (in Particle: make deps)
+```
+
+A module that is imported but not listed in `requires` gets a message saying to add it there and then fetch. A library module must have an `action.json` that names it, and what other modules use from it must be packages: a file import (`import "x.act"`) names a file, not a module path, so it does not import from another module.
+
+In this repository, `make deps-tests` tests fetching, vendoring and building with modules, using git repositories it creates in a temporary folder.
 
 ---
 

@@ -555,4 +555,63 @@ void main() {
       await c.close();
     });
   });
+
+  group('modules', () {
+    final prelude = File('${Directory.current.path}/../../../lib/string.act').readAsStringSync();
+    const appMain = '''package main;
+import "example.com/me/plib/console";
+
+void main() {
+    u32 v = console.twice(2);
+}
+''';
+
+    test('a required module that is not fetched is an error on its entry', () async {
+      final c = await TestClient.start({
+        'action.json': '{\n  "action": {\n    "module": { "name": "example.com/me/app" },\n'
+            '    "requires": {\n      "example.com/me/plib": { "version": "v1.0.0" }\n    }\n  }\n}\n',
+        'lib/string.act': prelude,
+      });
+      final d = await c.open('main.act', appMain);
+      expect(asMap(d.first)['message'] as String,
+          contains("module example.com/me/plib v1.0.0 is not fetched; run 'action --fetch' (in Particle: make deps)"));
+      final p = asMap(c.lastDiagnostics('action.json')!.first);
+      expect(p['message'] as String, contains('is not fetched'));
+      expect(asMap(asMap(p['range'])['start'])['line'], equals(4));
+      await c.close();
+    });
+
+    test('hover and go to definition reach into another module', () async {
+      final c = await TestClient.start({
+        'action.json': '{ "action": { "module": { "name": "example.com/me/app" }, '
+            '"requires": { "example.com/me/plib": { "path": "libs/plib" } } } }',
+        'lib/string.act': prelude,
+        'libs/plib/action.json': '{ "action": { "module": { "name": "example.com/me/plib" } } }',
+        'libs/plib/console/console.act':
+            'package console;\n\n// Doubles x.\npub u32 twice(u32 x) {\n    return x * 2;\n}\n',
+      });
+      expect(await c.open('main.act', appMain), isEmpty);
+      final (l, ch) = find(appMain, 'twice(2)', 1);
+      final h = asMap(await c.result('textDocument/hover', c.at('main.act', l, ch)));
+      final v = asMap(h['contents'])['value'] as String;
+      expect(v, contains('u32 twice(u32 x)'));
+      expect(v, contains('In package `console` (example.com/me/plib/console).'));
+      final loc = asMap(await c.result('textDocument/definition', c.at('main.act', l, ch)));
+      expect(loc['uri'], equals(c.uri('libs/plib/console/console.act')));
+      expect(c.lastDiagnostics('action.json') ?? const [], isEmpty);
+      await c.close();
+    });
+
+    test('a malformed requirement is reported on action.json', () async {
+      final c = await TestClient.start({
+        'action.json': '{\n  "action": {\n    "module": { "name": "example.com/me/app" },\n'
+            '    "requires": {\n      "example.com/me/plib": { "version": "1.0" }\n    }\n  }\n}\n',
+      });
+      await c.open('main.act', 'void main() { }\n');
+      final p = asMap(c.lastDiagnostics('action.json')!.first);
+      expect(p['message'] as String, contains("'1.0' is not a version: write a git tag such as v1.2.0"));
+      expect(asMap(asMap(p['range'])['start'])['line'], equals(4));
+      await c.close();
+    });
+  });
 }

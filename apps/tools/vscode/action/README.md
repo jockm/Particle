@@ -69,7 +69,10 @@ package's import path is that name followed by the package's folder inside
 `action.json`'s folder. A file that starts with a `package` line other than
 `package main;` is checked together with the other files of its folder, as
 that package. A package whose folder has another name than the package gets
-a warning, and so does an import that is not used.
+a warning, and so does an import that is not used. `requires` lists the
+modules the project uses (fetch them with `action --fetch`, or `make deps` in
+Particle; fetching needs git); one that can't be used yet, such as one not
+fetched, is shown as an error on its entry.
 
 `target` is the compiler programs are checked for: `"particle"` (the
 default), `"llvm"`, or both as a list. With both, an error found for only one

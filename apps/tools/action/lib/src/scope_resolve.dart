@@ -40,7 +40,7 @@ String baseName(String name) {
   return i < 0 ? name : name.substring(i + packageMark.length);
 }
 
-final _packagePrefix = RegExp(r'([A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*)\.\.(?=[A-Za-z_])');
+final _packagePrefix = RegExp(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\.\.(?=[A-Za-z_])');
 
 /// [name] (or a message naming locals or package declarations) as the
 /// source writes it: `x~2` is `x`, and `drivers.uart..init` is `uart.init`.

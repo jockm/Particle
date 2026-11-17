@@ -93,6 +93,9 @@ help:
 	@echo "  make action-lsp       - Build the Action language server ($(ACTION_LSP_BIN))"
 	@echo "  make llvm-tools       - Build the Action compiler for LLVM ($(ACTION_LLVM_BIN))"
 	@echo "  make llvm-tests       - Build the Action test suites with LLVM and run them on this computer"
+	@echo "  make deps             - Fetch the modules action.json requires (action --fetch; needs git)"
+	@echo "  make vendor           - Copy the modules the build uses into vendor/ (action --vendor)"
+	@echo "  make deps-tests       - Test fetching, vendoring and building with modules (needs git)"
 	@echo "  make vscode-ext       - Package the VS Code extensions (build/action.vsix, build/particle.vsix; needs npm)"
 	@echo "  make vscode-install   - Build the language servers and extensions, and install the extensions in VS Code"
 	@echo "  make vscode-remove-old-pasm - Remove the old hand-installed pasm extension"
@@ -264,6 +267,17 @@ compiler-tests: $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN) $(PSIM)
 # a file or an .asm file. Outputs go to build/llvm.
 LLVM_MARKER := ^//act:build particle$$
 
+# Modules (see action.json "requires"): fetching needs git
+deps: $(ACTION_BIN)
+	@$(ACTION_BIN) --fetch
+
+vendor: $(ACTION_BIN)
+	@$(ACTION_BIN) --vendor
+
+deps-tests: $(ACTION_BIN) $(ACTION_LLVM_BIN) $(PASM_BIN) $(PASM_LINT_BIN) $(PSIM)
+	@echo "==> Running module tests (fetch, vendor, build on both targets)..."
+	@sh apps/tools/action/test/deps_e2e.sh .
+
 llvm-tests: $(ACTION_LLVM_BIN)
 	@mkdir -p $(LLVM_BUILD_DIR)
 	@echo "==> Building and running Action test suites with LLVM ($${CLANG:-clang})..."
@@ -367,6 +381,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 # Toolchain Targets
 # ------------------------------------------------------------------------------
+.PHONY: deps vendor deps-tests
 .PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp llvm-tools llvm-tests vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean install-hooks
 
 tools: pasm-lint pasm-lsp pasm psim action action-lsp

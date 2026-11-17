@@ -19,3 +19,4 @@ export 'src/lexer.dart' show Token, tokenize;
 export 'src/parser.dart';
 export 'src/scope_resolve.dart' show internalNameMark, sourceName, baseName, packageMark;
 export 'src/packages.dart' show scanPackage;
+export 'src/modules.dart';

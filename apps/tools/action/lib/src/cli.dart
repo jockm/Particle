@@ -9,6 +9,7 @@
 //          [-fbounds-check] [-fno-bounds-check]
 //          [-freference-check] [-fno-reference-check] [--stack-top ADDR]
 //          sources [sources ...]
+//   action --fetch | --vendor | --verify
 //
 // action_llvm takes the same options except --stack-top, and -g / -g0 for
 // debug information.
@@ -17,6 +18,7 @@ import 'dart:io';
 
 import 'driver.dart';
 import 'errors.dart';
+import 'modules.dart';
 import 'paths.dart' as p;
 
 const String toolName = 'action';
@@ -25,7 +27,8 @@ const String llvmToolName = 'action_llvm';
 const String usageLine =
     'usage: $toolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-fbounds-check]\n'
     '              [-fno-bounds-check] [-freference-check] [-fno-reference-check]\n'
-    '              [--stack-top ADDR] sources [sources ...]';
+    '              [--stack-top ADDR] sources [sources ...]\n'
+    '       $toolName --fetch | --vendor | --verify';
 
 const String helpText = '''$usageLine
 
@@ -45,12 +48,14 @@ options:
   -freference-check     Enable runtime null reference checking (default)
   -fno-reference-check  Disable runtime null reference checking
   --stack-top ADDR      Initial stack pointer, set at startup (default 0x00010000);
-                        a multiple of 4''';
+                        a multiple of 4'''
+    '\n\nmodules (in the folder of action.json or below it; see action.json "requires"):\n  --fetch               Fetch the required module versions with git into the\n                        cache (\$ACTION_CACHE, or ~/.cache/action) and record\n                        their checksums in action.sum\n  --vendor              Copy the module versions the build uses into vendor/\n  --verify              Check the cache and vendor/ against action.sum';
 
 const String llvmUsageLine =
     'usage: $llvmToolName [-h] [-o OUTPUT] [-D DEFINE] [-I INCLUDE_DIR] [-g] [-g0]\n'
     '              [-fbounds-check] [-fno-bounds-check] [-freference-check]\n'
-    '              [-fno-reference-check] sources [sources ...]';
+    '              [-fno-reference-check] sources [sources ...]\n'
+    '       $llvmToolName --fetch | --vendor | --verify';
 
 const String llvmHelpText = '''$llvmUsageLine
 
@@ -71,7 +76,8 @@ options:
   -fbounds-check        Enable runtime array bounds checking (default)
   -fno-bounds-check     Disable runtime array bounds checking
   -freference-check     Enable runtime null reference checking (default)
-  -fno-reference-check  Disable runtime null reference checking''';
+  -fno-reference-check  Disable runtime null reference checking'''
+    '\n\nmodules (in the folder of action.json or below it; see action.json "requires"):\n  --fetch               Fetch the required module versions with git into the\n                        cache (\$ACTION_CACHE, or ~/.cache/action) and record\n                        their checksums in action.sum\n  --vendor              Copy the module versions the build uses into vendor/\n  --verify              Check the cache and vendor/ against action.sum';
 
 /// argparse-style option names used in error messages.
 const _displayName = {
@@ -94,6 +100,10 @@ class CliArgs {
 
   /// --stack-top, when given
   int? stackTop;
+
+  /// `--fetch`, `--vendor` or `--verify`, when given: work on the modules
+  /// instead of compiling
+  String? moduleMode;
 }
 
 /// Raised for invalid command-line usage (argparse exits with status 2).
@@ -157,6 +167,11 @@ CliArgs parseArgs(List<String> argv, {bool llvm = false}) {
       optionsDone = true;
     } else if (arg == '-h' || arg == '--help') {
       a.help = true;
+    } else if (arg == '--fetch' || arg == '--vendor' || arg == '--verify') {
+      if (a.moduleMode != null && a.moduleMode != arg) {
+        throw UsageError('argument $arg: not allowed with argument ${a.moduleMode}');
+      }
+      a.moduleMode = arg;
     } else if (arg == '-fbounds-check') {
       a.boundsCheck = true;
     } else if (arg == '-fno-bounds-check') {
@@ -192,6 +207,15 @@ CliArgs parseArgs(List<String> argv, {bool llvm = false}) {
     i++;
   }
   if (a.help) return a;
+  if (a.moduleMode != null) {
+    if (a.sources.isNotEmpty) {
+      throw UsageError('argument ${a.moduleMode}: takes no source files');
+    }
+    if (unknown.isNotEmpty) {
+      throw UsageError('unrecognized arguments: ${unknown.join(' ')}');
+    }
+    return a;
+  }
   if (a.sources.isEmpty) {
     throw UsageError('the following arguments are required: sources');
   }
@@ -217,6 +241,8 @@ int runCli(List<String> argv, {bool llvm = false}) {
     stdout.writeln(llvm ? llvmHelpText : helpText);
     return 0;
   }
+  moduleCommand = tool;
+  if (args.moduleMode != null) return _runModuleMode(args.moduleMode!, tool);
 
   var output = args.output;
   if (output == null || output.isEmpty) {
@@ -255,5 +281,35 @@ int runCli(List<String> argv, {bool llvm = false}) {
 void _printNotes(List<CompileNote> notes, String tool) {
   for (final n in notes) {
     stderr.writeln(n.format(tool));
+  }
+}
+
+/// `--fetch`, `--vendor` or `--verify`, for the module whose action.json
+/// is in the current folder or one above it.
+int _runModuleMode(String mode, String tool) {
+  try {
+    final main = findModuleFile(Directory.current.path);
+    if (main == null) {
+      stderr.writeln('$tool: error: no action.json naming a module was found in this folder or '
+          'above it; add "module": { "name": "..." } to the "action" section of action.json');
+      return 1;
+    }
+    switch (mode) {
+      case '--fetch':
+        fetchModules(main).forEach(stdout.writeln);
+      case '--vendor':
+        vendorModules(main).forEach(stdout.writeln);
+      default:
+        final (lines, ok) = verifyModules(main);
+        lines.forEach(stdout.writeln);
+        if (!ok) {
+          stderr.writeln('$tool: error: some modules do not match action.sum');
+          return 1;
+        }
+    }
+    return 0;
+  } on CompileError catch (e) {
+    stderr.writeln('$tool: error: ${e.message}');
+    return 1;
   }
 }

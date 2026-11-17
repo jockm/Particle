@@ -259,7 +259,7 @@ pub u32 Point.sum() {
       expect(errorOf('${head}void geo.Point.bad() { }\nvoid main() { }\n'),
           contains("a method of 'geo.Point' must be declared in package 'geo'"));
       expect(errorOf('package main;\nimport "example.org/other/x";\nvoid main() { }\n'),
-          contains("'example.org/other/x' is not in this module (example.com/m)"));
+          contains("no required module provides the package 'example.org/other/x'; add its module to \"requires\""));
       expect(errorOf('package main;\nimport "example.com/m/my_pkg";\nvoid main() { }\n'),
           contains("folder 'my_pkg' must be letters and digits"));
       expect(errorOf('package main;\nimport "example.com/m/none";\nvoid main() { }\n'),

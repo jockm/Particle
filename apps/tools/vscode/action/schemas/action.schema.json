@@ -21,6 +21,30 @@
             }
           }
         },
+        "requires": {
+          "description": "The modules this module uses, by module path (such as github.com/you/lib). Fetch them with 'action --fetch' (in Particle: make deps); fetching needs git.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "description": "The lowest version needed: a git tag such as v1.2.0 (or v1.2.0-beta.1).",
+                "type": "string",
+                "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+              },
+              "git": {
+                "description": "The repository to fetch from, when it is not https:// followed by the module path.",
+                "type": "string"
+              },
+              "path": {
+                "description": "A folder to use instead of a fetched version (only in the main module's action.json). Its action.json must name the same module.",
+                "type": "string"
+              }
+            },
+            "anyOf": [{ "required": ["version"] }, { "required": ["path"] }]
+          }
+        },
         "includeDirs": {
           "description": "Directories searched by 'import', like the compiler's -I. The workspace root and its lib directory are always searched.",
           "type": "array",

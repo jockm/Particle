@@ -25,7 +25,9 @@
 // on its own, with its imports.
 //
 // "module" names the module: a package's import path is that name, then
-// the package's folder inside the project file's folder.
+// the package's folder inside the project file's folder. "requires" lists
+// the modules it uses (see the compiler's modules.dart); one that cannot be
+// used yet (not fetched, say) is shown as an error on its entry.
 //
 // "target" is the compiler programs are checked for: "particle" (the
 // default) or "llvm", or a list of both. With both, an error found for only
@@ -36,7 +38,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:action/action.dart' show analysisTargets;
+import 'package:action/action.dart' show analysisTargets, ModuleError, readModuleFile, buildList;
 
 import 'documents.dart';
 
@@ -139,6 +141,14 @@ class Project {
         throw fail('module', '"module" must be an object such as { "name": "github.com/you/project" }');
       }
     }
+    // The module's name and requirements, as the compiler reads them
+    try {
+      readModuleFile(File(path).parent.path);
+    } on ModuleError catch (e) {
+      final msg = e.message.replaceFirst(RegExp(r'^.*?action\.json: '), '');
+      throw ProjectError(path, _lineOfKey(text, e.module ?? (module != null ? 'module' : 'requires')),
+          'action.json: $msg');
+    }
 
     final defines = <String>[];
     final defs = section['defines'];
@@ -194,6 +204,25 @@ class Project {
       targets = [for (final t in list) t as String];
     }
     return Project(root, path, includeDirs, defines, programs, null, folders, targets);
+  }
+
+  /// The first required module that cannot be used as it is (not
+  /// fetched, not matching action.sum, vendor/ out of date), with the line
+  /// of its entry; null when all can be used.
+  ProjectError? moduleProblem() {
+    final f = file;
+    if (f == null) return null;
+    try {
+      final main = readModuleFile(File(f).parent.path);
+      if (main == null || main.requires.isEmpty) return null;
+      buildList(main);
+      return null;
+    } on ModuleError catch (e) {
+      final text = File(f).readAsStringSync();
+      return ProjectError(f, _lineOfKey(text, e.module ?? 'requires'), e.message);
+    } on FileSystemException {
+      return null;
+    }
   }
 
   /// The files compiled together with [path] (itself included).

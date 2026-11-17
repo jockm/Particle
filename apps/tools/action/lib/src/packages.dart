@@ -20,13 +20,10 @@
 // The program's own package (`package main;`) keeps its names, and so do
 // `asm` and `extern` prototypes, whose names are labels or C names.
 
-import 'dart:convert';
-import 'dart:io';
-
 import 'ast.dart';
 import 'errors.dart';
 import 'lexer.dart';
-import 'paths.dart' as p;
+import 'modules.dart';
 import 'scope_resolve.dart';
 
 /// The module a program belongs to: the folder holding its action.json and
@@ -34,31 +31,18 @@ import 'scope_resolve.dart';
 class ModuleInfo {
   final String root;
   final String name;
-  ModuleInfo(this.root, this.name);
+
+  /// Its action.json (with its requirements).
+  final ModuleFile file;
+  ModuleInfo(this.root, this.name, this.file);
 }
 
 /// The module of the program whose files are in [startDir]: the nearest
 /// action.json in it or a folder above it that names a module (its
 /// `"module": { "name": ... }`), or null when there is none.
 ModuleInfo? findModule(String startDir) {
-  var dir = p.realPath(startDir);
-  while (true) {
-    final f = File(p.join(dir, 'action.json'));
-    if (f.existsSync()) {
-      try {
-        final json = jsonDecode(f.readAsStringSync());
-        final section = json is Map ? (json['action'] ?? json) : null;
-        final module = section is Map ? section['module'] : null;
-        final name = module is Map ? module['name'] : null;
-        if (name is String && name.isNotEmpty) return ModuleInfo(dir, name);
-      } on FormatException {
-        throw CompileError('${f.path}: not valid JSON');
-      }
-    }
-    final parent = p.dirname(dir);
-    if (parent == dir) return null;
-    dir = parent;
-  }
+  final m = findModuleFile(startDir);
+  return m == null ? null : ModuleInfo(m.root, m.name, m);
 }
 
 /// The import statements of a file, from its tokens (before parsing):

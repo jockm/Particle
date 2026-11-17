@@ -57,7 +57,8 @@ class ActionLanguageServer {
   String? _root;
   bool _initialized = false;
   bool _shutdown = false;
-  bool _projectErrorShown = false;
+  /// What was last published for action.json (null before anything).
+  String? _projectShown;
   final Completer<int> _done = Completer<int>();
 
   ActionLanguageServer(this._conn, {this.debounce = const Duration(milliseconds: 300)});
@@ -228,33 +229,41 @@ class ActionLanguageServer {
 
   void _loadProject() {
     _project = Project.load(_root);
-    _projectErrorShown = false;
+    _projectShown = null;
     // Programs may have changed shape
     _programs.clear();
   }
 
-  /// Reports a problem in action.json as an error on that file.
+  /// Reports a problem in action.json as an error on that file, and a
+  /// required module that cannot be used (not fetched, not matching
+  /// action.sum) on its entry.
   void _showProjectError() {
     final file = _project.file;
     if (file == null) return;
+    final diags = <Map<String, Object?>>[];
     final e = _project.error;
-    if (e == null && !_projectErrorShown) {
-      _notify('textDocument/publishDiagnostics', {'uri': pathToUri(file), 'diagnostics': []});
-      return;
-    }
-    if (e == null) return;
-    _projectErrorShown = true;
-    _notify('textDocument/publishDiagnostics', {
-      'uri': pathToUri(e.path),
-      'diagnostics': [
-        {
-          'range': rangeJson(Pos(e.line, 0), Pos(e.line, 1000)),
+    if (e != null) {
+      diags.add({
+        'range': rangeJson(Pos(e.line, 0), Pos(e.line, 1000)),
+        'severity': 1,
+        'source': 'action',
+        'message': '${e.message} (using the default settings until it is fixed)',
+      });
+    } else {
+      final m = _project.moduleProblem();
+      if (m != null) {
+        diags.add({
+          'range': rangeJson(Pos(m.line, 0), Pos(m.line, 1000)),
           'severity': 1,
           'source': 'action',
-          'message': '${e.message} (using the default settings until it is fixed)',
-        }
-      ],
-    });
+          'message': m.message,
+        });
+      }
+    }
+    final key = diags.map((d) => '${d['range']}${d['message']}').join('\n');
+    if (key == _projectShown) return;
+    _projectShown = key;
+    _notify('textDocument/publishDiagnostics', {'uri': pathToUri(file), 'diagnostics': diags});
   }
 
   // ------------------------------------------------------------- checking
@@ -413,6 +422,8 @@ class ActionLanguageServer {
         if (e != null) addError(e, allFail ? 1 : 2, 'for ${targets[i]}: ');
       }
     }
+    // A module fetched since the last check clears its error on action.json
+    _showProjectError();
     final toPublish = {...st.sources, ...byFile.keys, ...st.published};
     st.published
       ..clear()

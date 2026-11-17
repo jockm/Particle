@@ -14,6 +14,7 @@ import 'dart:io';
 import 'ast.dart';
 import 'errors.dart';
 import 'lexer.dart';
+import 'modules.dart';
 import 'packages.dart';
 import 'parser.dart';
 import 'paths.dart' as p;
@@ -47,6 +48,7 @@ class PackageLoader {
   final Set<String> _plainFiles = {};
   final Map<String, String> _seenFuncs = {};
   ModuleInfo? _module;
+  BuildList? _buildList;
   String? _preludePath;
   late String _startDir;
 
@@ -132,18 +134,39 @@ class PackageLoader {
       throw CompileError("$loc: importing the package '$importPath' needs the module's name: add "
           "\"module\": { \"name\": \"...\" } to the \"action\" section of the project's action.json");
     }
-    if (!importPath.startsWith('${module.name}/')) {
-      throw CompileError("$loc: '$importPath' is not in this module (${module.name}); "
-          'packages from other modules are not supported yet');
+    final String prefix;
+    final String folder;
+    final String root;
+    if (importPath.startsWith('${module.name}/') || importPath == module.name) {
+      final rel = importPath == module.name ? '' : importPath.substring(module.name.length + 1);
+      prefix = packagePrefix(rel, importPath, loc);
+      folder = p.join(module.root, rel);
+      root = module.root;
+    } else {
+      // A package of another module: through the build list
+      final BuildList list;
+      try {
+        list = _buildList ??= buildList(module.file);
+      } on ModuleError catch (e) {
+        throw CompileError('$loc: ${e.message}');
+      }
+      final dep = list.moduleOf(importPath);
+      if (dep == null) {
+        throw CompileError("$loc: no required module provides the package '$importPath'; add its "
+            'module to "requires" in ${p.join(module.root, 'action.json')}, then '
+            '${commandHint('--fetch')}');
+      }
+      final rel = importPath == dep.path ? '' : importPath.substring(dep.path.length + 1);
+      packagePrefix(rel, importPath, loc);
+      prefix = modulePrefix(dep.path, rel);
+      folder = p.join(dep.dir, rel);
+      root = dep.dir;
     }
-    final rel = importPath.substring(module.name.length + 1);
-    final prefix = packagePrefix(rel, importPath, loc);
-    final folder = p.join(module.root, rel);
     final known = _byFolder[folder];
     if (known != null) return known;
     if (_loading.contains(folder)) {
       final cycle = [..._loading.skipWhile((f) => f != folder), folder]
-          .map((f) => f.startsWith('${module.root}/') ? f.substring(module.root.length + 1) : f)
+          .map((f) => f.startsWith('$root/') ? f.substring(root.length + 1) : f)
           .join(' -> ');
       throw CompileError('$loc: import cycle: $cycle');
     }
