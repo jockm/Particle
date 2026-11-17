@@ -8,6 +8,7 @@ set "BASH_EXE=C:\Program Files\Git\bin\bash.exe"
 set "LLVM_BIN=C:\Program Files\LLVM\bin"
 set "GNUWIN_BIN=C:\Program Files (x86)\GnuWin32\bin"
 set "DART_BIN="
+set "NODE_BIN="
 
 if not exist "%BASH_EXE%" (
     echo Git Bash not found: "%BASH_EXE%"
@@ -39,6 +40,20 @@ if defined LOCALAPPDATA (
     for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\Google.DartSDK_*") do (
         if not defined DART_BIN if exist "%%~fD\dart-sdk\bin\dart.exe" set "DART_BIN=%%~fD\dart-sdk\bin"
     )
+
+    if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" if exist "%LOCALAPPDATA%\Programs\nodejs\npm.cmd" (
+        set "NODE_BIN=%LOCALAPPDATA%\Programs\nodejs"
+    )
+
+    for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\OpenJS.NodeJS.LTS_*") do (
+        for /f "delims=" %%F in ('where /r "%%~fD" node.exe 2^>nul') do (
+            if not defined NODE_BIN if exist "%%~dpFnpm.cmd" set "NODE_BIN=%%~dpF"
+        )
+    )
+)
+
+if not defined NODE_BIN if exist "%ProgramFiles%\nodejs\node.exe" if exist "%ProgramFiles%\nodejs\npm.cmd" (
+    set "NODE_BIN=%ProgramFiles%\nodejs"
 )
 
 if defined DART_BIN (
@@ -50,6 +65,20 @@ if defined DART_BIN (
         exit /b 1
     )
     set "PATH=%LLVM_BIN%;%GNUWIN_BIN%;%PATH%"
+)
+
+if defined NODE_BIN set "PATH=%NODE_BIN%;%PATH%"
+
+where node >nul 2>nul
+if errorlevel 1 (
+    echo Node.js not found. Install it with: winget install -e --id OpenJS.NodeJS.LTS
+    exit /b 1
+)
+
+where npm >nul 2>nul
+if errorlevel 1 (
+    echo npm not found. Reinstall Node.js with: winget install -e --id OpenJS.NodeJS.LTS
+    exit /b 1
 )
 
 cd /d "%~dp0"

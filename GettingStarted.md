@@ -18,6 +18,12 @@ commands below from the repository root unless a step says otherwise.
   On macOS it comes with the Xcode Command Line Tools
   (`xcode-select --install`); on Linux, install your distribution's `clang`
   package.
+- **OSS CAD Suite** (optional), for FPGA synthesis and place-and-route on
+  Lattice ECP5/ULX3S. It provides Yosys and `nextpnr-ecp5`; download the build
+  for your platform from the [official OSS CAD Suite releases](https://github.com/YosysHQ/oss-cad-suite/releases).
+  It is not needed for the Makefile targets, which generate SystemVerilog but
+  do not synthesize or place-and-route it. See the
+  [configuration guide](Documentation/configuration_guide.md).
 
 Check that the commands are available in your shell:
 
@@ -264,5 +270,6 @@ The Particle extension has the same commands under
 - winget install --id=Google.DartSDK -e
 - winget install GnuWin32.Make
 - winget install --id=MartinStorsjo.LLVM-MinGW.UCRT -e
+- winget install -e --id OpenJS.NodeJS.LTS
 - add "C:\Program Files\LLVM\bin" to path
 - add "C:\Program Files (x86)\GnuWin32\bin" to path

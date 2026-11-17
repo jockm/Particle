@@ -17,9 +17,14 @@
 //   }
 //
 // A version is a git tag vMAJOR.MINOR.PATCH (with an optional pre-release
-// part). `"git"` gives the repository's address when it is not `https://`
-// and the module path. `"path"` uses a folder instead of a fetched version;
-// it counts only in the main module's action.json.
+// part). `"commit"` names a commit instead (its hash, or the start of it):
+// `--fetch` gives it a version the way Go does, ordered just after the
+// latest tag before it (v1.2.4-0.20261117190000-abcdef123456 after v1.2.3,
+// v0.0.0-... with no tag before it, or the tag itself when the commit is
+// tagged), and records that version in action.sum, so that the compiler
+// knows it without git. `"git"` gives the repository's address when it is
+// not `https://` and the module path. `"path"` uses a folder instead of a
+// fetched version; it counts only in the main module's action.json.
 //
 // The versions used are chosen by minimal version selection: every module
 // states the lowest version of each module it needs, and the build uses the
@@ -54,8 +59,14 @@ class Requirement {
   final String? version;
   final String? git;
   final String? localPath;
-  const Requirement(this.path, {this.version, this.git, this.localPath});
+
+  /// A commit (its hash, or the start of it) instead of a version.
+  final String? commit;
+  const Requirement(this.path, {this.version, this.git, this.localPath, this.commit});
 }
+
+/// The key in action.sum of the version [commit] of [path] was given.
+String commitKey(String path, String commit) => '$path commit:$commit';
 
 /// A module's action.json: where it is, its name and what it requires.
 class ModuleFile {
@@ -179,17 +190,22 @@ ModuleFile? readModuleFile(String dir) {
       path as String;
       String fail(String why) => throw ModuleError("${f.path}: requirement '$path': $why", path);
       if (entry is! Map) fail('must be an object such as { "version": "v1.2.0" }');
-      final version = entry['version'], git = entry['git'], local = entry['path'];
+      final version = entry['version'], git = entry['git'], local = entry['path'], commit = entry['commit'];
       if (version != null && (version is! String || Version.tryParse(version) == null)) {
         fail("'$version' is not a version: write a git tag such as v1.2.0");
       }
       if (git != null && git is! String) fail('"git" must be a string');
       if (local != null && local is! String) fail('"path" must be a string');
-      if (version == null && local == null) fail('needs a "version" (or a "path")');
+      if (commit != null && (commit is! String || !RegExp(r'^[0-9a-f]{7,40}$').hasMatch(commit))) {
+        fail("'$commit' is not a commit: write its hash, or at least its first 7 characters, in lowercase");
+      }
+      if ([version, commit, local].where((x) => x != null).length != 1) {
+        fail('needs one of "version", "commit" or "path"');
+      }
       final pp = modulePathProblem(path, fetched: local == null);
       if (pp != null) fail(pp);
       requires[path] = Requirement(path,
-          version: version as String?, git: git as String?, localPath: local as String?);
+          version: version as String?, git: git as String?, localPath: local as String?, commit: commit as String?);
     });
   }
   return ModuleFile(p.realPath(dir), name, requires);
@@ -284,7 +300,11 @@ void writeSums(String sumPath, Map<String, String> sums) {
       final (pa, va) = _split(a);
       final (pb, vb) = _split(b);
       final c = pa.compareTo(pb);
-      return c != 0 ? c : Version.tryParse(va)!.compareTo(Version.tryParse(vb)!);
+      if (c != 0) return c;
+      final x = Version.tryParse(va), y = Version.tryParse(vb);
+      // Versions first, then the versions commits were given
+      if (x == null || y == null) return x != null ? -1 : (y != null ? 1 : va.compareTo(vb));
+      return x.compareTo(y);
     });
   File(sumPath).writeAsStringSync(keys.map((k) => '$k ${sums[k]}\n').join());
 }
@@ -330,7 +350,8 @@ class BuildList {
 /// not there. Returns every version reached (for action.sum) and the
 /// selected build list.
 (Set<(String, String)>, Map<String, SelectedModule>) walkRequirements(
-    ModuleFile main, String? Function(String path, String version, String? git) dirOf) {
+    ModuleFile main, String? Function(String path, String version, String? git) dirOf,
+    String? Function(String path, String commit, String? git) versionOfCommit) {
   final replaced = <String, String>{};
   final required = <String, List<(Version, String)>>{}; // path -> (version, required by)
   final reached = <(String, String)>{};
@@ -355,9 +376,16 @@ class BuildList {
         addRequires(mf, isMain: false);
         continue;
       }
-      if (r.version == null) continue; // a path in a dependency's file is ignored
       if (r.git != null) gits.putIfAbsent(r.path, () => r.git!);
-      queue.add((r.path, r.version!, r.git, m == main ? 'the main module' : m.name));
+      var version = r.version;
+      if (r.commit != null) {
+        version = versionOfCommit(r.path, r.commit!, r.git ?? gits[r.path]);
+        if (version == null) {
+          throw ModuleError('module ${r.path} commit ${r.commit} is not fetched; ${commandHint('--fetch')}', r.path);
+        }
+      }
+      if (version == null) continue; // a path in a dependency's file is ignored
+      queue.add((r.path, version, r.git, m == main ? 'the main module' : m.name));
     }
   }
 
@@ -404,11 +432,11 @@ class BuildList {
 /// action.sum.
 BuildList buildList(ModuleFile main) {
   if (Directory(main.vendorDir).existsSync()) return _vendoredList(main);
+  final sums = readSums(main.sumPath);
   final (_, selected) = walkRequirements(main, (path, version, _) {
     final d = cacheDir(path, version);
     return Directory(d).existsSync() ? d : null;
-  });
-  final sums = readSums(main.sumPath);
+  }, (path, commit, _) => sums[commitKey(path, commit)]);
   for (final m in selected.values) {
     if (m.version == null) continue;
     final want = sums['${m.path} ${m.version}'];
@@ -442,13 +470,16 @@ BuildList _vendoredList(ModuleFile main) {
     final dir = p.join(main.vendorDir, parts[0]);
     modules[parts[0]] = SelectedModule(parts[0], parts[1] == 'local' ? null : parts[1], dir);
   }
+  final sums = readSums(main.sumPath);
   for (final r in main.requires.values) {
     final m = modules[r.path];
+    final wanted = r.commit != null ? sums[commitKey(r.path, r.commit!)] : r.version;
     final stale = m == null ||
         (r.localPath != null) != (m.version == null) ||
-        (r.version != null &&
+        (r.commit != null && wanted == null) ||
+        (wanted != null &&
             m.version != null &&
-            Version.tryParse(m.version!)!.compareTo(Version.tryParse(r.version!)!) < 0);
+            Version.tryParse(m.version!)!.compareTo(Version.tryParse(wanted)!) < 0);
     if (stale) {
       throw ModuleError('vendor/ does not match the requirement of ${r.path} in action.json; '
           '${commandHint('--vendor')}', r.path);
@@ -469,7 +500,7 @@ List<String> fetchModules(ModuleFile main) {
   final sums = readSums(main.sumPath);
   final out = <String>[];
   final newSums = <String, String>{};
-  final (reached, _) = walkRequirements(main, (path, version, git) {
+  final (_, _) = walkRequirements(main, (path, version, git) {
     final dir = cacheDir(path, version);
     final key = '$path $version';
     if (!Directory(dir).existsSync()) {
@@ -502,11 +533,107 @@ List<String> fetchModules(ModuleFile main) {
     newSums[key] = got;
     _hashMemo[dir] = got;
     return dir;
+  }, (path, commit, git) {
+    // A commit: the version recorded for it, or one worked out by fetching
+    // it (into the cache, under that version)
+    final ck = commitKey(path, commit);
+    final known = sums[ck];
+    if (known != null && Directory(cacheDir(path, known)).existsSync()) {
+      newSums[ck] = known;
+      return known;
+    }
+    final (tmp, version) = _fetchCommit(path, commit, git);
+    final dir = cacheDir(path, version);
+    if (Directory(dir).existsSync()) {
+      Directory(tmp).deleteSync(recursive: true);
+    } else {
+      final mf = readModuleFile(tmp);
+      if (mf == null || mf.name != path) {
+        Directory(tmp).deleteSync(recursive: true);
+        throw ModuleError('module $path commit $commit: its action.json must name the module '
+            "'$path'${mf == null ? '' : ", not '${mf.name}'"}", path);
+      }
+      Directory(p.dirname(dir)).createSync(recursive: true);
+      Directory(tmp).renameSync(dir);
+      _makeReadOnly(dir);
+      out.add('fetched $path commit $commit as $version');
+    }
+    newSums[ck] = version;
+    return version;
   });
-  assert(reached.length == newSums.length);
   writeSums(main.sumPath, newSums);
   if (out.isEmpty) out.add('all required modules are in the cache');
   return out;
+}
+
+/// Runs git with [args]; its output, or a [ModuleError] about fetching
+/// [path] when it fails.
+String _git(List<String> args, String path, {String? inDir}) {
+  final ProcessResult r;
+  try {
+    r = Process.runSync('git', args, workingDirectory: inDir);
+  } on ProcessException {
+    throw ModuleError('fetching modules needs git, which was not found; install git and try again', path);
+  }
+  if (r.exitCode != 0) {
+    throw ModuleError('git ${args.first} for module $path failed: ${(r.stderr as String).trim()}', path);
+  }
+  return (r.stdout as String).trim();
+}
+
+/// Fetches [commit] of [path] into a new folder of the cache, without
+/// `.git`, and works out its version as Go does: the latest version tag
+/// before it, the patch number raised by one (or the pre-release part
+/// kept), then `-0.` (or `.0.`), the commit's time (UTC) and the first 12
+/// characters of its hash: v1.2.4-0.20261117190000-abcdef123456. With no
+/// tag before it, v0.0.0-20261117190000-abcdef123456; when the commit
+/// itself is tagged, its highest tag.
+(String, String) _fetchCommit(String path, String commit, String? git) {
+  final url = git ?? 'https://$path';
+  final root = cacheRoot();
+  Directory(root).createSync(recursive: true);
+  final tmp = Directory(root).createTempSync('fetch-').path;
+  try {
+    _git(['clone', '--quiet', '--no-checkout', url, tmp], path);
+    try {
+      _git(['-c', 'advice.detachedHead=false', 'checkout', '--quiet', commit], path, inDir: tmp);
+    } on ModuleError {
+      throw ModuleError('module $path has no commit $commit in $url', path);
+    }
+    final hash = _git(['rev-parse', 'HEAD'], path, inDir: tmp);
+    final tagged = [
+      for (final t in _git(['tag', '--points-at', 'HEAD'], path, inDir: tmp).split('\n'))
+        if (Version.tryParse(t.trim()) != null) Version.tryParse(t.trim())!
+    ]..sort();
+    String version;
+    if (tagged.isNotEmpty) {
+      version = tagged.last.text;
+    } else {
+      final secs = int.parse(_git(['show', '-s', '--format=%ct', 'HEAD'], path, inDir: tmp));
+      final t = DateTime.fromMillisecondsSinceEpoch(secs * 1000, isUtc: true);
+      String two(int n) => n.toString().padLeft(2, '0');
+      final stamp = '${t.year}${two(t.month)}${two(t.day)}${two(t.hour)}${two(t.minute)}${two(t.second)}';
+      final short = hash.substring(0, 12);
+      Version? base;
+      for (final line in _git(['tag', '--merged', 'HEAD'], path, inDir: tmp).split('\n')) {
+        final v = Version.tryParse(line.trim());
+        if (v != null && (base == null || v.compareTo(base) > 0)) base = v;
+      }
+      if (base == null) {
+        version = 'v0.0.0-$stamp-$short';
+      } else if (base.pre == null) {
+        version = 'v${base.major}.${base.minor}.${base.patch + 1}-0.$stamp-$short';
+      } else {
+        version = '${base.text}.0.$stamp-$short';
+      }
+    }
+    final dotGit = Directory(p.join(tmp, '.git'));
+    if (dotGit.existsSync()) dotGit.deleteSync(recursive: true);
+    return (tmp, version);
+  } catch (_) {
+    if (Directory(tmp).existsSync()) Directory(tmp).deleteSync(recursive: true);
+    rethrow;
+  }
 }
 
 String _fetchWithGit(String path, String version, String? git) {
@@ -585,6 +712,7 @@ List<String> vendorModules(ModuleFile main) {
   var ok = true;
   for (final key in sums.keys.toList()..sort()) {
     final (path, version) = _split(key);
+    if (version.startsWith('commit:')) continue;
     final dir = cacheDir(path, version);
     if (!Directory(dir).existsSync()) {
       out.add('$path $version: not in the cache (not checked)');

@@ -1452,8 +1452,13 @@ The program then imports a library's packages by their full path, `import "githu
 | Key | Meaning |
 |-----|---------|
 | `version` | The lowest version needed. |
+| `commit` | A commit to use instead of a version: its hash, or at least its first 7 characters (see below). |
 | `git` | The repository to fetch from, when it is not `https://` followed by the module path (a private server, say). |
 | `path` | A folder (relative to `action.json`) to use instead of a fetched version, so you can work on a library and a program that uses it at the same time. The folder's `action.json` must name the same module. A `path` counts only in the main module's `action.json`; in a library's, it is ignored. |
+
+An entry has exactly one of `version`, `commit` and `path`.
+
+**Commits.** A commit that has no version tag of its own is given a version the way Go does, ordered just after the latest version tag before it and before the next release. After `v1.2.3`, the commit `abcdef123456…` made at 19:00:00 UTC on 17 November 2026 is `v1.2.4-0.20261117190000-abcdef123456`. With no tag before it, it is `v0.0.0-20261117190000-abcdef123456`; after a pre-release tag such as `v1.3.0-beta.1`, it is `v1.3.0-beta.1.0.20261117190000-abcdef123456`. A commit that is tagged is its tag's version. `action --fetch` works this out with git and records it in `action.sum` (a line `path commit:abcdef1 version`), so builds know it without git; `action.json` is not changed. That version then takes part in choosing versions like any other: a requirement of `v1.3.0` elsewhere wins over a commit after `v1.2.3`.
 
 **Fetching.** The compiler never uses the network while building. Fetching is a separate step:
 
@@ -1463,7 +1468,7 @@ action --fetch       # in Particle: make deps
 
 It fetches every version the requirement graph needs into the cache and records a checksum of each one in **`action.sum`**, next to `action.json`. **Fetching needs git**, which the compiler runs to fetch each version (`git clone` of its tag). Other version control systems may be supported in the future. The cache is `~/.cache/action`, or the folder named by the `ACTION_CACHE` environment variable. A cached version is in a folder named for its path and version (`~/.cache/action/github.com/jockm/plib@v1.4.0`), and its files are read-only, so it can't be edited by accident.
 
-**`action.sum`** has one line per module version: its path, its version and a SHA-256 checksum of its files. It is written by `action --fetch`; commit it with the project. A build checks every cached module it uses against it. When a version's contents no longer match (its tag was moved to other code, or the cache was changed), the build and `--fetch` stop with an error showing both checksums. Find out why before changing `action.sum`.
+**`action.sum`** has one line per module version: its path, its version and a SHA-256 checksum of its files, and one line per commit named in a `requires` entry, giving the version it was given. It is written by `action --fetch`; commit it with the project. A build checks every cached module it uses against it. When a version's contents no longer match (its tag was moved to other code, or the cache was changed), the build and `--fetch` stop with an error showing both checksums. Find out why before changing `action.sum`.
 
 **`vendor/`.** To build without the cache, for example offline, or to keep exactly the code a build used for years:
 

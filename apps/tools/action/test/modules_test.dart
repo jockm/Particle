@@ -253,4 +253,85 @@ void main() { u32 v = console.twice(console.VERSION); }
     appModule({'example.com/me/plib': gitEntry('plib', 'v1.0.0')}, usesConsole);
     expect(errorOf(build), contains("run 'action_llvm --fetch' (in Particle: make deps)"));
   });
+
+  group('commits', () {
+    String head(String dir) => (Process.runSync('git', ['rev-parse', 'HEAD'], workingDirectory: dir).stdout as String).trim();
+
+    /// Adds a commit (no tag) to the repository [dir] with [files].
+    String commitTo(String dir, Map<String, String> files) {
+      files.forEach((f, text) => write('$dir/$f', text));
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '-qm', 'more']);
+      return head(dir);
+    }
+
+    String commitEntry(String short, String commit) =>
+        '{ "commit": "$commit", "git": "${tmp.path}/repos/$short" }';
+
+    test('a commit after a tag is given the version after it, recorded in action.sum', () {
+      final r = repo('plib', 'example.com/me/plib', {'v1.0.0': {'console/console.act': pkg('console', 1)}});
+      final c = commitTo(r, {'console/console.act': pkg('console', 2)});
+      appModule({'example.com/me/plib': commitEntry('plib', c.substring(0, 12))}, usesConsole);
+      expect(errorOf(build),
+          contains("module example.com/me/plib commit ${c.substring(0, 12)} is not fetched; run 'action --fetch'"));
+      final lines = fetchModules(mainModule());
+      expect(lines.single, matches(r'^fetched example.com/me/plib commit [0-9a-f]{12} as v1\.0\.1-0\.\d{14}-' + c.substring(0, 12) + r'$'));
+      final sums = readSums('$app/action.sum');
+      final v = sums['example.com/me/plib commit:${c.substring(0, 12)}']!;
+      expect(v, startsWith('v1.0.1-0.'));
+      expect(sums['example.com/me/plib $v'], startsWith('sha256:'));
+      expect(build(), contains('Imm4 load (2)'));
+      // Ordered before the next release, after the tag
+      expect(Version.tryParse(v)!.compareTo(Version.tryParse('v1.0.1')!), equals(-1));
+      expect(Version.tryParse(v)!.compareTo(Version.tryParse('v1.0.0')!), equals(1));
+      expect(verifyModules(mainModule()).$2, isTrue);
+      expect(fetchModules(mainModule()), equals(['all required modules are in the cache']));
+    });
+
+    test('with no tag before it, v0.0.0; a tagged commit is its tag', () {
+      final r = repo('plib', 'example.com/me/plib', {});
+      write('$r/action.json', '{ "action": { "module": { "name": "example.com/me/plib" } } }');
+      final c = commitTo(r, {'console/console.act': pkg('console', 1)});
+      appModule({'example.com/me/plib': commitEntry('plib', c)}, usesConsole);
+      fetchModules(mainModule());
+      expect(readSums('$app/action.sum')['example.com/me/plib commit:$c'], matches(r'^v0\.0\.0-\d{14}-[0-9a-f]{12}$'));
+      git(r, ['tag', 'v0.3.0']);
+      Process.runSync('chmod', ['-R', 'u+w', '${tmp.path}/cache']);
+      Directory('${tmp.path}/cache').deleteSync(recursive: true);
+      File('$app/action.sum').deleteSync();
+      fetchModules(mainModule());
+      expect(readSums('$app/action.sum')['example.com/me/plib commit:$c'], equals('v0.3.0'));
+    });
+
+    test('a commit takes part in version selection, and is vendored', () {
+      final r = repo('plib', 'example.com/me/plib', {
+        'v1.0.0': {'console/console.act': pkg('console', 1)},
+        'v1.1.0': {'console/console.act': pkg('console', 3)},
+      });
+      git(r, ['checkout', '-q', 'v1.0.0']);
+      final c = commitTo(r, {'console/console.act': pkg('console', 2)});
+      repo('util', 'example.com/me/util', {'v1.0.0': {'text/text.act': 'package text;\n'}},
+          requires: {'example.com/me/plib': 'v1.1.0'});
+      appModule({
+        'example.com/me/plib': commitEntry('plib', c),
+        'example.com/me/util': gitEntry('util', 'v1.0.0'),
+      }, usesConsole);
+      fetchModules(mainModule());
+      // v1.1.0 is later than v1.0.1-0.... (the commit after v1.0.0)
+      expect(buildList(mainModule()).modules['example.com/me/plib']!.version, equals('v1.1.0'));
+      expect(build(), contains('Imm4 load (3)'));
+      vendorModules(mainModule());
+      expect(build(), contains('Imm4 load (3)'));
+    });
+
+    test('a commit that does not exist, and an entry with both a version and a commit', () {
+      repo('plib', 'example.com/me/plib', {'v1.0.0': {'console/console.act': pkg('console', 1)}});
+      appModule({'example.com/me/plib': commitEntry('plib', 'abcdef1234567')}, usesConsole);
+      expect(errorOf(() => fetchModules(mainModule())), contains('module example.com/me/plib has no commit abcdef1234567 in'));
+      appModule({'example.com/me/plib': '{ "version": "v1.0.0", "commit": "abcdef1" }'}, usesConsole);
+      expect(errorOf(build), contains('needs one of "version", "commit" or "path"'));
+      appModule({'example.com/me/plib': '{ "commit": "ABC" }'}, usesConsole);
+      expect(errorOf(build), contains("'ABC' is not a commit"));
+    });
+  });
 }

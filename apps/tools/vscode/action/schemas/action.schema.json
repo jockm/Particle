@@ -33,6 +33,11 @@
                 "type": "string",
                 "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
               },
+              "commit": {
+                "description": "A commit to use instead of a version: its hash, or at least its first 7 characters. 'action --fetch' gives it a version (as Go does) and records it in action.sum.",
+                "type": "string",
+                "pattern": "^[0-9a-f]{7,40}$"
+              },
               "git": {
                 "description": "The repository to fetch from, when it is not https:// followed by the module path.",
                 "type": "string"
@@ -42,7 +47,7 @@
                 "type": "string"
               }
             },
-            "anyOf": [{ "required": ["version"] }, { "required": ["path"] }]
+            "oneOf": [{ "required": ["version"] }, { "required": ["commit"] }, { "required": ["path"] }]
           }
         },
         "includeDirs": {

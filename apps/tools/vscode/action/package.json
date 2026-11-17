@@ -67,17 +67,16 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
-  },
-  "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "compile": "tsc -p ./ --noEmit && esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap --minify",
+    "watch": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap --watch"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.82.0",
     "@vscode/vsce": "^3.2.0",
-    "typescript": "^5.4.0"
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0",
+    "vscode-languageclient": "^9.0.1"
   },
   "overrides": {
     "@azure/abort-controller": "2.1.2",
