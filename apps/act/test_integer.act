@@ -1,0 +1,25 @@
+// test_integer: lib/integer.act: the limits of the integer types, and
+// Integer.min, max, abs, sign and neg for each type.
+// Passes with trap(0); fails with trap(15).
+import "integer.act";
+
+void main() {
+    u32 ok = 1;
+    if (Integer.MAX_U8 != 255 || Integer.MIN_S8 != -128 || Integer.MAX_U16 != 65535) ok = 0;
+    if (Integer.MIN_S16 != -32768 || Integer.MAX_S32 != 2147483647 || Integer.MAX_U32 != 4294967295) ok = 0;
+    u8 a = 200;
+    u8 b = 100;
+    s16 c = -5;
+    s16 d = 3;
+    if (Integer.min(a, b) != 100 || Integer.max(a, b) != 200) ok = 0;
+    if (Integer.min(c, d) != -5 || Integer.max(c, d) != 3) ok = 0;
+    if (Integer.min(-7, 4) != -7 || Integer.max(4000000000, 1) != 4000000000) ok = 0;
+    s8 m = Integer.MIN_S8;
+    if (Integer.abs(m) != 128 || Integer.abs(c) != 5 || Integer.abs(Integer.MIN_S32) != 2147483648) ok = 0;
+    if (Integer.sign(c) != -1 || Integer.sign(d) != 1 || Integer.sign(0) != 0) ok = 0;
+    if (Integer.neg(c) != 5 || Integer.neg(m) != -128 || Integer.neg(Integer.MIN_S32) != Integer.MIN_S32) ok = 0;
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

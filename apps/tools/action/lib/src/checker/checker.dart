@@ -135,6 +135,15 @@ class Checker {
   final Map<String, int> boundAddrs = {};
   final Set<String> volatiles = {};
   final Map<String, FuncSig> funcSignatures = {};
+
+  /// The versions of each overloaded function, by the name it is declared
+  /// with (see names.dart); the static functions of types; the functions,
+  /// methods and fields declared `pub`; the program's types.
+  final Map<String, List<String>> _overloads = {};
+  final Set<String> _staticFuncs = {};
+  final Set<String> _pubFuncs = {};
+  final Set<String> _pubFields = {};
+  final Map<String, TypeDefNode> _typeDefs = {};
   final Map<String, (List<String>, String)> fnTypes = {};
   String currentFuncName = '';
   (Object?, bool) currentFuncRet = (null, false);
@@ -289,6 +298,19 @@ class Checker {
         if (n != baseName(n) && v != null) predefinedConstants[n] = v;
       }
     }
+    // Type constants, then the versions of overloaded functions (names.dart)
+    _rewriteTypeConstants(root);
+    final declaredFuncs = root.decls.whereType<FuncDeclNode>().toList();
+    _nameOverloads(declaredFuncs);
+    for (final f in declaredFuncs) {
+      if (f.isPub) _pubFuncs.add(f.name);
+    }
+    for (final t in root.decls.whereType<TypeDefNode>()) {
+      _typeDefs[t.name] = t;
+      for (final f in t.fields) {
+        if (f.isPub) _pubFields.add(methodFuncName(t.name, f.name));
+      }
+    }
     // Locals are block-scoped: give each its own name first
     resolveBlockScopes(root, {
       for (final d in root.decls)
@@ -299,6 +321,7 @@ class Checker {
         if (d is VarDeclNode && d.isConst) d.name
         else if (d is FuncDeclNode) d.name
         else if (d is EnumDeclNode) ...d.members.map((m) => m.$1),
+      ..._overloads.keys,
     });
     // Constants: -D definitions first, then the program's enum members and
     // global consts, evaluated lazily in any order.
@@ -411,7 +434,6 @@ class Checker {
       }
     }
     _funcDecls = rawFuncDecls;
-    _findWrittenParams(rawFuncDecls);
     final funcDecls = rawFuncDecls;
     final dataDecls = _dataDecls;
 
@@ -467,6 +489,11 @@ class Checker {
         }
       }
     }
+
+    // Calls of static functions and of overloaded functions name the
+    // function they call (see names.dart)
+    _resolveNames(root, funcDecls);
+    _findWrittenParams(rawFuncDecls);
 
     // Coroutine operations become statements (see coroutines.dart)
     _prototypeNames
@@ -617,12 +644,6 @@ class Checker {
     final direct = methodFuncName(structName, methodName);
     if (funcSignatures.containsKey(direct)) {
       return (direct, 0);
-    }
-    // A string's methods are the string functions: s.find(c) calls
-    // stringFind(s, c)
-    if (structName == 'string' && methodName.isNotEmpty) {
-      final helper = 'string${methodName[0].toUpperCase()}${methodName.substring(1)}';
-      if (funcSignatures.containsKey(helper)) return (helper, 0);
     }
     final sInfo = structs[structName];
     for (final (embedType, embedOffset) in sInfo?.embedded ?? <(String, int)>[]) {

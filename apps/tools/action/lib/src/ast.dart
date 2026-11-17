@@ -210,6 +210,9 @@ class FieldDecl {
 
   /// Where the field is declared (`file:line:col`).
   String? loc;
+
+  /// `pub T name;`: visible outside the type's package.
+  bool isPub = false;
   FieldDecl(this.type, this.isPtr, this.name, this.dimExprs, this.isEmbedded,
       {this.isArrayRef = false});
 }
@@ -217,6 +220,11 @@ class FieldDecl {
 class TypeDefNode extends AstNode {
   final String name;
   final List<FieldDecl> fields;
+
+  /// `const T NAME = value;` written in the body: constants of the type,
+  /// used as `Name.NAME`. Each is also a top-level constant named
+  /// `Name.NAME` (see [typeConstName]).
+  final List<VarDeclNode> consts = [];
   TypeDefNode(this.name, this.fields);
   @override
   String? get nodeName => name;
@@ -331,6 +339,14 @@ class FuncDeclNode extends AstNode {
   /// For a function made from a lambda: how messages name it (`lambda 'cmp'`
   /// or `lambda at main.act:12:9`).
   String? lambdaShown;
+
+  /// `static T Type.name(params)`: a function of a type that takes no
+  /// `this`, called as `Type.name(args)`.
+  bool isStatic = false;
+
+  /// The name as declared, before an overloaded function is given its
+  /// own name (see [overloadName]).
+  late String declaredName = name;
   FuncDeclNode(this.retType, this.retPtr, this.name, this.params, this.body,
       {this.isInline = false, this.trapExpr});
   @override
@@ -508,6 +524,40 @@ String methodOfCall(String callName) => callName.substring(_methodCallMark.lengt
 /// The function that is the method [method] of type [type] (`Point.move`).
 String methodFuncName(String type, String method) => '$type.$method';
 
+/// The constant [name] declared in the body of type [type] (`Integer.MAX_U8`).
+String typeConstName(String type, String name) => '$type.$name';
+
+/// What separates an overloaded function's name from its parameter types
+/// in its own name (`Integer.min~~u8.u8`); its label writes it `..`
+/// (`_Integer.min..u8.u8`).
+const overloadMark = '~~';
+
+/// The name of the overload of [name] whose parameters are [paramTypes]
+/// (each as [overloadTypeName] writes it).
+String overloadName(String name, List<String> paramTypes) =>
+    '$name$overloadMark${paramTypes.isEmpty ? 'void' : paramTypes.join('.')}';
+
+/// [name] without an overload's parameter types.
+String withoutOverload(String name) {
+  final i = name.indexOf(overloadMark);
+  return i < 0 ? name : name.substring(0, i);
+}
+
+/// A parameter's type in an overload's name: the type (a package's `..`
+/// written `.`), `_a` per dimension of an open array, `ref_` in front of
+/// an array of references.
+String overloadTypeName(String type, {bool open = false, int rank = 1, bool refArray = false}) {
+  final t = type.replaceAll('..', '.');
+  return '${refArray ? 'ref_' : ''}$t${open ? '_a' * rank : ''}';
+}
+
+/// The parameter types of [f] as written, for telling a second definition
+/// of a function from an overload before types are resolved.
+String writtenParamKey(FuncDeclNode f) => '${f.isStatic ? 'static ' : ''}${[
+      for (final p in f.params)
+        if (p.name != 'this') overloadTypeName(p.type, open: p.isOpenArr, rank: p.openRank, refArray: p.isRefArray)
+    ].join(',')}';
+
 /// The hidden variable holding the length of dimension [k] of the open
 /// array parameter [array] (`xs~len`, then `xs~len1`, ...).
 String lenName(String array, [int k = 0]) => k == 0 ? '$array~len' : '$array~len$k';
@@ -654,4 +704,132 @@ class LocalScope {
 
   /// True when this block or one inside it declares a local.
   bool get hasDecls => decls.isNotEmpty || children.any((c) => c.hasDecls);
+}
+
+// ------------------------------------------------------------------------------
+// Rewriting the tree
+// ------------------------------------------------------------------------------
+
+/// Visits [node] and everything below it, children before parents, and
+/// puts what [f] returns in each node's place (returning the node itself
+/// keeps it). The body of a lambda is visited only with [intoLambdas]
+/// (after [resolveBlockScopes] a lambda's body is also a function of its
+/// own).
+AstNode rewriteTree(AstNode node, AstNode Function(AstNode n) f, {bool intoLambdas = false}) {
+  AstNode r(AstNode n) => rewriteTree(n, f, intoLambdas: intoLambdas);
+  AstNode? ro(AstNode? n) => n == null ? null : r(n);
+  void list(List<AstNode> xs) {
+    for (var i = 0; i < xs.length; i++) {
+      xs[i] = r(xs[i]);
+    }
+  }
+
+  switch (node) {
+    case ProgramNode():
+      list(node.decls);
+    case FuncDeclNode():
+      final b = node.body;
+      if (b != null) list(b.stmts);
+      node.trapExpr = ro(node.trapExpr);
+    case TypeDefNode():
+      for (final fd in node.fields) {
+        list(fd.dimExprs);
+      }
+    case EnumDeclNode():
+      for (var i = 0; i < node.members.length; i++) {
+        final (n, e) = node.members[i];
+        node.members[i] = (n, ro(e));
+      }
+    case VerifyNode():
+      node.cond = r(node.cond);
+    case SizeofNode():
+      final t = node.target;
+      if (t is AstNode) node.target = r(t);
+    case VarDeclNode():
+      node.initExpr = ro(node.initExpr);
+      list(node.dimExprs);
+      node.boundAddrExpr = ro(node.boundAddrExpr);
+      node.initList = ro(node.initList);
+    case BlockNode():
+      list(node.stmts);
+    case IfNode():
+      node.cond = r(node.cond);
+      node.thenBody = r(node.thenBody);
+      node.elseBody = ro(node.elseBody);
+    case CaseLabelNode():
+      node.expr = r(node.expr);
+    case SwitchNode():
+      node.expr = r(node.expr);
+      node.body = r(node.body);
+    case WhileNode():
+      node.cond = r(node.cond);
+      node.body = r(node.body);
+    case ForRangeNode():
+      node.startExpr = r(node.startExpr);
+      node.endExpr = r(node.endExpr);
+      node.body = r(node.body);
+    case TupleReturnNode():
+      list(node.exprs);
+    case TupleAssignNode():
+      node.expr = r(node.expr);
+    case ReturnNode():
+      node.expr = ro(node.expr);
+    case ExprStmtNode():
+      node.expr = r(node.expr);
+    case BinaryOpNode():
+      node.left = r(node.left);
+      node.right = r(node.right);
+    case UnaryOpNode():
+      node.operand = r(node.operand);
+    case CompoundAssignNode():
+      node.lhs = r(node.lhs);
+      node.rhs = r(node.rhs);
+    case MemberAccessNode():
+      node.expr = r(node.expr);
+    case ArrayAccessNode():
+      node.base = r(node.base);
+      node.index = r(node.index);
+    case SliceNode():
+      node.base = r(node.base);
+      node.startExpr = ro(node.startExpr);
+      node.endExpr = ro(node.endExpr);
+    case CallNode():
+      list(node.args);
+    case LambdaNode():
+      if (intoLambdas) list(node.body.stmts);
+    case InitListNode():
+      list(node.elems);
+    case RecordInitNode():
+      for (var i = 0; i < node.fields.length; i++) {
+        final (n, e) = node.fields[i];
+        node.fields[i] = (n, r(e));
+      }
+    case ConvertNode():
+      node.expr = r(node.expr);
+    case HeapAllocNode():
+      list(node.args);
+    case HeapArrayAllocNode():
+      node.countExpr = r(node.countExpr);
+    case HeapStringAllocNode():
+      node.capExpr = r(node.capExpr);
+    case HeapFreeNode():
+      node.expr = r(node.expr);
+    case HeapArrayFreeNode():
+      node.expr = r(node.expr);
+    case HeapArrayResizeNode():
+      node.expr = r(node.expr);
+      node.newLenExpr = r(node.newLenExpr);
+    case ExistsNode():
+      node.expr = r(node.expr);
+    case YieldNode():
+      node.taskRef = r(node.taskRef);
+    case WaitUntilNode():
+      node.taskRef = r(node.taskRef);
+      node.cond = r(node.cond);
+    case PkExitNode():
+      node.taskRef = r(node.taskRef);
+    default:
+      break;
+  }
+  return f(node);
 }

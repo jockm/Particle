@@ -1,24 +1,26 @@
 // test_coroutine: task functions with yield, waitUntil and pkExit from
-// lib/protokernel.act. Checks the returned status values, resuming at the
+// the protokernel package. Checks the returned status values, resuming at the
 // right point, pkExit restarting the task, resuming inside while and switch
 // bodies, 'return;' ending a task, tasks as function values, and a task
 // with a parameter besides its state.
 // Passes with trap(0); fails with trap(15).
 
-import "lib/protokernel.act";
+package main;
+
+import "github.com/jockm/Particle/lib/protokernel";
 
 u32 g_trace = 0;
 u32 g_ready = 0;
 u32 g_mode = 0;
 
-task steps(type pt p) {
+task steps(type protokernel.pt p) {
     g_trace = g_trace * 10 + 1;
-    yield(p);
+    protokernel.yield(p);
     g_trace = g_trace * 10 + 2;
-    waitUntil(p, g_ready == 1);
+    protokernel.waitUntil(p, g_ready == 1);
     g_trace = g_trace * 10 + 3;
     if (g_mode == 1) {
-        pkExit(p);
+        protokernel.pkExit(p);
     }
     g_trace = g_trace * 10 + 4;
 }
@@ -31,37 +33,37 @@ type Counter {
 task in_loop(Counter c) {
     while (c.i < 2) {
         g_trace = g_trace * 10 + 5;
-        yield(c);
+        protokernel.yield(c);
         g_trace = g_trace * 10 + 6;
         c.i += 1;
     }
 }
 
 // 'return;' ends the task: the counter resets and the status is PK_ENDED
-task early(type pt p) {
+task early(type protokernel.pt p) {
     g_trace = g_trace * 10 + 1;
-    yield(p);
+    protokernel.yield(p);
     if (g_mode == 2) {
         return;
     }
     g_trace = g_trace * 10 + 2;
-    yield(p);
+    protokernel.yield(p);
 }
 
 // A parameter besides the state is passed fresh on every call
-task adder(type pt p, u32 amount) {
+task adder(type protokernel.pt p, u32 amount) {
     g_trace += amount;
-    yield(p);
+    protokernel.yield(p);
     g_trace += amount * 10;
 }
 
-type Task = fn(pt) -> u16;
+type Task = fn(protokernel.pt) -> u16;
 
-task in_switch(type pt p) {
+task in_switch(type protokernel.pt p) {
     switch (g_mode) {
         case 7:
             g_trace = g_trace * 10 + 7;
-            yield(p);
+            protokernel.yield(p);
             g_trace = g_trace * 10 + 8;
         default:
             g_trace = g_trace * 10 + 9;
@@ -70,14 +72,14 @@ task in_switch(type pt p) {
 
 void main() {
     u32 ok = 1;
-    type pt t;
-    pkInit(t);
+    protokernel.pt t;
+    protokernel.pkInit(t);
 
-    if (steps(t) != PK_YIELDED) ok = 0;      // trace 1
-    if (steps(t) != PK_WAITING) ok = 0;      // trace 12
-    if (steps(t) != PK_WAITING) ok = 0;      // still waiting, no trace
+    if (steps(t) != protokernel.PK_YIELDED) ok = 0;      // trace 1
+    if (steps(t) != protokernel.PK_WAITING) ok = 0;      // trace 12
+    if (steps(t) != protokernel.PK_WAITING) ok = 0;      // still waiting, no trace
     g_ready = 1;
-    if (steps(t) != PK_ENDED) ok = 0;        // trace 1234
+    if (steps(t) != protokernel.PK_ENDED) ok = 0;        // trace 1234
     if (g_trace != 1234) ok = 0;
     if (t.lc != 0) ok = 0;
 
@@ -85,43 +87,43 @@ void main() {
     g_trace = 0;
     g_mode = 1;
     steps(t);                                // 1
-    if (steps(t) != PK_EXITED) ok = 0;       // 123 (ready is still 1)
+    if (steps(t) != protokernel.PK_EXITED) ok = 0;       // 123 (ready is still 1)
     if (t.lc != 0) ok = 0;
-    if (steps(t) != PK_YIELDED) ok = 0;      // 1231
+    if (steps(t) != protokernel.PK_YIELDED) ok = 0;      // 1231
     if (g_trace != 1231) ok = 0;
 
     // Resume inside a while body
     g_trace = 0;
     Counter c;
-    if (in_loop(c) != PK_YIELDED) ok = 0;    // 5
-    if (in_loop(c) != PK_YIELDED) ok = 0;    // 565
-    if (in_loop(c) != PK_ENDED) ok = 0;      // 5656
+    if (in_loop(c) != protokernel.PK_YIELDED) ok = 0;    // 5
+    if (in_loop(c) != protokernel.PK_YIELDED) ok = 0;    // 565
+    if (in_loop(c) != protokernel.PK_ENDED) ok = 0;      // 5656
     if (g_trace != 5656 || c.lc != 0) ok = 0;
 
     // 'return;' ends the task
     g_trace = 0;
     g_mode = 2;
-    pkInit(t);
-    if (early(t) != PK_YIELDED) ok = 0;      // 1
-    if (early(t) != PK_ENDED) ok = 0;        // returned
+    protokernel.pkInit(t);
+    if (early(t) != protokernel.PK_YIELDED) ok = 0;      // 1
+    if (early(t) != protokernel.PK_ENDED) ok = 0;        // returned
     if (g_trace != 1 || t.lc != 0) ok = 0;
 
     // A task held in a function value, with a parameter
     g_trace = 0;
-    pkInit(t);
+    protokernel.pkInit(t);
     Task run = early;
-    if (run(t) != PK_YIELDED) ok = 0;
-    pkInit(t);
-    if (adder(t, 3) != PK_YIELDED) ok = 0;   // +3
-    if (adder(t, 5) != PK_ENDED) ok = 0;     // +50
+    if (run(t) != protokernel.PK_YIELDED) ok = 0;
+    protokernel.pkInit(t);
+    if (adder(t, 3) != protokernel.PK_YIELDED) ok = 0;   // +3
+    if (adder(t, 5) != protokernel.PK_ENDED) ok = 0;     // +50
     if (g_trace != 1 + 3 + 50) ok = 0;
 
     // Resume inside a switch case
     g_trace = 0;
     g_mode = 7;
-    pkInit(t);
-    if (in_switch(t) != PK_YIELDED) ok = 0;  // 7
-    if (in_switch(t) != PK_ENDED) ok = 0;    // 78 (implicit break)
+    protokernel.pkInit(t);
+    if (in_switch(t) != protokernel.PK_YIELDED) ok = 0;  // 7
+    if (in_switch(t) != protokernel.PK_ENDED) ok = 0;    // 78 (implicit break)
     if (g_trace != 78) ok = 0;
 
     if (ok == 1) {

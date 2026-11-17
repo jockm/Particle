@@ -551,8 +551,8 @@ extension _CheckWalk on Checker {
           throw CompileError("'$op' cannot be used on the ${_kindWords(k, side)}");
         case _Kind.string:
           if (isCompare) {
-            throw CompileError("strings cannot be compared with '$op'; use stringEquals(a, b) "
-                'or stringCompare(a, b) from lib/string.act');
+            throw CompileError("strings cannot be compared with '$op'; use a.equals(b) or "
+                'a.compare(b) (or string.equals(a, b), string.compare(a, b)) from lib/string.act');
           }
           throw CompileError("'$op' cannot be used on the ${_kindWords(k, side)}");
         case _Kind.array:

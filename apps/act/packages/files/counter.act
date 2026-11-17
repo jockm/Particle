@@ -1,0 +1,11 @@
+// A plain file (no package line) that report.act imports with
+// import "x.act": it joins the importing package, so its declarations are
+// that package's own, and not pub.
+
+type Counter {
+    u32 n;
+};
+
+void Counter.bump() {
+    this.n = this.n + 1;
+}

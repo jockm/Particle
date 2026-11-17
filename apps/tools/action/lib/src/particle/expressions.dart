@@ -1269,9 +1269,18 @@ extension _Expressions on CodeGen {
           emit('LD      R2, R1');
           emit('SUB     R2, 4', 'Point to prefix header');
           emit('LD32    R2, (R2)', "Heap array length for receiver '${rcvNode.name}'");
-        } else {
+        } else if (arrayLens.containsKey(rcvName) || _fixedArgLength(rcvNode) == 0 && sName != 'string') {
           final arrSz = arrayLens[rcvName] ?? 0;
           emitImmediate(2, arrSz);
+        } else if (_fixedArgLength(rcvNode) > 0) {
+          // A fixed string or array held in a field, or a row
+          emitImmediate(2, _fixedArgLength(rcvNode));
+        } else {
+          // A string whose capacity is not known here (a string parameter,
+          // a literal): its length and the terminator
+          emit('LD      R14, R1');
+          _emitStringScanAt14(null, 2);
+          emit('ADD     R2, 1', 'Length and terminator: the bytes it certainly has');
         }
 
         final methodParamSigs = paramSigs.length > 1 ? paramSigs.sublist(1) : <ParamSig>[];

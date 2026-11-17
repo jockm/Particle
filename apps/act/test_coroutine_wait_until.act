@@ -1,7 +1,9 @@
 // test_coroutine_wait_until: waitUntil returns status 0 until its condition becomes true
 // Passes with trap(0); fails with trap(15).
 
-import "lib/protokernel.act";
+package main;
+
+import "github.com/jockm/Particle/lib/protokernel";
 
 type Waiter {
     u16 lc;
@@ -11,7 +13,7 @@ type Waiter {
 u32 ready = 0;
 
 task waiter(Waiter w) {
-    waitUntil(w, ready == 1);
+    protokernel.waitUntil(w, ready == 1);
     w.done = 1;
 }
 

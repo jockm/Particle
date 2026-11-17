@@ -4,8 +4,8 @@
 package geometry;
 
 pub type Point {
-    u32 x;
-    u32 y;
+    pub u32 x;
+    pub u32 y;
 };
 
 pub enum Kind { POINT, RECT = 10, SQUARE }

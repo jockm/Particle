@@ -3,7 +3,9 @@
 // which builds the value in R14; addresses held in R14 must survive it.
 // Passes with trap(0); fails with trap(15).
 
-import "lib/protokernel.act";
+package main;
+
+import "github.com/jockm/Particle/lib/protokernel";
 
 type Big {
     u32 pad[5];         // 20 bytes, so the fields below are at 20 and 24
@@ -25,10 +27,10 @@ u32 sum_open(u32 xs[]) {
 }
 
 // 17 pauses: resume points 16 and 17 need a LOAD macro
-task stepper(type pt p) {
-    yield(p); yield(p); yield(p); yield(p); yield(p); yield(p);
-    yield(p); yield(p); yield(p); yield(p); yield(p); yield(p);
-    yield(p); yield(p); yield(p); yield(p); yield(p);
+task stepper(type protokernel.pt p) {
+    protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p);
+    protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p);
+    protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p); protokernel.yield(p);
 }
 
 void main() {
@@ -64,17 +66,17 @@ void main() {
     if (sum_open(vals[k * 2..k * 2 + 3]) != 18 + 19 + 20) ok = 0;
 
     // Coroutine resume points above 15
-    type pt t;
-    pkInit(t);
+    protokernel.pt t;
+    protokernel.pkInit(t);
     u32 calls = 0;
     while (calls < 15) {
         stepper(t);
         calls += 1;
     }
     if (t.lc != 15) ok = 0;
-    if (stepper(t) != PK_YIELDED || t.lc != 16) ok = 0;
-    if (stepper(t) != PK_YIELDED || t.lc != 17) ok = 0;
-    if (stepper(t) != PK_ENDED || t.lc != 0) ok = 0;
+    if (stepper(t) != protokernel.PK_YIELDED || t.lc != 16) ok = 0;
+    if (stepper(t) != protokernel.PK_YIELDED || t.lc != 17) ok = 0;
+    if (stepper(t) != protokernel.PK_ENDED || t.lc != 0) ok = 0;
 
     if (ok == 1) {
         trap(0);

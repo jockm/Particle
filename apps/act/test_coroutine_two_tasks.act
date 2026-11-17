@@ -1,7 +1,9 @@
 // test_coroutine_two_tasks: two task records driven by the same coroutine keep separate state
 // Passes with trap(0); fails with trap(15).
 
-import "lib/protokernel.act";
+package main;
+
+import "github.com/jockm/Particle/lib/protokernel";
 
 type Task {
     u16 lc;
@@ -11,7 +13,7 @@ type Task {
 task ticker(Task t) {
     while (1) {
         t.count += 1;
-        yield(t);
+        protokernel.yield(t);
     }
 }
 

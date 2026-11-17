@@ -451,11 +451,13 @@ void main() {
 ''';
 
     final prelude = File('${Directory.current.path}/../../../lib/string.act').readAsStringSync();
+    final integerPrelude = File('${Directory.current.path}/../../../lib/integer.act').readAsStringSync();
 
     Future<TestClient> start([Map<String, String> more = const {}]) async {
       final c = await TestClient.start({
         'action.json': '{ "action": { "module": { "name": "example.com/m" } } }',
         'lib/string.act': prelude,
+        'lib/integer.act': integerPrelude,
         'geo/geo.act': geoAct,
         'main.act': pkgMain,
         ...more,
@@ -558,6 +560,7 @@ void main() {
 
   group('modules', () {
     final prelude = File('${Directory.current.path}/../../../lib/string.act').readAsStringSync();
+    final integerPrelude = File('${Directory.current.path}/../../../lib/integer.act').readAsStringSync();
     const appMain = '''package main;
 import "example.com/me/plib/console";
 
@@ -571,6 +574,7 @@ void main() {
         'action.json': '{\n  "action": {\n    "module": { "name": "example.com/me/app" },\n'
             '    "requires": {\n      "example.com/me/plib": { "version": "v1.0.0" }\n    }\n  }\n}\n',
         'lib/string.act': prelude,
+        'lib/integer.act': integerPrelude,
       });
       final d = await c.open('main.act', appMain);
       expect(asMap(d.first)['message'] as String,
@@ -586,6 +590,7 @@ void main() {
         'action.json': '{ "action": { "module": { "name": "example.com/me/app" }, '
             '"requires": { "example.com/me/plib": { "path": "libs/plib" } } } }',
         'lib/string.act': prelude,
+        'lib/integer.act': integerPrelude,
         'libs/plib/action.json': '{ "action": { "module": { "name": "example.com/me/plib" } } }',
         'libs/plib/console/console.act':
             'package console;\n\n// Doubles x.\npub u32 twice(u32 x) {\n    return x * 2;\n}\n',
@@ -611,6 +616,71 @@ void main() {
       final p = asMap(c.lastDiagnostics('action.json')!.first);
       expect(p['message'] as String, contains("'1.0' is not a version: write a git tag such as v1.2.0"));
       expect(asMap(asMap(p['range'])['start'])['line'], equals(4));
+      await c.close();
+    });
+  });
+
+  group('types: constants, static functions and overloads', () {
+    final integer = File('${Directory.current.path}/../../../lib/integer.act').readAsStringSync();
+    final strings = File('${Directory.current.path}/../../../lib/string.act').readAsStringSync();
+    const prog = '''import "integer.act";
+import "string.act";
+
+u32 twice(u32 x) { return x * 2; }
+u32 twice(u8 x) { return x * 3; }
+
+void main() {
+    u8 a = 3;
+    u8 r = Integer.min(a, Integer.MAX_U8);
+    u32 t = twice(a);
+    string s[8] = "abc";
+    s32 i = s.find(98);
+    u32 e = string.equals(s, "abc");
+}
+''';
+
+    Future<TestClient> start() =>
+        TestClient.start({'lib/integer.act': integer, 'lib/string.act': strings});
+
+    Future<String> hover(TestClient c, String needle, [int offset = 0]) async {
+      final (l, ch) = find(prog, needle, offset);
+      final h = await c.result('textDocument/hover', c.at('main.act', l, ch));
+      return h == null ? '' : asMap(asMap(h)['contents'])['value'] as String;
+    }
+
+    test('the program checks cleanly', () async {
+      final c = await start();
+      expect(await c.open('main.act', prog), isEmpty);
+      await c.close();
+    });
+
+    test('hover shows a type constant, every version of an overloaded function, and string methods', () async {
+      final c = await start();
+      await c.open('main.act', prog);
+      expect(await hover(c, 'Integer.MAX_U8', 8), contains('const u8 Integer.MAX_U8 = 255'));
+      final min = await hover(c, 'Integer.min', 8);
+      expect(min, contains('u8 Integer.min(u8 a, u8 b)'));
+      expect(min, contains('s32 Integer.min(s32 a, s32 b)'));
+      expect(min, contains('6 versions.'));
+      final tw = await hover(c, 'twice(a)');
+      expect(tw, contains('u32 twice(u32 x)'));
+      expect(tw, contains('u32 twice(u8 x)'));
+      expect(await hover(c, 's.find', 2), contains('s32 string.find(u8 ch)'));
+      expect(await hover(c, 'string.equals', 7), contains('u32 string.equals(string s1, string s2)'));
+      await c.close();
+    });
+
+    test('completion after a type lists its constants and static functions; go to definition finds them',
+        () async {
+      final c = await start();
+      await c.open('main.act', prog);
+      var (l, ch) = find(prog, 'Integer.min', 8);
+      final r = asMap(await c.result('textDocument/completion', c.at('main.act', l, ch)));
+      final labels = [for (final i in r['items'] as List) asMap(i)['label']];
+      expect(labels, containsAll(['MIN_U8', 'MAX_S32', 'min', 'max', 'abs', 'sign', 'neg']));
+      (l, ch) = find(prog, 'Integer.MAX_U8', 8);
+      final loc = asMap(await c.result('textDocument/definition', c.at('main.act', l, ch)));
+      expect(loc['uri'], equals(c.uri('lib/integer.act')));
       await c.close();
     });
   });

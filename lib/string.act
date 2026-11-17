@@ -2,52 +2,57 @@
 // Action Standard String Library (lib/string.act)
 // Target: Particle 32-bit RISC Core
 // Zero-heap, hardware-interoperable fixed-capacity null-terminated strings.
-// Supports both direct function calls (string_*) and method syntax (s.*).
+// The functions are methods of the built-in type string (s.find('c')), and
+// those that compare two strings are also static functions of it
+// (string.compare(a, b)). In a program made of packages this file is part
+// of the prelude, loaded automatically.
 // =============================================================================
 
-// Copy null-terminated payload from src into dst, respecting dst.capacity.
-void stringCopy(string dst[], string src) {
+// Copy null-terminated payload from src into this string, respecting its
+// capacity.
+void string.copy(string src) {
     // No room even for the terminator (capacity - 1 would wrap around)
-    if (dst.capacity == 0) {
+    if (this.capacity == 0) {
         return;
     }
-    u32 max_chars = dst.capacity - 1;
+    u32 max_chars = this.capacity - 1;
     u32 i = 0;
     while (i < max_chars) {
         u8 c = src[i];
         if (c == 0) {
             break;
         }
-        dst[i] = c;
+        this[i] = c;
         i = i + 1;
     }
-    dst[i] = 0;
+    this[i] = 0;
 }
 
-// Append null-terminated payload from src to dst, respecting dst.capacity.
-void stringConcat(string dst[], string src) {
+// Append null-terminated payload from src to this string, respecting its
+// capacity.
+void string.concat(string src) {
     // No room even for the terminator (capacity - 1 would wrap around)
-    if (dst.capacity == 0) {
+    if (this.capacity == 0) {
         return;
     }
-    u32 max_chars = dst.capacity - 1;
-    u32 dst_idx = dst.len;
+    u32 max_chars = this.capacity - 1;
+    u32 dst_idx = this.len;
     u32 src_idx = 0;
     while (dst_idx < max_chars) {
         u8 c = src[src_idx];
         if (c == 0) {
             break;
         }
-        dst[dst_idx] = c;
+        this[dst_idx] = c;
         dst_idx = dst_idx + 1;
         src_idx = src_idx + 1;
     }
-    dst[dst_idx] = 0;
+    this[dst_idx] = 0;
 }
 
 // Lexicographical comparison of two null-terminated strings.
 // Returns 0 if identical, -1 if s1 < s2, 1 if s1 > s2.
-s32 stringCompare(string s1, string s2) {
+static s32 string.compare(string s1, string s2) {
     u32 i = 0;
     while (1) {
         u8 c1 = s1[i];
@@ -66,8 +71,13 @@ s32 stringCompare(string s1, string s2) {
     return 0;
 }
 
+// Compares this string with other, as string.compare(this, other).
+s32 string.compare(string other) {
+    return string.compare(this, other);
+}
+
 // Boolean equality check. Returns 1 if s1 == s2, 0 otherwise.
-u32 stringEquals(string s1, string s2) {
+static u32 string.equals(string s1, string s2) {
     u32 i = 0;
     while (1) {
         u8 c1 = s1[i];
@@ -83,12 +93,17 @@ u32 stringEquals(string s1, string s2) {
     return 1;
 }
 
-// Search for the first occurrence of byte ch in string s.
+// Whether this string equals other, as string.equals(this, other).
+u32 string.equals(string other) {
+    return string.equals(this, other);
+}
+
+// Search for the first occurrence of byte ch in this string.
 // Returns 0-based index if found, -1 if not found.
-s32 stringFind(string s, u8 ch) {
+s32 string.find(u8 ch) {
     u32 i = 0;
     while (1) {
-        u8 c = s[i];
+        u8 c = this[i];
         if (c == ch) {
             return i;
         }

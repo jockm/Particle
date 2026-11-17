@@ -1,7 +1,7 @@
 // test_packages: a program made of packages (apps/act/packages). Imports
 // by full path, a renamed import, pub types, methods, constants, enums and
 // globals, a package that imports another, a fast global and a task in a
-// package.
+// package, and the prelude (Integer, string methods).
 // Passes with trap(0); fails with trap(15).
 package main;
 
@@ -31,6 +31,11 @@ void main() {
     if (rep.summarize(r) != 16 || rep.summarize(r) != 16) ok = 0;
     if (rep.calls != 2) ok = 0;
     if (rep.runSteps(3) != 3) ok = 0;
+
+    // The prelude: Integer and the string methods, without an import
+    if (Integer.max(geometry.UNIT, 5) != 5 || Integer.MAX_U8 != 255) ok = 0;
+    string word[8] = "pkg";
+    if (word.find(103) != 2 || !string.equals(word, "pkg")) ok = 0;
 
     if (ok == 1) {
         trap(0);

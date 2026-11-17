@@ -11,9 +11,19 @@ type Named {
 
 string shared[6];
 
-// Forwards an open string to another open string parameter
+// Copies src into dst: an open string parameter, used as a receiver
 void fill(string dst[], string src) {
-    stringCopy(dst, src);
+    dst.copy(src);
+}
+
+// Appends src to dst
+void append(string dst[], string src) {
+    dst.concat(src);
+}
+
+// Where ch is in s: a string parameter
+s32 findIn(string s, u8 ch) {
+    return s.find(ch);
 }
 
 u32 capacityOf(string s[]) {
@@ -23,7 +33,7 @@ u32 capacityOf(string s[]) {
 // Copies into each row of an open array of strings
 void fillRows(string rows[][], string src) {
     for (u32 i : 0..rows.len) {
-        stringCopy(rows[i], src);
+        fill(rows[i], src);
     }
 }
 
@@ -32,44 +42,44 @@ void main() {
 
     // A fixed local, directly and through another function
     string copy[8];
-    stringCopy(copy, "ABC");
-    if (stringEquals(copy, "ABC") != 1) ok = 0;
+    fill(copy, "ABC");
+    if (string.equals(copy, "ABC") != 1) ok = 0;
     string other[8];
     fill(other, copy);
-    if (stringEquals(other, "ABC") != 1) ok = 0;
-    stringConcat(other, "DE");
-    if (stringEquals(other, "ABCDE") != 1) ok = 0;
+    if (string.equals(other, "ABC") != 1) ok = 0;
+    append(other, "DE");
+    if (string.equals(other, "ABCDE") != 1) ok = 0;
     if (capacityOf(copy) != 8) ok = 0;
 
     // The capacity limits the copy (room for 3 characters and the end)
     string small[4];
-    stringCopy(small, "123456");
-    if (stringEquals(small, "123") != 1) ok = 0;
+    fill(small, "123456");
+    if (string.equals(small, "123") != 1) ok = 0;
 
     // A global
-    stringCopy(shared, "glob");
-    if (stringEquals(shared, "glob") != 1 || capacityOf(shared) != 6) ok = 0;
+    fill(shared, "glob");
+    if (string.equals(shared, "glob") != 1 || capacityOf(shared) != 6) ok = 0;
 
     // A field, as a string and as an open string
     Named n;
-    stringCopy(n.name, "xyz");
-    if (stringFind(n.name, 122) != 2) ok = 0;
-    if (stringEquals(n.name, "xyz") != 1) ok = 0;
+    fill(n.name, "xyz");
+    if (findIn(n.name, 122) != 2) ok = 0;
+    if (string.equals(n.name, "xyz") != 1) ok = 0;
     if (capacityOf(n.name) != 8) ok = 0;
 
     // A row of a fixed array of strings
     string words[2][5];
-    stringCopy(words[1], "cd");
-    if (stringEquals(words[1], "cd") != 1 || capacityOf(words[1]) != 5) ok = 0;
+    fill(words[1], "cd");
+    if (string.equals(words[1], "cd") != 1 || capacityOf(words[1]) != 5) ok = 0;
 
     // Rows of an open array of strings
     fillRows(words, "row");
-    if (stringEquals(words[0], "row") != 1 || stringEquals(words[1], "row") != 1) ok = 0;
+    if (string.equals(words[0], "row") != 1 || string.equals(words[1], "row") != 1) ok = 0;
 
     // A heap string
     string heap[] = string.createArray(8);
-    stringCopy(heap, "heap");
-    if (stringEquals(heap, "heap") != 1 || capacityOf(heap) != 8) ok = 0;
+    fill(heap, "heap");
+    if (string.equals(heap, "heap") != 1 || capacityOf(heap) != 8) ok = 0;
     heap.destroyArray();
 
     if (ok == 1) {

@@ -6,8 +6,8 @@
 // package is a folder of files with the same `package` line; it is loaded
 // once, before the files that import it, and an import cycle is an error.
 // File imports (`import "x.act";`) still work: the file joins the package
-// that imports it. lib/string.act is loaded first, as the prelude: its names
-// are seen everywhere. See packages.dart for how names are rewritten.
+// that imports it. The prelude (lib/string.act and lib/integer.act) is
+// loaded first: its names are seen everywhere. See packages.dart for how names are rewritten.
 
 import 'dart:io';
 
@@ -49,7 +49,23 @@ class PackageLoader {
   final Map<String, String> _seenFuncs = {};
   ModuleInfo? _module;
   BuildList? _buildList;
-  String? _preludePath;
+  /// The files of the prelude, loaded before everything else.
+  final List<String> _preludePaths = [];
+  static const preludeFiles = ['string.act', 'integer.act'];
+
+  /// Finds and loads the prelude; [required] when the program needs it.
+  void _loadPrelude(String from, {required bool required}) {
+    for (final f in preludeFiles) {
+      final path = resolvePath('lib/$f', from) ?? resolvePath(f, from);
+      if (path == null) {
+        if (!required) continue;
+        throw CompileError("the prelude file lib/$f was not found: a program with packages needs it "
+            '(add its folder with -I)');
+      }
+      _preludePaths.add(path);
+      _loadPlain(path);
+    }
+  }
   late String _startDir;
 
   PackageLoader(
@@ -64,12 +80,7 @@ class PackageLoader {
   /// Loads the program whose own files are [sources] (`package main;`).
   void loadProgram(List<String> sources) {
     _startDir = p.dirname(p.realPath(sources.first));
-    _preludePath = resolvePath('lib/string.act', sources.first) ?? resolvePath('string.act', sources.first);
-    if (_preludePath == null) {
-      throw CompileError(
-          "the prelude lib/string.act was not found: a program with packages needs it (add its folder with -I)");
-    }
-    _loadPlain(_preludePath!);
+    _loadPrelude(sources.first, required: true);
     _loadUnit([for (final s in sources) p.realPath(s)], null, 'main', null, null);
   }
 
@@ -78,8 +89,7 @@ class PackageLoader {
   void loadPackage(List<String> sources) {
     final folder = p.dirname(p.realPath(sources.first));
     _startDir = folder;
-    _preludePath = resolvePath('lib/string.act', sources.first) ?? resolvePath('string.act', sources.first);
-    if (_preludePath != null) _loadPlain(_preludePath!);
+    _loadPrelude(sources.first, required: false);
     final module = _module = findModule(folder);
     if (module == null || !folder.startsWith('${module.root}/')) {
       throw CompileError("${sources.first}: checking package files needs the module's name: add "
@@ -116,12 +126,14 @@ class PackageLoader {
 
   void _add(AstNode d, String path) {
     if (d is FuncDeclNode && d.body != null) {
-      final prev = _seenFuncs[d.name];
+      // Overloads (other parameter types) are other functions
+      final key = '${d.name}(${writtenParamKey(d)})';
+      final prev = _seenFuncs[key];
       if (prev != null) {
-        throw CompileError("Redefinition of function '${d.name}' in $path (previously defined in $prev)")
+        throw CompileError("Redefinition of function '${sourceName(d.name)}' in $path (previously defined in $prev)")
             .at(d.loc);
       }
-      _seenFuncs[d.name] = path;
+      _seenFuncs[key] = path;
     }
     decls.add(d);
   }
@@ -204,7 +216,7 @@ class PackageLoader {
     String? name;
     void addFile(String path, bool own) {
       if (!seen.add(path)) return;
-      if (!own && path == _preludePath) return;
+      if (!own && _preludePaths.contains(path)) return;
       if (!isBuilt(path)) return;
       final tokens = _tokens(path);
       final pkg = scanPackage(tokens);

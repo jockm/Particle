@@ -254,13 +254,15 @@ ProgramNode _loadOnce(
       } else {
         if (decl is FuncDeclNode) {
           if (decl.body != null) {
-            if (seenFuncs.containsKey(decl.name)) {
-              final prevF = seenFuncs[decl.name];
+            // Overloads (other parameter types) are other functions
+            final key = '${decl.name}(${writtenParamKey(decl)})';
+            if (seenFuncs.containsKey(key)) {
+              final prevF = seenFuncs[key];
               throw CompileError(
                       "Redefinition of function '${decl.name}' in $realP (previously defined in $prevF)")
                   .at(decl.loc);
             }
-            seenFuncs[decl.name] = realP;
+            seenFuncs[key] = realP;
           }
         } else if (decl is TypeDefNode) {
           seenTypes[decl.name] = realP;

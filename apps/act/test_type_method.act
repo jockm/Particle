@@ -1,5 +1,4 @@
 // apps/act/test_type_method.act
-import "lib/protokernel.act";
 
 type Point {
     u16 x;

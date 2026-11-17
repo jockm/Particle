@@ -1,4 +1,3 @@
-import "lib/protokernel.act";
 
 type Color {
     u8 r;

@@ -392,7 +392,7 @@ void main() {
     const n = 'type N { u32 v; ref N next; };\n';
     test('strings, arrays and records are not compared with ==', () {
       expect(checkErrorOf('void main() { string a[4] = "ab"; string b[4] = "ab"; if (a == b) trap(1); }'),
-          contains('use stringEquals(a, b) or stringCompare(a, b)'));
+          contains('use a.equals(b) or a.compare(b)'));
       expect(checkErrorOf('u32 f(string x) { return x != "a"; }\nvoid main() { }'),
           contains("strings cannot be compared with '!='"));
       expect(checkErrorOf('void main() { u32 a[2]; u32 b[2]; if (a == b) trap(1); }'),

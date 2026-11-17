@@ -1,7 +1,9 @@
 // test_coroutine_sequence: a coroutine runs its steps in order, ends with status 3 and restarts
 // Passes with trap(0); fails with trap(15).
 
-import "lib/protokernel.act";
+package main;
+
+import "github.com/jockm/Particle/lib/protokernel";
 
 type Seq {
     u16 lc;
@@ -10,9 +12,9 @@ type Seq {
 
 task steps(Seq s) {
     s.stage = 1;
-    yield(s);
+    protokernel.yield(s);
     s.stage = 2;
-    yield(s);
+    protokernel.yield(s);
     s.stage = 3;
 }
 

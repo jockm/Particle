@@ -25,6 +25,9 @@ const internalNameMark = '~';
 
 final _internalSuffix = RegExp(r'~\d+');
 
+/// The parameter types of an overload's own name (`Integer.min~~u8.u8`).
+final _overloadSuffix = RegExp(r'~~[A-Za-z0-9_.]*');
+
 /// Separates a package's prefix from a name declared in it, in the
 /// internal names of package declarations (`drivers.uart..init`).
 const packageMark = '..';
@@ -45,7 +48,9 @@ final _packagePrefix = RegExp(r'([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\.\.(?=[A-Za-
 /// [name] (or a message naming locals or package declarations) as the
 /// source writes it: `x~2` is `x`, and `drivers.uart..init` is `uart.init`.
 String sourceName(String name) {
-  var s = name.contains(internalNameMark) ? name.replaceAll(_internalSuffix, '') : name;
+  var s = name.contains(internalNameMark)
+      ? name.replaceAll(_overloadSuffix, '').replaceAll(_internalSuffix, '')
+      : name;
   if (s.contains(packageMark) && packageDisplayNames.isNotEmpty) {
     s = s.replaceAllMapped(_packagePrefix, (m) {
       final shown = packageDisplayNames[m[1]];

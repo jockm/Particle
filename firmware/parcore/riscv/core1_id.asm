@@ -17,13 +17,13 @@ _reset_vector:
     LD      R3, 2               ; FIFO Ch2: Inbound Writeback from Core 4/MEM (WB: [Rd, Data])
 
     ; --------------------------------------------------------------------------
-    ; Initialize Architectural Register File (x0..x31 = 0)
+    ; Initialize Architectural Register File (x1..x31 = 0; skip 0x0000 NULL guard)
     ; --------------------------------------------------------------------------
-    LD      R4, REG_BASE
+    LD      R4, 4               ; Start at x1 (0x0004), leaving 0x0000 untouched
     LD      R5, 0               ; Zero value
-    LOAD16  R6, 32              ; 32 registers
+    LOAD16  R6, 31              ; 31 writable registers (x1..x31)
 _init_rf_loop:
-    ST32    (R4++), R5          ; Clear register word
+    LD32    (R4++), R5          ; Clear register word (post-increment)
     SUB     R6, 1
     BBRA.NZ R6, _init_rf_loop
 

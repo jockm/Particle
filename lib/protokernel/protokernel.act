@@ -1,28 +1,33 @@
 // =============================================================================
-// File: lib/protokernel.act
+// File: lib/protokernel/protokernel.act
+// Package: github.com/jockm/Particle/lib/protokernel
 // Description: Stackless Cooperative Protothreads for Action / Particle
 // Attribution & Lineage:
 // - Original Protothreads Architecture & Design: Adam Dunkels <adam@sics.se>
 // - ProtoKernel Action / Particle Architecture: Jock Murphy
 // =============================================================================
 
-const u16 PK_WAITING = 0;
-const u16 PK_YIELDED = 1;
-const u16 PK_EXITED  = 2;
-const u16 PK_ENDED   = 3;
+package protokernel;
 
-type pt {
-    u16 lc;
+pub const u16 PK_WAITING = 0;
+pub const u16 PK_YIELDED = 1;
+pub const u16 PK_EXITED  = 2;
+pub const u16 PK_ENDED   = 3;
+
+pub type pt {
+    pub u16 lc;
 };
 
 // Inline lifecycle initializer
-inline void pkInit(type pt p) {
+pub inline void pkInit(pt p) {
     p.lc = 0;
 }
 
 // Coroutine operations, for use in task functions:
 //
-//     task blink(pt t) { ... yield(t); ... }
+//     import "github.com/jockm/Particle/lib/protokernel";
+//
+//     task blink(protokernel.pt t) { ... protokernel.yield(t); ... }
 //
 // The compiler generates these in place; they have no bodies. `t` is the
 // task's state (its first parameter). The compiler numbers the resume points
@@ -30,12 +35,12 @@ inline void pkInit(type pt p) {
 
 // Save the continuation and return PK_YIELDED. The next call resumes after
 // the yield.
-u16 yield(type pt p);
+pub u16 yield(pt p);
 
 // If `cond` is false, return PK_WAITING; the next call re-tests `cond` here.
 // Continue once it is true.
-u16 waitUntil(type pt p, u32 cond);
+pub u16 waitUntil(pt p, u32 cond);
 
 // Reset the continuation and return PK_EXITED. The next call starts the task
 // from the beginning.
-u16 pkExit(type pt p);
+pub u16 pkExit(pt p);

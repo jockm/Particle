@@ -3,8 +3,8 @@
 package geometry;
 
 pub type Rect {
-    Point min;
-    Point max;
+    pub Point min;
+    pub Point max;
 };
 
 pub u32 Rect.area() {

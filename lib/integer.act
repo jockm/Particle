@@ -1,0 +1,176 @@
+// =============================================================================
+// Action Standard Integer Library (lib/integer.act)
+// The type Integer holds the limits of the integer types, as constants
+// (Integer.MAX_U8), and functions on integers, as static functions
+// (Integer.min(a, b)). In a program made of packages this file is part of
+// the prelude, loaded automatically.
+// =============================================================================
+
+type Integer {
+    const u8 MIN_U8 = 0;
+    const u8 MAX_U8 = 255;
+    const s8 MIN_S8 = -128;
+    const s8 MAX_S8 = 127;
+    const u16 MIN_U16 = 0;
+    const u16 MAX_U16 = 65535;
+    const s16 MIN_S16 = -32768;
+    const s16 MAX_S16 = 32767;
+    const u32 MIN_U32 = 0;
+    const u32 MAX_U32 = 4294967295;
+    const s32 MIN_S32 = -2147483648;
+    const s32 MAX_S32 = 2147483647;
+};
+
+// The smaller and the larger of a and b, for each integer type.
+static u8 Integer.min(u8 a, u8 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static u8 Integer.max(u8 a, u8 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+static s8 Integer.min(s8 a, s8 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static s8 Integer.max(s8 a, s8 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+static u16 Integer.min(u16 a, u16 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static u16 Integer.max(u16 a, u16 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+static s16 Integer.min(s16 a, s16 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static s16 Integer.max(s16 a, s16 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+static u32 Integer.min(u32 a, u32 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static u32 Integer.max(u32 a, u32 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+static s32 Integer.min(s32 a, s32 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static s32 Integer.max(s32 a, s32 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+// The absolute value of v, for each signed type. The result is unsigned,
+// so the absolute value of the smallest value fits: Integer.abs(MIN_S8) is
+// 128.
+static u8 Integer.abs(s8 v) {
+    if (v < 0) {
+        return u8(-v);
+    }
+    return u8(v);
+}
+
+static u16 Integer.abs(s16 v) {
+    if (v < 0) {
+        return u16(-v);
+    }
+    return u16(v);
+}
+
+static u32 Integer.abs(s32 v) {
+    if (v < 0) {
+        return u32(-v);
+    }
+    return u32(v);
+}
+
+// -1, 0 or 1: the sign of v, for each signed type.
+static s8 Integer.sign(s8 v) {
+    if (v < 0) {
+        return -1;
+    }
+    if (v > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static s16 Integer.sign(s16 v) {
+    if (v < 0) {
+        return -1;
+    }
+    if (v > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static s32 Integer.sign(s32 v) {
+    if (v < 0) {
+        return -1;
+    }
+    if (v > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+// -v, for each signed type. Integers wrap, as everywhere in Action: the
+// negation of the smallest value is the smallest value.
+static s8 Integer.neg(s8 v) {
+    return s8(-v);
+}
+
+static s16 Integer.neg(s16 v) {
+    return s16(-v);
+}
+
+static s32 Integer.neg(s32 v) {
+    return s32(-v);
+}

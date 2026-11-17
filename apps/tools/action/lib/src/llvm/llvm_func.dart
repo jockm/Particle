@@ -6,7 +6,8 @@ part of '../compiler.dart';
 
 extension _LlvmFunctions on LlvmGen {
   /// The LLVM name of Action function [name].
-  String _fnName(String name) => name == 'main' ? '@main' : '@"act.$name"';
+  String _fnName(String name) =>
+      name == 'main' ? '@main' : '@"act.${name.replaceAll(overloadMark, '..')}"';
 
   String _globalName(String name) => '@"act.$name"';
 

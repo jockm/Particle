@@ -67,7 +67,7 @@
         },
         {
           "name": "storage.modifier.action",
-          "match": "\\b(const|volatile|inline|asm|extern|ref|fast|pub)\\b"
+          "match": "\\b(const|volatile|inline|asm|extern|ref|fast|pub|static)\\b"
         },
         {
           "name": "storage.type.action",

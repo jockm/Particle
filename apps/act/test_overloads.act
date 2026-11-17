@@ -1,0 +1,100 @@
+// test_overloads: constants of a type (Type.NAME), static functions
+// (Type.name(args)), overloaded functions, methods and static functions
+// (the version is chosen by the arguments' types), and an overloaded
+// function given to a function type.
+// Passes with trap(0); fails with trap(15).
+
+type Limits {
+    const u8 TOP = 200;
+    const s32 LOW = -2147483648;
+};
+
+static u8 Limits.clamp(u8 v) {
+    if (v > Limits.TOP) {
+        return Limits.TOP;
+    }
+    return v;
+}
+
+static u8 Limits.pick(u8 a, u8 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static s32 Limits.pick(s32 a, s32 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+static u32 Limits.pick(u32 a, u32 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+u32 twice(u32 x) {
+    return x * 2;
+}
+
+u32 twice(u8 x) {
+    return x * 3;
+}
+
+type Box {
+    u32 v;
+};
+
+u32 Box.get() {
+    return this.v;
+}
+
+u32 Box.get(u32 k) {
+    return this.v + k;
+}
+
+type Pick8 = fn(u8, u8) -> u8;
+
+u8 apply(Pick8 f, u8 a, u8 b) {
+    return f(a, b);
+}
+
+// A type constant sizes an array
+u8 table[Limits.TOP / 40];
+
+void main() {
+    u32 ok = 1;
+
+    if (Limits.TOP != 200 || table.len != 5) ok = 0;
+    if (Limits.clamp(250) != 200 || Limits.clamp(7) != 7) ok = 0;
+
+    u8 a = 7;
+    u8 b = 9;
+    if (Limits.pick(a, b) != 7) ok = 0;
+    // An integer constant matches any type it fits
+    if (Limits.pick(a, 3) != 3) ok = 0;
+    // Only constants: s32
+    if (Limits.pick(-5, 2) != -5 || Limits.pick(Limits.LOW, 0) != Limits.LOW) ok = 0;
+    u32 big = 4000000000;
+    if (Limits.pick(big, 4000000001) != 4000000000) ok = 0;
+
+    u32 w = 10;
+    if (twice(w) != 20 || twice(a) != 21) ok = 0;
+
+    Box x;
+    x.v = 5;
+    if (x.get() != 5 || x.get(2) != 7) ok = 0;
+
+    // The function type picks the version
+    Pick8 f = Limits.pick;
+    if (f(4, 6) != 4 || apply(Limits.pick, 8, 2) != 2) ok = 0;
+
+    if (ok == 1) {
+        trap(0);
+    }
+    trap(15);
+}

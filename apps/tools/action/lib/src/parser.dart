@@ -86,7 +86,10 @@ class Parser {
       if (decls.isNotEmpty && tok.val == 'package' && tok.type == 'KEYWORD') {
         throw CompileError("${tok.loc}: 'package' must come first in the file");
       }
-      decls.add(parseTopLevel());
+      final d = parseTopLevel();
+      decls.add(d);
+      // A type's constants are top-level constants named Type.NAME
+      if (d is TypeDefNode) decls.addAll(d.consts);
     }
     return ProgramNode(decls);
   }
@@ -219,6 +222,85 @@ class Parser {
     }
   }
 
+  /// One field of a type's body.
+  void _parseField(List<FieldDecl> fields) {
+    // ref T name;  -- a reference to a T stored elsewhere
+    if (peek().val == 'ref') {
+      final refTok = consume();
+      final rType = parseType();
+      _rejectPointerType(rType);
+      final rName = consume('IDENT').val;
+      if (peek().val == '[') {
+        // ref T name[N]: a fixed array of references; ref T name[]:
+        // a reference to a heap array of references
+        final dims = <AstNode>[];
+        var heap = false;
+        while (peek().val == '[') {
+          consume('PUNCT', '[');
+          if (peek().val == ']') {
+            consume('PUNCT', ']');
+            if (dims.isNotEmpty || peek().val == '[') {
+              throw CompileError(
+                  "${refTok.loc}: field '$rName': a heap array of references is written 'ref $rType $rName[]', with no other dimensions");
+            }
+            heap = true;
+            break;
+          }
+          dims.add(_parseConstExpr());
+          consume('PUNCT', ']');
+        }
+        if (peek().val == ';') {
+          consume('PUNCT', ';');
+        }
+        fields.add(FieldDecl(rType, heap, rName, dims, false, isArrayRef: heap)
+          ..loc = refTok.loc
+          ..isRefArray = true);
+        return;
+      }
+      if (peek().val == ';') {
+        consume('PUNCT', ';');
+      }
+      fields.add(FieldDecl(rType, true, rName, const [], false)..loc = refTok.loc);
+      return;
+    }
+    final fTok = peek();
+    final fType = parseType();
+    if (peek().val == ';') {
+      consume('PUNCT', ';');
+      if (['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'void']
+          .contains(fType)) {
+        throw CompileError(
+            "Cannot anonymously embed primitive scalar type '$fType'");
+      }
+      fields.add(FieldDecl(fType, false, fType, const [], true)..loc = fTok.loc);
+      return;
+    }
+    _rejectPointerType(fType);
+    final fName = consume('IDENT').val;
+    final fDims = <AstNode>[];
+    var arrayRef = false;
+    while (peek().val == '[') {
+      consume('PUNCT', '[');
+      if (peek().val == ']') {
+        // T name[]: a reference to a heap array
+        consume('PUNCT', ']');
+        if (fDims.isNotEmpty || peek().val == '[') {
+          throw CompileError(
+              "${fTok.loc}: field '$fName': a heap array reference is written '$fType $fName[]', with no other dimensions");
+        }
+        arrayRef = true;
+        break;
+      }
+      fDims.add(_parseConstExpr());
+      consume('PUNCT', ']');
+    }
+    if (peek().val == ';') {
+      consume('PUNCT', ';');
+    }
+    fields.add(FieldDecl(fType, arrayRef, fName, fDims, false, isArrayRef: arrayRef)
+      ..loc = fTok.loc);
+  }
+
   AstNode _parseTopLevel() {
     if (peek().val == 'package' && peek().type == 'KEYWORD') {
       return parsePackage();
@@ -238,6 +320,24 @@ class Parser {
         throw CompileError("${pubTok.loc}: 'main' cannot be 'pub'");
       }
       decl.isPub = true;
+      return decl;
+    }
+    // static T Type.name(params) { ... }  -- a function of a type, no 'this'
+    if (peek().val == 'static' && peek().type == 'KEYWORD') {
+      final staticTok = consume();
+      final decl = parseTopLevel();
+      if (decl is! FuncDeclNode ||
+          decl.params.isEmpty ||
+          decl.params.first.name != 'this' ||
+          decl.trapExpr != null ||
+          decl.isTask ||
+          decl.isAsm ||
+          decl.isExtern) {
+        throw CompileError("${staticTok.loc}: 'static' is for a function of a type, written "
+            "'static T Type.name(params)', and called as 'Type.name(args)'");
+      }
+      decl.params.removeAt(0);
+      decl.isStatic = true;
       return decl;
     }
     // asm ReturnType name(params);  -- a routine written in assembly
@@ -394,89 +494,42 @@ class Parser {
       } else if (peek().val == '{') {
         consume('PUNCT', '{');
         final fields = <FieldDecl>[];
+        final consts = <VarDeclNode>[];
         while (peek().val != '}' && peek().type != 'EOF') {
-          // ref T name;  -- a reference to a T stored elsewhere
-          if (peek().val == 'ref') {
-            final refTok = consume();
-            final rType = parseType();
-            _rejectPointerType(rType);
-            final rName = consume('IDENT').val;
+          // pub: a field or constant visible outside the type's package
+          Token? pubTok;
+          if (peek().val == 'pub' && peek().type == 'KEYWORD') pubTok = consume();
+          // const T NAME = value;  -- a constant of the type (Name.NAME)
+          if (peek().val == 'const') {
+            consume();
+            final cType = parseType();
+            final cName = consume('IDENT');
             if (peek().val == '[') {
-              // ref T name[N]: a fixed array of references; ref T name[]:
-              // a reference to a heap array of references
-              final dims = <AstNode>[];
-              var heap = false;
-              while (peek().val == '[') {
-                consume('PUNCT', '[');
-                if (peek().val == ']') {
-                  consume('PUNCT', ']');
-                  if (dims.isNotEmpty || peek().val == '[') {
-                    throw CompileError(
-                        "${refTok.loc}: field '$rName': a heap array of references is written 'ref $rType $rName[]', with no other dimensions");
-                  }
-                  heap = true;
-                  break;
-                }
-                dims.add(_parseConstExpr());
-                consume('PUNCT', ']');
-              }
-              if (peek().val == ';') {
-                consume('PUNCT', ';');
-              }
-              fields.add(FieldDecl(rType, heap, rName, dims, false, isArrayRef: heap)
-                ..loc = refTok.loc
-                ..isRefArray = true);
-              continue;
+              throw CompileError("${cName.loc}: a constant of a type holds one value; "
+                  "declare a table outside the type");
             }
-            if (peek().val == ';') {
-              consume('PUNCT', ';');
-            }
-            fields.add(FieldDecl(rType, true, rName, const [], false)..loc = refTok.loc);
+            consume('OP', '=');
+            final value = parseExpr();
+            if (peek().val == ';') consume('PUNCT', ';');
+            consts.add(VarDeclNode(cType, false, typeConstName(tName, cName.val), value, true)
+              ..loc = cName.loc
+              ..isPub = pubTok != null);
             continue;
           }
-          final fTok = peek();
-          final fType = parseType();
-          if (peek().val == ';') {
-            consume('PUNCT', ';');
-            if (['u8', 's8', 'u16', 's16', 'u32', 's32', 'bool', 'void']
-                .contains(fType)) {
-              throw CompileError(
-                  "Cannot anonymously embed primitive scalar type '$fType'");
+          final before = fields.length;
+          _parseField(fields);
+          if (pubTok != null) {
+            for (final f in fields.sublist(before)) {
+              f.isPub = true;
             }
-            fields.add(FieldDecl(fType, false, fType, const [], true)..loc = fTok.loc);
-            continue;
           }
-          _rejectPointerType(fType);
-          final fName = consume('IDENT').val;
-          final fDims = <AstNode>[];
-          var arrayRef = false;
-          while (peek().val == '[') {
-            consume('PUNCT', '[');
-            if (peek().val == ']') {
-              // T name[]: a reference to a heap array
-              consume('PUNCT', ']');
-              if (fDims.isNotEmpty || peek().val == '[') {
-                throw CompileError(
-                    "${fTok.loc}: field '$fName': a heap array reference is written '$fType $fName[]', with no other dimensions");
-              }
-              arrayRef = true;
-              break;
-            }
-            fDims.add(_parseConstExpr());
-            consume('PUNCT', ']');
-          }
-          if (peek().val == ';') {
-            consume('PUNCT', ';');
-          }
-          fields.add(FieldDecl(fType, arrayRef, fName, fDims, false, isArrayRef: arrayRef)
-            ..loc = fTok.loc);
         }
         consume('PUNCT', '}');
         if (peek().val == ';') {
           consume('PUNCT', ';');
         }
         knownTypes.add(tName);
-        return TypeDefNode(tName, fields);
+        return TypeDefNode(tName, fields)..consts.addAll(consts);
       }
     }
 
@@ -532,7 +585,8 @@ class Parser {
       }
     }
 
-    var name = consume('IDENT').val;
+    // string.name(...): a method (or static function) of the built-in string
+    var name = peek().val == 'string' && ahead(1).val == '.' ? consume().val : consume('IDENT').val;
 
     String? boundStruct;
     // Oberon-style type-bound procedure: void Point.move(...)
@@ -549,8 +603,9 @@ class Parser {
       final params = <Param>[];
       Token? variadic;
       if (boundStruct != null) {
-        // Automatically prepend receiver 'this' by reference
-        params.add(Param(boundStruct, false, 'this'));
+        // Automatically prepend receiver 'this' by reference. A string's
+        // is an open string, so a method knows its capacity.
+        params.add(Param(boundStruct, false, 'this', boundStruct == 'string'));
       }
       if (peek().val != ')') {
         while (true) {

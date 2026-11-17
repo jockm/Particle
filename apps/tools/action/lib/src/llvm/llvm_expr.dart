@@ -875,8 +875,15 @@ extension _LlvmExpressions on LlvmGen {
           !arrayLens.containsKey(rcvNode.name)) {
         // A heap array or string: the count from its header
         len = _headerLen(rcv);
-      } else {
+      } else if (arrayLens.containsKey(rcvName) || _fixedArgLength(rcvNode) == 0 && sName != 'string') {
         len = _i32(arrayLens[rcvName] ?? 0);
+      } else if (_fixedArgLength(rcvNode) > 0) {
+        // A fixed string or array held in a field, or a row
+        len = _i32(_fixedArgLength(rcvNode));
+      } else {
+        // A string whose capacity is not known here (a string parameter, a
+        // literal): its length and the terminator
+        len = _V(_val('add i32 ${_strlen(rcv).v}, 1'), 'i32');
       }
       args.add('i32 ${_conv(len, 'i32').v}');
     }

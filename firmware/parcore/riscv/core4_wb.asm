@@ -5,8 +5,8 @@
 ; ==============================================================================
 .include "lib/common.inc"
 
-.define INSTRET_LO_ADDR 0x0000  ; Zero Page low 32 bits of minstret
-.define INSTRET_HI_ADDR 0x0004  ; Zero Page high 32 bits of minstret
+.define INSTRET_LO_ADDR 0x0004  ; Zero Page low 32 bits of minstret
+.define INSTRET_HI_ADDR 0x0008  ; Zero Page high 32 bits of minstret
 
 .org 0x00000100
 _reset_vector:

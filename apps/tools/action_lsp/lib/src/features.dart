@@ -10,7 +10,7 @@ import 'symbols.dart';
 const _keywords = [
   'asm', 'break', 'case', 'const', 'continue', 'default', 'else', 'enum',
   'extern', 'fast', 'fn', 'for', 'if', 'import', 'inline', 'package', 'pub', 'ref', 'return',
-  'sizeof', 'switch', 'task', 'type', 'verify', 'void', 'volatile', 'while',
+  'sizeof', 'static', 'switch', 'task', 'type', 'verify', 'void', 'volatile', 'while',
 ];
 
 const _builtinTypes = {
@@ -157,7 +157,23 @@ class Features {
     }
     final g = index.globals[index.keyIn(path, name)] ?? index.globals[name];
     if (g != null && g.kind != SymKind.method) return g;
-    return null;
+    // A function with more than one version: the first
+    final versions = index.overloadsOf(index.keyIn(path, name));
+    return versions.isEmpty ? null : versions.first;
+  }
+
+  /// [describe] for [s] and, for an overloaded function, its other versions.
+  String _describeAll(Sym s) {
+    final versions = index.versionsOf(s);
+    if (versions.length < 2) return describe(s);
+    final buf = StringBuffer();
+    for (final v in versions) {
+      buf.write(_code(_signature(v)));
+    }
+    buf.write('${versions.length} versions.\n');
+    final doc = versions.map((v) => v.doc).whereType<String>().firstOrNull;
+    if (doc != null) buf.write('\n$doc\n');
+    return buf.toString();
   }
 
   /// The package [name] stands for in this file, unless a local hides it.
@@ -269,20 +285,22 @@ class Features {
         return b == null ? null : _code('.$word') + b;
       }
       if (base.isTypeName) {
+        final st = index.staticsOf(base.type)[word];
+        if (st != null) return _describeAll(st.first);
         final m = index.methodsOf(base.type)[word];
-        if (m != null) return describe(m);
+        if (m != null) return _describeAll(m);
         final b = _builtinMembers[word];
         return b == null ? null : _code('${base.type}.$word') + b;
       }
       final f = base.isArray ? null : index.fieldOf(base.type, word);
       if (f != null) return describe(f);
-      final m = base.isArray ? null : index.methodsOf(base.type)[word];
-      if (m != null) return describe(m);
+      final m = base.isArray && base.type != 'string' ? null : index.methodsOf(base.type)[word];
+      if (m != null) return _describeAll(m);
       final b = _builtinMembers[word];
       return b == null ? null : _code('.$word') + b;
     }
     final s = lookup(word, pos);
-    if (s != null) return describe(s);
+    if (s != null) return _describeAll(s);
     final imported = _importAt(word, pos);
     if (imported != null) {
       return '${_code('import "${imported.path}"')}Package `${imported.name}`.\n';
@@ -503,8 +521,10 @@ class Features {
       final base = resolveChain(chain, pos);
       if (base != null) {
         s = base.isTypeName
-            ? index.methodsOf(base.type)[word]
-            : (index.fieldOf(base.type, word) ?? index.methodsOf(base.type)[word]);
+            ? (index.staticsOf(base.type)[word]?.first ?? index.methodsOf(base.type)[word])
+            : base.type == 'string'
+                ? index.methodsOf('string')[word]
+                : (index.fieldOf(base.type, word) ?? index.methodsOf(base.type)[word]);
       }
     }
     return s?.at?.toLocationJson();
@@ -559,6 +579,18 @@ class Features {
       final base = resolveChain(chain, pos);
       if (base == null) return const [];
       if (base.isTypeName) {
+        for (final e in index.staticsOf(base.type).entries) {
+          final v = e.value.first;
+          add(
+              e.key,
+              v.kind == SymKind.constant ? _ciConstant : _ciFunction,
+              v.kind == SymKind.constant
+                  ? 'const ${v.type} = ${_value(v.key)}'
+                  : e.value.length > 1
+                      ? '${e.value.length} versions'
+                      : _signature(v),
+              v.doc);
+        }
         for (final m in index.methodsOf(base.type).values) {
           add(m.name, _ciMethod, _signature(m), m.doc);
         }
@@ -571,6 +603,12 @@ class Features {
       if (base.isArray || base.type == 'string') {
         for (final m in ['len', 'capacity']) {
           add(m, _ciProperty, 'u32', _builtinMembers[m]);
+        }
+        // A string's methods (lib/string.act)
+        if (base.type == 'string') {
+          for (final m in index.methodsOf('string').values) {
+            add(m.name, _ciMethod, _signature(m), m.doc);
+          }
         }
         if (base.isHeapRef || base.type == 'string') {
           add('exists', _ciMethod, 'exists()', _builtinMembers['exists']);
@@ -620,8 +658,17 @@ class Features {
     // Names of other packages are reached through their import names
     final own = index.packageOf(path);
     final mine = own == null ? null : '${own.prefix}$packageMark';
+    final shown = <String>{};
     for (final s in index.globals.values) {
       if (s.key.contains(packageMark) && (mine == null || !s.key.startsWith(mine))) continue;
+      // A type's constants and static functions are reached through it
+      final base = withoutOverload(s.key);
+      if ((s.kind == SymKind.constant || s.kind == SymKind.function || s.kind == SymKind.prototype) &&
+          baseName(base).contains('.')) {
+        continue;
+      }
+      // One entry for all the versions of an overloaded function
+      if (!shown.add('${s.kind}:$base')) continue;
       _addGlobal(s, add);
     }
     for (final e in (index.program.fileImports[path] ?? const <String, PackageInfo>{}).entries) {

@@ -7,16 +7,17 @@ part of '../compiler.dart';
 // A task is declared `task name(State t, ...) { ... }`. It returns its status
 // (a u16) and is the only kind of function that may pause, with `yield(t)`,
 // `waitUntil(t, cond)` and `pkExit(t)`. These are declared as prototypes in
-// lib/protokernel.act and look like ordinary calls, but the compiler generates
+// the protokernel package (lib/protokernel/) and look like ordinary calls
+// (`protokernel.yield(t)`), but the compiler generates
 // them in place: they store into the task's continuation counter `t.lc` and
 // return from the task, and a task's entry dispatches on `t.lc` to the point
 // it left from (see genFunc). The compiler numbers those resume points 1, 2,
 // ... in source order.
 //
 // A call is generated this way only when the program declares the name as a
-// prototype (a declaration without a body), which importing
-// lib/protokernel.act does. Without it the name is an ordinary function.
-// Status values are taken from the PK_* constants of protokernel.act.
+// prototype (a declaration without a body), which importing the
+// protokernel package does. Without it the name is an ordinary function.
+// Status values are taken from the PK_* constants of protokernel.
 //
 // A paused task has no stack frame, so its locals do not survive a pause:
 // reading a local after a pause, when it was set before the pause and not
@@ -110,13 +111,13 @@ extension _Coroutines on Checker {
 
   /// The value of protokernel status constant [name].
   int _pkStatus(String name) {
-    // lib/protokernel.act may have been imported into a package (its names
-    // then carry the package's prefix)
+    // The protokernel package's names carry its prefix
     final v = constants[name] ??
         constants.entries.where((e) => baseName(e.key) == name).firstOrNull?.value;
     if (v == null) {
       throw CompileError(
-          "coroutine status '$name' is not defined; import \"lib/protokernel.act\"");
+          "coroutine status '$name' is not defined; import the package "
+          '\"github.com/jockm/Particle/lib/protokernel\"');
     }
     return v;
   }

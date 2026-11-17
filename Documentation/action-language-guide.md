@@ -295,6 +295,23 @@ A lambda uses its parameters, its own locals, the globals, and the constants of 
 
 A function whose result type is not `void` must end with a `return` on every path; running off the end is a compile error. A call gives exactly as many arguments as the function has parameters, and the call of a `void` function has no value to use.
 
+**Overloading:** several functions may have the same name when their parameter types differ. A call uses the one that fits its arguments:
+
+```c
+u32 twice(u32 x) { return x * 2; }
+u32 twice(u8 x)  { return x * 3; }
+s32 twice(s32 x) { return x * 4; }
+
+void main() {
+    u8 small = 4;
+    u32 a = twice(small);   // twice(u8)
+    s32 b = twice(10);      // 10 fits every version: a constant counts as s32
+    u32 c = twice(u32(10)); // a conversion says which
+}
+```
+
+See [3.7](#37-functions) for how the version is chosen.
+
 ## 1.5 Arrays and strings
 
 Fixed-size arrays can have one or more dimensions:
@@ -374,7 +391,7 @@ void main() {
 
 The literal must fit in the capacity, and the compiler checks this. Writes to a string are bounds-checked so that the final byte stays free for the null terminator.
 
-Strings are not compared with `==`: `lib/string.act` provides `stringCopy`, `stringConcat`, `stringCompare`, `stringEquals` and `stringFind`. Bring it in with `import "lib/string.act";`. Each can also be called as a method of its first string: `s.find('c')` calls `stringFind(s, 'c')`, and in general `s.name(...)` calls `stringName(s, ...)`.
+Strings are not compared with `==`. `lib/string.act` gives the `string` type its methods: `s.copy(src)`, `s.concat(src)`, `s.compare(other)`, `s.equals(other)` and `s.find(ch)`. The comparisons are also static functions of `string`: `string.compare(a, b)` and `string.equals(a, b)`. Bring it in with `import "lib/string.act";` (a program made of packages has it already, see [2.12](#212-packages)).
 
 ## 1.6 User-defined types and methods
 
@@ -413,6 +430,26 @@ void main() {
 ```
 
 Values of user-defined types are **passed by reference automatically**. A function that receives a `Point` sees, and can change, the caller's `Point`.
+
+A type can also hold **constants** and **static functions**, which belong to the type rather than to a value of it. A constant is written in the type's body and used as `Type.NAME`; a static function is declared with `static`, has no `this`, and is called on the type:
+
+```c
+type Temperature {
+    s32 celsius;
+    const s32 FREEZING = 0;
+    const s32 BOILING = 100;
+};
+
+static s32 Temperature.toFahrenheit(s32 c) {
+    return c * 9 / 5 + 32;
+}
+
+void main() {
+    s32 f = Temperature.toFahrenheit(Temperature.BOILING);   // 212
+}
+```
+
+The standard library's `Integer` type works this way: `Integer.MAX_U8`, `Integer.min(a, b)` (see [2.5](#25-the-runtime-support-files)).
 
 A variable of a user-defined type is either **stored in place** or a **reference**:
 
@@ -719,12 +756,14 @@ void process(u32 data[]) {
 
 ## 1.11 Cooperative tasks
 
-A **task** is a function that can pause and later resume where it left off, so several tasks can share one core without threads: a loop calls each in turn, and each runs until it pauses. Tasks are declared with `task`. They pause with `yield` or `waitUntil`, or start over with `pkExit`. These operations come from `lib/protokernel.act`, which you import.
+A **task** is a function that can pause and later resume where it left off, so several tasks can share one core without threads: a loop calls each in turn, and each runs until it pauses. Tasks are declared with `task`. They pause with `yield` or `waitUntil`, or start over with `pkExit`. These operations come from the `protokernel` package (`lib/protokernel/`), which a program made of packages imports (see [2.12](#212-packages)).
 
-A task's first parameter is its **state**: an instance of a type whose first field is a `u16`, where the task keeps its place. `protokernel.act` provides `type pt { u16 lc; }`, or you can declare your own with a `u16` first:
+A task's first parameter is its **state**: an instance of a type whose first field is a `u16`, where the task keeps its place. `protokernel` provides the type `pt` (`u16 lc;`), or you can declare your own with a `u16` first:
 
 ```c
-import "lib/protokernel.act";
+package main;
+
+import "github.com/jockm/Particle/lib/protokernel";
 
 type Blinker {
     u16 lc;          // where the task resumes: must be the first field
@@ -736,12 +775,12 @@ u32 LED @ 0x40002000;
 task blink(Blinker t) {
     while (1) {
         LED = 1;
-        yield(t);                          // pause; resume here next call
+        protokernel.yield(t);                          // pause; resume here next call
         LED = 0;
-        waitUntil(t, readFifo(0) == 1);   // pause until a condition holds
+        protokernel.waitUntil(t, readFifo(0) == 1);   // pause until a condition holds
         t.toggles += 1;
         if (t.toggles == 100) {
-            pkExit(t);                    // stop; the next call starts from the top
+            protokernel.pkExit(t);                    // stop; the next call starts from the top
         }
     }
 }
@@ -755,7 +794,7 @@ void main() {
 }
 ```
 
-Each call runs the task until its next pause and returns a `u16` status, which `protokernel.act` names:
+Each call runs the task until its next pause and returns a `u16` status, which `protokernel` names (`protokernel.PK_YIELDED` and so on):
 
 | Status | Constant | Meaning |
 |--------|----------|---------|
@@ -772,7 +811,7 @@ type Counter { u16 lc; u32 i; }
 task count(Counter c) {
     c.i = 0;
     while (c.i < 10) {
-        yield(c);
+        protokernel.yield(c);
         c.i += 1;
     }
 }
@@ -830,7 +869,7 @@ The usual file extension is `.act`.
 
 ### pbuild
 
-To make life easier there is the `pbuild` uility.  It compiles, lints, assembles, and can even optionally simulate in one step.  Additionally it makes sure the compiled/assembled output is placed in the `build/` directory
+To make life easier there is the `pbuild` utility.  It compiles, lints, assembles, and can even optionally simulate in one step.  Additionally it makes sure the compiled/assembled output is placed in the `build/` directory
 
 Examples:
 
@@ -860,8 +899,9 @@ project/
 ├── lib/
 │   ├── common.inc      (assembler support, see 2.5)
 │   ├── alloc.asm       (heap allocator, see 2.5)
-│   ├── protokernel.act (task support)
-│   ├── string.act      (string functions)
+│   ├── protokernel/    (task support: a package)
+│   ├── string.act      (string methods)
+│   ├── integer.act     (Integer: limits and functions)
 │   └── uart.act        (your shared Action module)
 ├── main.act
 └── drivers.act
@@ -922,7 +962,7 @@ The generated assembly is organized as follows:
    Every vector is emitted, so no trap can land in the middle of code.
 
    The **startup code**, `_start`, follows the table. It sets the stack pointer (R15) to `--stack-top` (default `0x00010000`), stores the starting values of the `fast` globals, and jumps to `_main`.
-3. One block per function, with label `_name`. Methods use the label `_Type.method`, and lambdas `_outer.name` (such as `_main.pow`).
+3. One block per function, with label `_name`. Methods and static functions use the label `_Type.method`, and lambdas `_outer.name` (such as `_main.pow`). A function with more than one version (see [3.7](#37-functions)) adds `..` and its parameter types: `_Integer.min..u8.u8`, `_twice..u32`, and `..void` for a version without parameters.
 4. **Global variable section**: one label `_name` per global, each a whole number of words. `fast` globals are not here: they are in the zero page and have no label (see [3.4](#34-declarations)).
 5. **String literal table**: `.asciz` entries.
 6. `.include "lib/alloc.asm"` for the heap runtime.
@@ -950,8 +990,9 @@ Heap arrays and strings store a 4-byte header (element count or capacity) **imme
 
 These Action modules are also in `lib/`:
 
-- **`lib/protokernel.act`**: the task operations and status constants (see [3.11](#311-tasks)).
-- **`lib/string.act`**: `stringCopy(dst[], src)`, `stringConcat(dst[], src)`, `stringCompare(a, b)`, `stringEquals(a, b)` and `stringFind(s, ch)`.
+- **`lib/protokernel/`**: the `protokernel` package, with the task operations and status constants (see [3.11](#311-tasks)).
+- **`lib/string.act`**: the methods of `string`: `s.copy(src)` and `s.concat(src)` (which respect `s`'s capacity), `s.compare(other)`, `s.equals(other)` and `s.find(ch)`; and the static functions `string.compare(a, b)` and `string.equals(a, b)`.
+- **`lib/integer.act`**: the type `Integer`, with the smallest and largest value of each integer type as constants (`Integer.MIN_U8`, `Integer.MAX_U8`, `Integer.MIN_S8` … `Integer.MAX_S32`), and static functions: `Integer.min(a, b)` and `Integer.max(a, b)` for each integer type, and `Integer.abs(v)`, `Integer.sign(v)` (−1, 0 or 1) and `Integer.neg(v)` for each signed type. `abs` returns the unsigned type of the same size, so `Integer.abs(Integer.MIN_S8)` is 128; `neg` wraps, so the negation of the smallest value is itself.
 
 ## 2.6 Calling convention and inline assembly
 
@@ -971,7 +1012,7 @@ You need this when you write `asm(...)` blocks or link to hand-written assembly.
 - Scalars are passed by value. Instances of user-defined types are passed by **address**. An open array takes **two** slots: data address, then length. A method's receiver (`this`) takes the first slot.
 - **Slots 1–4** go in R1–R4. **Slots 5 and up** go on the stack: before evaluating the arguments, the caller reserves 4 bytes per extra slot below its stack pointer, with slot 5 at the lowest address, and releases the area after the call. The callee finds slot 5 just above its saved return address.
 - **R5–R10 are preserved across calls**, because compiled code never uses them. Inline assembly and assembly routines must preserve them too. Assume R1–R4 and R11–R14 are clobbered.
-- Labels: functions and globals are `_name`. Methods are `_Type.method` and lambdas `_outer.name`. A name in Action cannot contain `.`, so these never collide with a function's own name: a function may be called `Point_move` alongside the method `Point.move`.
+- Labels: functions and globals are `_name`. Methods and static functions are `_Type.method` and lambdas `_outer.name`. A name in Action cannot contain `.`, so these never collide with a function's own name: a function may be called `Point_move` alongside the method `Point.move`. The versions of an overloaded function add `..` and their parameter types (`_twice..u8`).
 - **Trap handlers** are jumped to from their vector after `FAST_ENTER_TRAP` swaps R1–R14 with the shadow registers, so the interrupted code's registers are untouched. A handler keeps no return address of its own: it ends with `FAST_EXIT_TRAP`, which swaps the registers back and returns to the interrupted code.
 
 Inline assembly is copied verbatim into the output, one instruction per line:
@@ -1040,7 +1081,12 @@ Every error is printed as `action: error: …`. A message about the program star
 | `'…' still owns its value; destroy it, or move it …, before unset()` | `unset()` would lose the only reference to a value. |
 | `'…': a reference cannot be 0; declare one that starts empty as 'ref T …;'` | There is no null; `ref T name;` declares an empty reference, and `T name[];` an empty heap array. `… is a reference, so it cannot be given 0; empty it with ….unset()` is the same for an assignment, and `the result of '…' is a reference, so it cannot be 0` for a `return`. |
 | `references are compared with a.sameAs(b), not '=='` | `==` or `!=` on two references. `a reference is not compared with 0; use r.exists()` for a comparison with 0. |
-| `strings cannot be compared with '=='; use stringEquals(a, b) or stringCompare(a, b)` | Strings are compared with the functions of `lib/string.act`. |
+| `strings cannot be compared with '=='; use a.equals(b) or a.compare(b) …` | Strings are compared with the methods of `lib/string.act`. |
+| `no version of '…' takes (…); the versions are …` | No version of an overloaded function fits the arguments (see [3.7](#37-functions)). |
+| `the call of '…' with (…) could be … or …; convert an argument …` | More than one version fits equally well. Convert an argument, as in `u8(x)`. |
+| `'…' has more than one version; give it to a variable, parameter or result of a function type …` | An overloaded function used as a value where no function type says which version. |
+| `'…' is a method: call it on a value …` / `'…' is a static function of '…': call it as T.name(...)` | A method was called on its type, or a static function on a value. |
+| `'…' of '…' is not pub: only its own package can use it` | A field, method, static function or constant of another package's type that is not `pub` (see [2.12](#212-packages)). |
 | `arrays cannot be compared with '=='` / `values of user-defined types cannot be compared` | Compare the elements or fields. |
 | `arrays cannot be assigned; '…' is an array, so copy its elements` | A fixed array was assigned to. |
 | `'…' takes N arguments, not M` | A call with the wrong number of arguments. |
@@ -1334,7 +1380,7 @@ void main() {
 
 A package import gives a folder, not a file, and makes its package's `pub` declarations available as `name.declaration`. The name is the one in the package's `package` line, or the name after `as`. Every use of an imported name has that form: an import name cannot be used on its own, and two imports of a file cannot have the same name. An import name cannot be a built-in name or a name declared in the same package, and a local variable cannot hide it. An import that is never used is a warning.
 
-`lib/string.act` is the **prelude** of a program with packages: it is loaded first, and its functions and methods can be used everywhere without an import.
+`lib/string.act` and `lib/integer.act` are the **prelude** of a program with packages: they are loaded first, and the string methods and `Integer` can be used everywhere without an import. Their functions are part of every such program, used or not.
 
 ### Writing a package
 
@@ -1343,8 +1389,8 @@ A package import gives a folder, not a file, and makes its package's `pub` decla
 package geometry;
 
 pub type Point {
-    u32 x;
-    u32 y;
+    pub u32 x;
+    pub u32 y;
 };
 
 pub const u32 UNIT = 1;
@@ -1363,11 +1409,12 @@ pub void init(Point p, u32 x, u32 y) {
 
 - The `package` line comes first in each file, and every `.act` file in the folder must give the same name. The name is letters and digits, starting with a letter. By convention it is the folder's name; the editor warns when it is not. Folder names in an import path follow the same rule.
 - The files of a package see each other's declarations, private ones too, without a prefix.
-- `pub` goes in front of a function (including an `asm` or `extern` prototype), a type, a type alias, a function type, a constant, an enum or a global. A `pub` enum makes its members visible; every field and method of a `pub` type is visible. `pub` cannot be put on `main` or on a trap handler, and only on top-level declarations.
+- `pub` goes in front of a function (including an `asm` or `extern` prototype), a type, a type alias, a function type, a constant, an enum or a global. A `pub` enum makes its members visible. `pub` cannot be put on `main` or on a trap handler, and only on declarations outside functions.
+- The members of a type are visible outside its package only when they are `pub` too: a field (`pub u32 x;`), a method (`pub void Point.move(...)`), a static function (`pub static ...`) and a constant of the type (`pub const ...`). Giving a field a value by name, in `{...}` or `create(...)`, counts as using it.
 - A `pub` declaration cannot use a private type of its package, in its parameters, its result, its fields or its type: an importer could not name it.
 - A **method** must be declared in its type's own package.
 - A package cannot declare `main`, and packages cannot import each other in a cycle.
-- `import "file.act";` still works inside a package: the file **joins the importing package**, and its declarations are private to it. For example, a package that imports `lib/protokernel.act` can declare tasks, but its `pt` type is the package's own and not `pub`, so a `pub` function cannot take a `pt`. A file that starts with a `package` line cannot be imported as a file.
+- `import "file.act";` still works inside a package: the file **joins the importing package**, and its declarations are private to it. For example, a type declared in such a file is the package's own and not `pub`, so a `pub` function cannot take one. A file that starts with a `package` line cannot be imported as a file.
 - `-D NAME=VALUE` sets a constant called `NAME` in any package.
 
 ### Names in the output
@@ -1480,7 +1527,7 @@ Any other character, including `#`, is an error.
 ## 3.2 Modules and imports
 
 ```c
-import "lib/protokernel.act";
+import "lib/string.act";
 ```
 
 `import` loads another Action file and merges its declarations into the program. The trailing `;` is optional. The file is searched for in these places, in order:
@@ -1750,7 +1797,7 @@ The operands of arithmetic, bitwise and comparison operators are numbers. Using 
 
 Only numbers are compared:
 
-- **Strings:** `==` and the other comparisons are errors; use `stringEquals(a, b)` or `stringCompare(a, b)` from `lib/string.act`.
+- **Strings:** `==` and the other comparisons are errors; use `a.equals(b)` or `a.compare(b)` (or `string.equals(a, b)`, `string.compare(a, b)`) from `lib/string.act`.
 - **Arrays** and **values of user-defined types** are not compared: compare their elements or fields.
 - **References:** `a.sameAs(b)` is 1 when both refer to the same value (or both are empty). Both must be references of the same type: record references, heap arrays or heap strings. `==` and `!=` on references are errors, and so is comparing one with `0`: use `r.exists()`.
 
@@ -1780,7 +1827,7 @@ A whole array is not assigned: `b = a` for fixed arrays is an error (copy the el
 | `.capacity` | heap array or heap string | value from the header |
 | `.capacity` | open array parameter | length passed by the caller |
 
-The heap operations `.create()`, `.createArray()`, `.destroy()`, `.destroyArray()`, `.resize()`, `.exists()`, `.unset()` and `.sameAs()` are described in [3.10](#310-heap-allocation-and-ownership), and `.copyFrom()` in [3.8](#38-user-defined-types). A method call on a string, `s.name(...)`, calls the function `stringName(s, ...)` (such as `stringFind` from `lib/string.act`).
+The heap operations `.create()`, `.createArray()`, `.destroy()`, `.destroyArray()`, `.resize()`, `.exists()`, `.unset()` and `.sameAs()` are described in [3.10](#310-heap-allocation-and-ownership), and `.copyFrom()` in [3.8](#38-user-defined-types). A method call on a string, `s.name(...)`, calls the method `name` of `string` (such as `find`, from `lib/string.act`). `Type.NAME` is a constant of a type, and `Type.name(args)` calls a static function of it (see [3.8](#38-user-defined-types)).
 
 ### `sizeof`
 
@@ -1823,7 +1870,7 @@ A call gives exactly one argument per parameter (a C function with `...` takes m
 | Return | `return;`, `return expr;` or `return (e1, e2, …);` |
 | Tuple assign | `(targets) = call;` |
 | Assembly | `asm("text");` |
-| Task operation | `yield(t);`, `waitUntil(t, cond);`, `pkExit(t);`, only in a task (see [3.11](#311-tasks)) |
+| Task operation | `protokernel.yield(t);`, `protokernel.waitUntil(t, cond);`, `protokernel.pkExit(t);`, only in a task (see [3.11](#311-tasks)) |
 | Assertion | `verify(const-expr, "msg");` |
 
 **Conditions** are integers or `bool`s, and are true when non-zero (see [3.5](#35-expressions-and-operators)).
@@ -1851,6 +1898,8 @@ T[] name(params) { body }                      // returns a heap array (string[]
 ref T[] name(params) { body }                  // returns a heap array of references
 inline ReturnType name(params) { body }
 ReturnType TypeName.method(params) { body }    // method, see 3.8
+static ReturnType TypeName.name(params) { body }  // static function, see 3.8
+ReturnType string.method(params) { body }      // method of string
 trap(N) name() { body }                        // trap handler, see 3.12
 ```
 
@@ -1894,6 +1943,15 @@ A lambda is a function value, written where one is expected: given to a variable
 **Inline functions** are expanded at each call site, and may be declared before or after their callers. They have no address. An inline function that calls itself, directly or through other inline functions, is an error. They may declare locals, which live in their own frame for the duration of the expansion. The arguments are evaluated in the caller's scope; the body then has a scope of its own: the globals, its parameters, and its own locals and constants. Using a variable or constant of the function it is expanded into is an error; pass it as a parameter instead.
 
 **Prototypes:** a function must be declared before the program can call it: by its definition (anywhere in the program) or by a prototype. Calling an undeclared name is an error. Every prototype must be matched by a definition in the Action sources, which may come later or in another file. A routine written in assembly is declared with `asm` in front of its prototype instead; it must not also be defined in Action. Its label is `_name`, and it follows the calling convention in [2.6](#26-calling-convention-and-inline-assembly).
+
+**Overloading:** functions, methods and static functions may share a name when their parameter types differ; each is a **version** of the name. Versions cannot differ only in their result type, and `asm` and `extern` prototypes, `main`, trap handlers and tasks cannot be overloaded. A call chooses its version this way:
+
+1. The versions that take every argument, with the conversions allowed anywhere, are kept.
+2. If one of them matches every argument's type exactly, it is used. An integer constant matches exactly any integer type it fits.
+3. When several match exactly, an integer constant counts as `s32` (or `u32`, when it is larger than `s32` can hold) to choose between them. So with versions for `u8`, `u32` and `s32`, `twice(10)` uses `twice(s32)`; with only `u8` and `u32`, it is ambiguous.
+4. Otherwise exactly one version must take the arguments. Anything else is an error that lists the versions; convert an argument (`u8(x)`) to say which.
+
+An overloaded function used as a value is given to a variable, parameter or result of a function type, whose type picks the version: `fn(u8) -> u32 f = twice;`. Anywhere else it is an error. Each version has a label of its own (see [2.4](#24-understanding-the-output)); a name with one version keeps its plain label.
 
 **`main`** is special. The startup code sets up the stack (at `--stack-top`) and jumps to it, and when it returns the processor enters a halt loop. `main` may be declared `void` or `u32`. It takes no parameters, or the command line as `ref string args[]`:
 
@@ -1942,7 +2000,13 @@ type Name {
 
 **Methods:** `ReturnType TypeName.method(params)` defines a function with an implicit first parameter `this` of type `TypeName`, passed by reference. Call it as `obj.method(args)`.
 
-**Method references:** `TypeName.method` (on the type name, not on an instance) evaluates to the method's address. Its signature is `fn(TypeName, params...) -> ReturnType`. Writing `instance.method` without calling it is an error.
+**Methods of `string`:** `ReturnType string.name(params)` declares a method of the built-in `string` type (as `lib/string.act` does). Its `this` is the string as an open string, so `this.capacity` is the capacity of the string it is called on: a fixed string's size, a heap string's capacity, or, for a string whose capacity is not known there (a `string` parameter, a literal), its length plus the terminator.
+
+**Constants of a type:** `const T NAME = value;` in a type's body declares a constant of the type, used as `TypeName.NAME` anywhere a constant can be (array sizes, `case` labels, other constants). It holds one value, uses no storage, and is not a field.
+
+**Static functions:** `static ReturnType TypeName.name(params) { body }` declares a function of the type that has no `this`. It is called on the type, `TypeName.name(args)`; calling it on a value is an error, and so is calling a method on the type.
+
+**Method references:** `TypeName.method` (on the type name, not on an instance) evaluates to the method's address. Its signature is `fn(TypeName, params...) -> ReturnType`; a static function's is `fn(params...) -> ReturnType`. Writing `instance.method` without calling it is an error.
 
 **Stored in place, or a reference:** a variable of a user-defined type is a **reference** if it is declared `ref T name;` (which starts empty), or if anywhere in its function it is given `T.create()`, another reference, or the result of a function that returns that type. Parameters of user-defined types are always references. Every other such variable is **stored in place**: on the stack for a local, in the data section for a global. Assignment never copies a value, so:
 
@@ -1985,7 +2049,7 @@ Open array parameters of 2 or 3 dimensions (`T m[][]`) are described in [3.7](#3
 - Indexing gives single bytes. Writes are bounds-checked against N−1.
 - For a `string s[]` open-array parameter, `.capacity` is the string's capacity, passed by the caller: a fixed string's size, a heap string's capacity, or the capacity of a row of an array of strings. A `string s` parameter passed on to one gives its length, since its capacity is not known there. `.len` still scans for the terminator. A string passed to a `u8 b[]` parameter gives its length: `b.len` is the number of characters.
 - A string literal used in an expression evaluates to the address of a read-only copy in the string table. You can pass it to a `string s` or `string s[]` parameter that the function does not write through (writing through one is found at compile time, see [3.7](#37-functions)). Passed to a `string s[]` parameter, its `.len` works but its `.capacity` is 0.
-- Strings are not compared with `==`: use `stringEquals` or `stringCompare` from `lib/string.act`.
+- Strings are not compared with `==`: use `a.equals(b)` or `a.compare(b)` from `lib/string.act`.
 - `string g[N] = "text";` at the top level starts with the text; `const string NAME = "text";` is a string constant (see [3.4](#34-declarations)).
 
 **Arrays of strings:** `string names[3][8]` is 3 strings, each a buffer of 8 bytes. `names.len` is 3. `names[i]` is one string: `names[i].len` scans it, `names[i].capacity` is 8, `names[i][j]` is a character, `names[i] = "abc"` copies into it, and it can be passed to a `string s` or `string s[]` parameter. `string names[3][8] = {"ann", "bob"};` gives the strings their values, and `string names[][]` is an open-array parameter that takes the whole array.
@@ -2101,12 +2165,12 @@ Nothing frees memory automatically.
 ```
 task name(State t, other parameters...) { body }
 
-yield(t);
-waitUntil(t, condition);
-pkExit(t);
+protokernel.yield(t);
+protokernel.waitUntil(t, condition);
+protokernel.pkExit(t);
 ```
 
-A task is a function that can pause and resume. `lib/protokernel.act` declares the three operations as prototypes, together with the status constants `PK_WAITING` (0), `PK_YIELDED` (1), `PK_EXITED` (2) and `PK_ENDED` (3), the state type `pt` (`u16 lc;`) and the inline initializer `pkInit(p)`.
+A task is a function that can pause and resume. The `protokernel` package (`lib/protokernel/`, imported as `github.com/jockm/Particle/lib/protokernel`) declares the three operations as prototypes, together with the status constants `PK_WAITING` (0), `PK_YIELDED` (1), `PK_EXITED` (2) and `PK_ENDED` (3), the state type `pt` (`u16 lc;`) and the inline initializer `pkInit(p)`. A program uses them through the package's name: `protokernel.yield(t)`, `protokernel.PK_YIELDED`, `protokernel.pt` (or the name it imports the package as).
 
 **Declaring a task:**
 - The first parameter is the task's **state**: an instance of a type whose **first field is `u16`**. The resume point is kept there. More parameters are allowed; they are passed afresh on every call.
@@ -2207,9 +2271,9 @@ Constant expressions are computed **exactly**, with no limit on size: `-1 < 0` i
 
 ## 3.14 Keywords
 
-**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `extern` `f32` `f64` `false` `fast` `fn` `for` `if` `import` `inline` `package` `pub` `ref` `return` `s8` `s16` `s32` `s64` `sizeof` `string` `switch` `true` `type` `u8` `u16` `u32` `u64` `verify` `void` `volatile` `while`
+**In use:** `asm` `bool` `break` `case` `const` `continue` `default` `else` `enum` `extern` `f32` `f64` `false` `fast` `fn` `for` `if` `import` `inline` `package` `pub` `ref` `return` `s8` `s16` `s32` `s64` `sizeof` `static` `string` `switch` `true` `type` `u8` `u16` `u32` `u64` `verify` `void` `volatile` `while`
 
-**Built-in names** (identifiers with special meaning): `this`, `trap`, `readFifo`, `writeFifo`, `tryReadFifo`, `peek8`, `peek16`, `peek32`, `poke8`, `poke16`, `poke32`, `callAddr`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `unset`, `sameAs`, `copyFrom`, `len`, `capacity`. `task` starts a task declaration when it is followed by a name and `(`. `as` names an import only after a package import's path. `yield`, `waitUntil` and `pkExit` are task operations when `lib/protokernel.act` is imported.
+**Built-in names** (identifiers with special meaning): `this`, `trap`, `readFifo`, `writeFifo`, `tryReadFifo`, `peek8`, `peek16`, `peek32`, `poke8`, `poke16`, `poke32`, `callAddr`, and the methods `create`, `createArray`, `destroy`, `destroyArray`, `resize`, `exists`, `unset`, `sameAs`, `copyFrom`, `len`, `capacity`. `task` starts a task declaration when it is followed by a name and `(`. `as` names an import only after a package import's path. `yield`, `waitUntil` and `pkExit` are task operations when they come from the `protokernel` package.
 
 ## 3.15 Known limitations and pitfalls
 

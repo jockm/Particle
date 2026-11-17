@@ -27,7 +27,7 @@ const List<(String, String)> tokenTypes = [
   ('STRING', r'"(?:\\.|[^"\\])*"'),
   ('CHAR', r"'(?:\\x[0-9a-fA-F]{2}|\\.|[^'\\])'"),
   ('KEYWORD',
-      r'\b(?:ref|true|false|bool|string|u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|import|enum|verify|volatile|sizeof|extern|fast|package|pub)\b'),
+      r'\b(?:ref|true|false|bool|string|u8|s8|u16|s16|u32|s32|u64|s64|f32|f64|void|const|if|else|while|for|return|break|continue|asm|switch|case|default|type|fn|inline|import|enum|verify|volatile|sizeof|extern|fast|package|pub|static)\b'),
   ('IDENT', r'[a-zA-Z_]\w*'),
   ('OP_ARROW', r'->'),
   ('OP_EQ', r'=='),

@@ -176,6 +176,41 @@ class ProgramIndex {
 
   /// The methods of type [typeName] (including those of embedded types),
   /// by method name.
+  /// The constants and static functions of type [typeName] (written
+  /// `Type.NAME`, `Type.name(...)`), by name; an overloaded function's
+  /// versions together.
+  Map<String, List<Sym>> staticsOf(String typeName) {
+    final out = <String, List<Sym>>{};
+    final prefix = '$typeName.';
+    for (final e in globals.entries) {
+      final k = withoutOverload(e.key);
+      if (!k.startsWith(prefix)) continue;
+      final rest = k.substring(prefix.length);
+      if (rest.contains('.') || e.value.kind == SymKind.method) continue;
+      if (const {SymKind.constant, SymKind.function, SymKind.prototype}.contains(e.value.kind)) {
+        (out[rest] ??= []).add(e.value);
+      }
+    }
+    return out;
+  }
+
+  /// Every version of [s], when it is one of an overloaded function's
+  /// (otherwise just [s]).
+  List<Sym> versionsOf(Sym s) {
+    final base = withoutOverload(s.key);
+    if (base == s.key) return [s];
+    return [
+      for (final g in globals.values)
+        if (withoutOverload(g.key) == base) g
+    ];
+  }
+
+  /// The versions of the overloaded function [name] (as written in a call).
+  List<Sym> overloadsOf(String name) => [
+        for (final e in globals.entries)
+          if (e.key != name && withoutOverload(e.key) == name) e.value
+      ];
+
   Map<String, Sym> methodsOf(String typeName) {
     final out = <String, Sym>{};
     void add(String t, Set<String> seen) {

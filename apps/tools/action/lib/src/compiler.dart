@@ -66,6 +66,7 @@ part 'checker/flow.dart';
 part 'checker/initializers.dart';
 part 'checker/readonly.dart';
 part 'checker/floats.dart';
+part 'checker/names.dart';
 part 'particle/codegen.dart';
 part 'particle/statements.dart';
 part 'particle/expressions.dart';
