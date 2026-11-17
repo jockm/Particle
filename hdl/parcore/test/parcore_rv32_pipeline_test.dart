@@ -240,9 +240,10 @@ void main() {
       int pops = 0;
       int c3Pushes = 0;
       int idleCycles = 0;
+      int totalCycles = 0;
 
-      for (int cycle = 0; cycle < 16000; cycle++) {
-        await clk.waitCycles(1);
+      final sub = clk.clk.negedge.listen((_) {
+        totalCycles++;
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) pops++;
         if (c3Push.value.isValid && c3Push.value.toInt() == 1) {
@@ -251,11 +252,12 @@ void main() {
         } else {
           idleCycles++;
         }
+      });
 
-        // 18 writeback packets * 2 words = 36 c3 pushes.
-        // Wait for all 36 writeback pushes from Core 3 plus settling cycles for Core 1 register writeback.
+      while (totalCycles < 16000) {
+        await clk.waitCycles(250);
         if (c3Pushes >= 36 && idleCycles > 300) {
-          print("Signed division test drained at cycle $cycle (pops=$pops).");
+          print("Signed division test drained at cycle $totalCycles (pops=$pops).");
           final c2Pc = signedTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = signedTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');
           print("  Core 0 PC: 0x${core0.output('memPortAAddr').value.toInt().toRadixString(16)}");
@@ -265,6 +267,9 @@ void main() {
           break;
         }
       }
+      await sub.cancel();
+      await sub.cancel();
+      await sub.cancel();
 
       await Simulator.endSimulation();
 
@@ -349,9 +354,10 @@ void main() {
       int pushes = 0;
       int pops = 0;
       int idleCycles = 0;
+      int totalCycles = 0;
 
-      for (int cycle = 0; cycle < 12000; cycle++) {
-        await clk.waitCycles(1);
+      final sub = clk.clk.negedge.listen((_) {
+        totalCycles++;
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
           pops++;
@@ -361,9 +367,12 @@ void main() {
         } else {
           idleCycles++;
         }
+      });
 
+      while (totalCycles < 12000) {
+        await clk.waitCycles(250);
         if (pushes > 0 && pops >= 38 && idleCycles > 350) {
-          print("Multiply test drained at cycle $cycle (pops=$pops).");
+          print("Multiply test drained at cycle $totalCycles (pops=$pops).");
           final c2Pc = mulTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = mulTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');
           print("  Core 0 PC: 0x${core0.output('memPortAAddr').value.toInt().toRadixString(16)}");
@@ -451,9 +460,10 @@ void main() {
       int pushes = 0;
       int pops = 0;
       int idleCycles = 0;
+      int totalCycles = 0;
 
-      for (int cycle = 0; cycle < 12000; cycle++) {
-        await clk.waitCycles(1);
+      final sub = clk.clk.negedge.listen((_) {
+        totalCycles++;
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
           pops++;
@@ -463,9 +473,12 @@ void main() {
         } else {
           idleCycles++;
         }
+      });
 
+      while (totalCycles < 12000) {
+        await clk.waitCycles(250);
         if (pushes > 0 && pops >= 20 && idleCycles > 400) {
-          print("Memory test drained at cycle $cycle (pops=$pops).");
+          print("Memory test drained at cycle $totalCycles (pops=$pops).");
           final c2Pc = memTop.subModules.firstWhere((m) => m.name == 'core2_ex').output('memPortAAddr');
           final c3Pc = memTop.subModules.firstWhere((m) => m.name == 'core3_mem').output('memPortAAddr');
           print("  Core 0 PC: 0x${core0.output('memPortAAddr').value.toInt().toRadixString(16)}");
@@ -552,9 +565,10 @@ void main() {
       int pushes = 0;
       int pops = 0;
       int idleCycles = 0;
+      int totalCycles = 0;
 
-      for (int cycle = 0; cycle < 12000; cycle++) {
-        await clk.waitCycles(1);
+      final sub = clk.clk.negedge.listen((_) {
+        totalCycles++;
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
           pops++;
@@ -564,12 +578,16 @@ void main() {
         } else {
           idleCycles++;
         }
+      });
 
+      while (totalCycles < 12000) {
+        await clk.waitCycles(250);
         if (pushes > 0 && pops >= 20 && idleCycles > 400) {
-          print("Branch test drained at cycle $cycle (pops=$pops).");
+          print("Branch test drained at cycle $totalCycles (pops=$pops).");
           break;
         }
       }
+      await sub.cancel();
 
       await Simulator.endSimulation();
 
@@ -692,9 +710,10 @@ void main() {
       int pushes = 0;
       int pops = 0;
       int idleCycles = 0;
+      int totalCycles = 0;
 
-      for (int cycle = 0; cycle < 12000; cycle++) {
-        await clk.waitCycles(1);
+      final sub = clk.clk.negedge.listen((_) {
+        totalCycles++;
         if (c0FifoPush.value.isValid && c0FifoPush.value.toInt() == 1) pushes++;
         if (c1FifoPop.value.isValid && c1FifoPop.value.toInt() == 1) {
           pops++;
@@ -703,9 +722,14 @@ void main() {
           idleCycles = 0;
         } else {
           idleCycles++;
-          if (pops >= guestInstructions.length && idleCycles > 500) break;
         }
+      });
+
+      while (totalCycles < 12000) {
+        await clk.waitCycles(250);
+        if (pops >= guestInstructions.length && idleCycles > 500) break;
       }
+      await sub.cancel();
       print('=== Section 7 Pipeline Activity ===');
       print('  Pushes (C0): $pushes, Pops (C1): $pops');
 
