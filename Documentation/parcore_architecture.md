@@ -149,8 +149,35 @@ There is no make target that builds this flash image yet. On the current Particl
 |---|---|
 | `parcore_top_test.dart` | `ParcoreTop` elaborates and generates SystemVerilog; the UART line idles while in reset; a byte sent on `uart_rx` is echoed on `uart_tx` |
 | `parcore_pipeline_trace_test.dart` | The same UART echo with the real stage firmware loaded |
-| `conductor_boot_test.dart` | The conductor and SPI controller elaborate; the conductor copies firmware from a simulated SPI flash into the core TCMs and releases reset |
-| `parcore_rv32_pipeline_test.dart` | Guest RV32 programs run on the four-stage pipeline in Verilator and leave the expected values in core 1's registers: register writes, signed division, multiply high, sub-word loads and stores, branches and jumps, CSRs |
+| `conductor_boot_test.dart` | The conductor and SPI controller elaborate; the conductor copies firmware from a simulated SPI flash into the core TCMs and releases reset (skipped for now: see below) |
+| `parcore_rv32_pipeline_test.dart` | Guest RV32 programs run on the four-stage pipeline, and core 1's registers at the end must match the RV32 reference model: register writes, signed division, multiply high, sub-word loads and stores, branches and jumps, CSRs |
+| `rv32_reference.dart` | Not a test: the RV32 reference interpreter the pipeline tests compare against (RV32I, RV32M, the Zbb instructions core 1 decodes, and the CSRs core 2 keeps) |
 | `parcore_riscv_isa_test.dart` | The official rv32ui, rv32um and rv32uzbb tests |
 
-`parcore_rv32_pipeline_test.dart` runs Verilator from a fixed path, `/Users/jock/oss-cad-suite/bin/verilator`.
+### Simulators
+
+The pipeline and ISA tests run in either simulator, chosen by `PARCORE_FAST_SIM`:
+
+| `PARCORE_FAST_SIM` | Simulator | Needs |
+|---|---|---|
+| `1` (the default for `make test-parcore` and `make test-parcore-isa`) | Verilator, on the generated SystemVerilog | Verilator: `$VERILATOR`, or `verilator` on the PATH (the OSS CAD Suite has it) |
+| `0` | The ROHD simulator, in Dart | Nothing else; slower (minutes per guest program) |
+
+```bash
+make test-parcore                       # Verilator
+make test-parcore PARCORE_FAST_SIM=0    # ROHD simulator
+make test-parcore VERILATOR=/path/to/verilator
+```
+
+Each guest program runs for exactly its test's cycle count, with no early exit, so a slow instruction can't end a run before its result is written. The Verilator model is built in `/tmp/parcore_pipeline_verilator` (`/tmp/parcore_verilator` for the ISA test) and rebuilt whenever the generated SystemVerilog or the test's C++ harness changes. In the Verilator runs, each `ParcoreTcm` in the generated SystemVerilog is replaced by a memory that loads a hex file, because `ParcoreTcm`'s own memory exists only in the Dart simulation (see `hdl_architecture.md`).
+
+`test_pipeline.sh` runs each pipeline test on its own, runs them all even when one fails, and lists the failures at the end.
+
+### Skipped tests
+
+| Test | Skipped until |
+|---|---|
+| Architectural registers, Control transfer (`parcore_rv32_pipeline_test.dart`) | Branch redirect: taken branches don't yet reach core 0, and wrong-path instructions aren't dropped |
+| Conductor boot (`conductor_boot_test.dart`) | The core implements `SEQ`, pre-decrement and post-increment, which the conductor firmware uses |
+
+Skipped tests are listed in the test output with their reason.

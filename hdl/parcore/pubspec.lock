@@ -236,10 +236,10 @@ packages:
     dependency: "direct main"
     description:
       name: rohd
-      sha256: "95f4135b27ee633ab00483cae73a6ab5802c68f15c6d24f5bb2ff67ea59d637d"
+      sha256: "95ec2d52c1b208a64199a40c3e9b588f3c12fa513bb830bd1cb32090a0a45506"
       url: "https://pub.dev"
     source: hosted
-    version: "0.5.3"
+    version: "0.6.11"
   shelf:
     dependency: transitive
     description:

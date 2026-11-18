@@ -1186,8 +1186,9 @@ _dispatch_system:
     JMP     R14, R0
 
 ._chk_csr_ops:
+    ; R6 holds the CSR's address: R14 is overwritten by every LOAD16 / JMP
     ; 0xC00: cycle
-    LD      R14, CSR_BASE+CSR_OFS_CYCLE
+    LOAD16  R6, CSR_BASE+CSR_OFS_CYCLE
     LOAD16  R7, 0xC00
     LD      R8, R12
     SUB     R8, R7
@@ -1206,7 +1207,7 @@ _dispatch_system:
 
 ._c2:
     ; 0xC80: cycleh
-    LD      R14, CSR_BASE+CSR_OFS_CYCLEH
+    LOAD16  R6, CSR_BASE+CSR_OFS_CYCLEH
     LOAD16  R7, 0xC80
     LD      R8, R12
     SUB     R8, R7
@@ -1225,7 +1226,7 @@ _dispatch_system:
 
 ._c4:
     ; 0xC02: instret
-    LD      R14, CSR_BASE+CSR_OFS_INSTRET
+    LOAD16  R6, CSR_BASE+CSR_OFS_INSTRET
     LOAD16  R7, 0xC02
     LD      R8, R12
     SUB     R8, R7
@@ -1235,7 +1236,7 @@ _dispatch_system:
 
 ._c5:
     ; 0x300: mstatus
-    LD      R14, CSR_BASE+CSR_OFS_STATUS
+    LOAD16  R6, CSR_BASE+CSR_OFS_STATUS
     LOAD16  R7, 0x300
     LD      R8, R12
     SUB     R8, R7
@@ -1245,7 +1246,7 @@ _dispatch_system:
 
 ._c6:
     ; 0x305: mtvec
-    LD      R14, CSR_BASE+CSR_OFS_MTVEC
+    LOAD16  R6, CSR_BASE+CSR_OFS_MTVEC
     LOAD16  R7, 0x305
     LD      R8, R12
     SUB     R8, R7
@@ -1255,7 +1256,7 @@ _dispatch_system:
 
 ._c7:
     ; 0x340: mscratch
-    LD      R14, CSR_BASE+CSR_OFS_MSCRATCH
+    LOAD16  R6, CSR_BASE+CSR_OFS_MSCRATCH
     LOAD16  R7, 0x340
     LD      R8, R12
     SUB     R8, R7
@@ -1265,7 +1266,7 @@ _dispatch_system:
 
 ._c8:
     ; 0x341: mepc
-    LD      R14, CSR_BASE+CSR_OFS_MEPC
+    LOAD16  R6, CSR_BASE+CSR_OFS_MEPC
     LOAD16  R7, 0x341
     LD      R8, R12
     SUB     R8, R7
@@ -1275,7 +1276,7 @@ _dispatch_system:
 
 ._c9:
     ; 0x342: mcause
-    LD      R14, CSR_BASE+CSR_OFS_MCAUSE
+    LOAD16  R6, CSR_BASE+CSR_OFS_MCAUSE
     LOAD16  R7, 0x342
     LD      R8, R12
     SUB     R8, R7
@@ -1289,7 +1290,7 @@ _dispatch_system:
     JMP     R14, R0
 
 ._read_csr_val:
-    LD32    R15, (R14)          ; R15 = Old CSR Value
+    LD32    R15, (R6)           ; R15 = Old CSR Value (R6 = CSR address)
 
     ; Compute New CSR Value in R4 based on uop in R3
     LOAD16  R7, 0x43            ; CSRRW
@@ -1301,7 +1302,7 @@ _dispatch_system:
 
 ._is_csrrw:
     LD      R4, R11
-    LOAD16  R14, ._writeback_csr
+    LOAD16  R14, ._do_st_csr    ; CSRRW always writes, even a value of 0
     JMP     R14, R0
 
 ._try_csrrs:
@@ -1325,12 +1326,13 @@ _dispatch_system:
     AND     R4, R8
 
 ._writeback_csr:
+    ; CSRRS / CSRRC with nothing to set or clear don't write
     FBRA.NZ R11, ._do_st_csr
     LOAD16  R14, ._finish_csr
     JMP     R14, R0
 
 ._do_st_csr:
-    ST32    (R14), R4
+    ST32    (R6), R4
 
 ._finish_csr:
     LOAD16  R14, _forward_to_mem

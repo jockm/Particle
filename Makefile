@@ -47,6 +47,12 @@ DOT_CLEAN_CMD = $(if $(and $(DOT_CLEAN),$(filter $@,$(or $(MAKECMDGOALS),all))),
 VSCODE_CLI   := $(shell command -v code 2>/dev/null || { p="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"; [ -x "$$p" ] && echo "$$p"; })
 PARCORE_BLD  := $(BUILD_DIR)/parcore
 
+# Parcore pipeline and ISA tests: 1 runs them in Verilator (fast), 0 in the
+# ROHD simulator (Dart only). VERILATOR is the Verilator command.
+PARCORE_FAST_SIM ?= 1
+VERILATOR        ?= verilator
+export VERILATOR
+
 # Recursive wildcard across firmware/parcore
 FIRMWARE_SRCS := $(shell find firmware/parcore -name '*.asm' 2>/dev/null)
 FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWARE_SRCS))
@@ -85,7 +91,7 @@ help:
 	@echo "  make build            - Build firmware, apps, and generate all HDL"
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"
 	@echo "  make test-particle    - Run Particle single-core ROHD tests"
-	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
+	@echo "  make test-parcore     - Run Parcore multi-core tests (Verilator; PARCORE_FAST_SIM=0 for the ROHD simulator)"
 	@echo "  make test-parcore-isa - Build and run official RISC-V ISA tests (rv32ui, rv32um, rv32uzbb)"
 	@echo "  make test-sim         - Run instruction simulator verification"
 	@echo "  make test-sim-cluster - Run the simulator's multi-core (cluster) tests"
@@ -203,7 +209,7 @@ test-parcore: setup firmware guest-tests
 	@echo "==> Running Parcore unit tests..."
 	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
-	@(cd $(PARCORE_DIR) && ./test_pipeline.sh)
+	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) bash ./test_pipeline.sh)
 
 test-parcore-isa: setup firmware
 	@if [ ! -d "third_party/riscv-tests/isa" ]; then \
@@ -214,7 +220,7 @@ test-parcore-isa: setup firmware
 	@echo "==> Building official RISC-V ISA test binaries (rv32ui, rv32um, rv32uzbb)..."
 	@bash $(PARCORE_DIR)/test/riscv_tests/build_riscv_tests.sh
 	@echo "==> Running official RISC-V ISA tests on Parcore..."
-	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=1 $(DART) test -j 1 -r compact test/parcore_riscv_isa_test.dart)
+	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) $(DART) test -j 1 -r compact test/parcore_riscv_isa_test.dart)
 	@$(DOT_CLEAN_CMD)
 
 # Run instruction-level simulation tests with $(PSIM).

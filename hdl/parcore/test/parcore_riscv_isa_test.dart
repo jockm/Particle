@@ -28,7 +28,10 @@ Future<({int x31, int gp, int a0, int cycles})> _runVerilatorSynth(
   if (!tmpDir.existsSync()) tmpDir.createSync(recursive: true);
   final binFile = File('${tmpDir.path}/obj_dir/VParcoreTop');
 
-  if (!binFile.existsSync()) {
+  // Build the Verilator model, and build it again whenever the generated
+  // SystemVerilog or the C++ harness changes (a cached model would otherwise
+  // keep simulating old hardware)
+  {
     var sv = top.generateSynth();
     final tcmRegex = RegExp(
       r'module\s+(ParcoreTcm(?:_\d+)?)\s*\([^;]*\);[\s\S]*?endmodule',
@@ -75,8 +78,9 @@ module $modName (
 endmodule
 """;
     });
-    File('${tmpDir.path}/parcore_top.sv').writeAsStringSync(sv);
-    File('${tmpDir.path}/sim_main.cpp').writeAsStringSync("""
+    final svFile = File('${tmpDir.path}/parcore_top.sv');
+    final mainFile = File('${tmpDir.path}/sim_main.cpp');
+    final simMain = """
 #include "VParcoreTop.h"
 #include "VParcoreTop___024root.h"
 #include "verilated.h"
@@ -128,26 +132,40 @@ int main(int argc, char** argv) {
     delete top;
     return 0;
 }
-""");
-    final res = Process.runSync(
-      '/Users/jock/oss-cad-suite/bin/verilator',
-      [
-        '--cc',
-        '--exe',
-        '--build',
-        '-O3',
-        '-Wno-fatal',
-        '--top-module',
-        'ParcoreTop',
-        'parcore_top.sv',
-        'sim_main.cpp',
-        '-o',
-        'VParcoreTop',
-      ],
-      workingDirectory: tmpDir.path,
-    );
-    if (res.exitCode != 0) {
-      throw Exception('Verilator build failed:\n${res.stderr}');
+""";
+    final upToDate = binFile.existsSync() &&
+        svFile.existsSync() &&
+        svFile.readAsStringSync() == sv &&
+        mainFile.existsSync() &&
+        mainFile.readAsStringSync() == simMain;
+    if (!upToDate) {
+      svFile.writeAsStringSync(sv);
+      mainFile.writeAsStringSync(simMain);
+      final objDir = Directory('${tmpDir.path}/obj_dir');
+      if (objDir.existsSync()) objDir.deleteSync(recursive: true);
+      // Verilator: \$VERILATOR, or `verilator` on the PATH
+      final verilator = Platform.environment['VERILATOR'] ?? 'verilator';
+      final res = Process.runSync(
+        verilator,
+        [
+          '--cc',
+          '--exe',
+          '--build',
+          '-O3',
+          '--public-flat-rw', // keeps the internal signals the harness reads
+          '-Wno-fatal',
+          '--top-module',
+          'ParcoreTop',
+          'parcore_top.sv',
+          'sim_main.cpp',
+          '-o',
+          'VParcoreTop',
+        ],
+        workingDirectory: tmpDir.path,
+      );
+      if (res.exitCode != 0) {
+        throw Exception('Verilator build failed:\n${res.stderr}');
+      }
     }
   }
 

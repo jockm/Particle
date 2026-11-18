@@ -23,7 +23,7 @@
 
 import 'package:rohd/rohd.dart';
 
-class ParticleBlockRamTdp extends Module with CustomSystemVerilog {
+class ParticleBlockRamTdp extends Module with SystemVerilog {
   Logic get clk => input('clk');
 
   // Port A: halfword address, 16-bit read
@@ -150,8 +150,10 @@ class ParticleBlockRamTdp extends Module with CustomSystemVerilog {
   }
 
   @override
-  String instantiationVerilog(String instanceType, String instanceName,
-      Map<String, String> inputs, Map<String, String> outputs) {
+  String instantiationVerilog(
+      String instanceType, String instanceName, Map<String, String> ports) {
+    final inputs = ports;
+    final outputs = ports;
     final p = instanceName;
     final aW = addrA.width;
     final bW = addrB.width;
