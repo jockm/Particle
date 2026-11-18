@@ -180,6 +180,22 @@ const Set<String> allValidMnemonics = {
 // Helper Routines
 // -----------------------------------------------------------------------------
 
+/// An instruction's (or directive's) first word and its operands, split as
+/// the assembler splits them: the word up to the first space, then the
+/// rest at commas, each trimmed. `LDI R5, _main + 4` has the two operands
+/// `R5` and `_main + 4`.
+(String, List<String>) splitInstruction(String text) {
+  final t = text.trim();
+  final sp = t.indexOf(RegExp(r"\s"));
+  if (sp < 0) return (t, const <String>[]);
+  final rest = t.substring(sp).trim();
+  return (t.substring(0, sp), rest.isEmpty ? const <String>[] : rest.split(",").map((o) => o.trim()).toList());
+}
+
+/// Whether [s] is a name (a label or a symbol), not a number or an
+/// expression.
+bool _isName(String s) => RegExp(r"^[A-Za-z_.][A-Za-z0-9_.]*$").hasMatch(s);
+
 /// Parses integer literals supporting hexadecimal (0x), binary (0b),
 /// and standard base-10 representations (including negative values).
 int? parseNumeric(String valStr) {
@@ -501,12 +517,14 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
         }
       }
 
-      // Check numeric bounds on .byte and .half
-      final dirTokens = cleaned.split(RegExp(r"[\s,]+")).where((t) => t.isNotEmpty).toList();
-      if (dirTokens.length > 1) {
-        final dirName = dirTokens[0].toLowerCase();
-        for (var d = 1; d < dirTokens.length; d++) {
-          final val = parseNumeric(dirTokens[d]);
+      // Check numeric bounds on .byte and .half. The values are split at
+      // commas, as the assembler splits them; an expression is not checked
+      // here (the assembler checks it)
+      final (dirWord, dirValues) = splitInstruction(cleaned);
+      if (dirValues.isNotEmpty) {
+        final dirName = dirWord.toLowerCase();
+        for (final dv in dirValues) {
+          final val = parseNumeric(dv);
           if (val != null) {
             if (dirName == ".byte" && (val < -128 || val > 255)) {
               errors.add((lno, "range", "Directive .byte value $val out of 8-bit range (-128..255)."));
@@ -528,11 +546,10 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
 
     if (cleaned.startsWith(".") && !cleaned.startsWith("._")) continue;
 
-    final tokens = cleaned.split(RegExp(r"[\s,]+")).where((t) => t.isNotEmpty).toList();
-    if (tokens.isEmpty) continue;
+    final (mnemWord, ops) = splitInstruction(cleaned);
+    if (mnemWord.isEmpty) continue;
 
-    final mnem = tokens[0].toUpperCase();
-    final ops = tokens.sublist(1);
+    final mnem = mnemWord.toUpperCase();
 
     // 1. Verify mnemonic or user macro existence
     if (!allValidMnemonics.contains(mnem) && !userMacros.contains(mnem)) {
@@ -754,11 +771,11 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     if (branchForward.contains(mnem) || branchBackward.contains(mnem)) {
       String? targetLabel;
       if (ops.length == 1) {
-        if (!validRegisters.contains(ops[0].toUpperCase()) && parseNumeric(ops[0]) == null) {
+        if (!validRegisters.contains(ops[0].toUpperCase()) && _isName(ops[0])) {
           targetLabel = ops[0];
         }
       } else if (ops.length == 2) {
-        if (!validRegisters.contains(ops[1].toUpperCase()) && parseNumeric(ops[1]) == null) {
+        if (!validRegisters.contains(ops[1].toUpperCase()) && _isName(ops[1])) {
           targetLabel = ops[1];
         }
       }
@@ -788,7 +805,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
   for (final pl in parsed) {
     if (pl.mnem != "RCALL" || pl.ops.length != 1) continue;
     final target = pl.ops[0];
-    if (validRegisters.contains(target.toUpperCase()) || parseNumeric(target) != null) continue;
+    if (validRegisters.contains(target.toUpperCase()) || !_isName(target)) continue;
     if (labels.containsKey(target) || defines.contains(target) || includedSymbols.contains(target)) {
       continue;
     }
@@ -981,8 +998,8 @@ List<ParsedLine> parseLines(List<String> lines) {
       final args = sp < 0 ? "" : text.substring(sp).trim();
       out.add(ParsedLine(i + 1, labels, name, args, null, const []));
     } else {
-      final tokens = text.split(RegExp(r"[\s,]+")).where((t) => t.isNotEmpty).toList();
-      out.add(ParsedLine(i + 1, labels, null, "", tokens[0].toUpperCase(), tokens.sublist(1)));
+      final (mnemWord, ops) = splitInstruction(text);
+      out.add(ParsedLine(i + 1, labels, null, "", mnemWord.toUpperCase(), ops));
     }
   }
   return out;

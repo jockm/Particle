@@ -322,11 +322,12 @@ llvm-tests: $(ACTION_LLVM_BIN)
 # Linter Test Suite (pasm_lint)
 # ------------------------------------------------------------------------------
 LINT_FAIL_SRCS := $(wildcard apps/asm/lint_failures/*.asm)
+LINT_PASS_SRCS := $(wildcard apps/asm/lint_passes/*.asm)
 
 test-lint: pasm-lint
 	@echo "==> Running pasm_lint test suite..."
 	@echo "  -> Validating production assembly sources (must pass)..."
-	@for f in apps/asm/*.asm; do \
+	@for f in apps/asm/*.asm $(LINT_PASS_SRCS); do \
 		$(PASM_LINT_BIN) "$$f" -I lib > /dev/null || { echo "[FAIL] Unexpected lint failure on valid file: $$f"; exit 1; }; \
 	done
 	@echo "  -> Validating negative fixture constraints (must fail)..."
