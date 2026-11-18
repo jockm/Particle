@@ -343,8 +343,10 @@ String compileLlvm(List<String> sources,
     bool debugInfo = true,
     List<CompileNote>? notes}) {
   final predefined = parseDefines(options.defines);
-  final mergedAst = loadProgram(sources, options.forTarget('llvm', options.os));
+  final llvmOptions = options.forTarget('llvm', options.os);
+  final mergedAst = loadProgram(sources, llvmOptions);
   final gen = LlvmGen(
+      os: llvmOptions.buildOs,
       boundsCheck: options.boundsCheck,
       referenceCheck: options.referenceCheck,
       debugInfo: debugInfo,

@@ -1218,7 +1218,7 @@ Paths are relative to `action.json`. A mistake in the file is shown as an error 
 
 ## 2.10 Building for your computer (LLVM)
 
-Action programs can also be built to run on the computer you work on (64-bit macOS or Linux), through LLVM. `action_llvm` compiles Action to LLVM IR (a `.ll` file), and **`llbuild`** compiles and links it with clang (LLVM 15 or later):
+Action programs can also be built to run on the computer you work on (64-bit macOS, Linux or Windows), through LLVM. `action_llvm` compiles Action to LLVM IR (a `.ll` file), and **`llbuild`** compiles and links it with clang (LLVM 15 or later):
 
 ```sh
 make llvm-tools                       # builds build/tools/action_llvm
@@ -1229,7 +1229,7 @@ make llvm-tools                       # builds build/tools/action_llvm
 
 | Option | Meaning |
 |--------|---------|
-| `-o FILE` | The program (default `build/llvm/<name>`); the `.ll` is written next to it. |
+| `-o FILE` | The program (default `build/llvm/<name>`); the `.ll` is written next to it. On Windows, `.exe` is added to a name without an extension. |
 | `-I DIR`, `-D NAME[=VALUE]` | As for the compiler. |
 | `-l LIB`, `-L DIR`, `file.c`, `file.o`, `file.a` | Linked in by clang. |
 | `-O0` … `-O3`, `-Os` | Optimization (default `-O0`). |
@@ -1238,6 +1238,8 @@ make llvm-tools                       # builds build/tools/action_llvm
 | `--emit-llvm` | Stop after the `.ll`. |
 | `--run [-- ARGS]` | Run the program; `llbuild` exits with its exit status. |
 | `CLANG=…` | Use another clang. |
+
+On Windows, run `llbuild` in the shell `pdev.cmd` opens, with the LLVM installed as in Getting Started. It needs a clang that uses Microsoft's UCRT C library, as llvm-mingw's UCRT build and the official LLVM for Windows do.
 
 The language is the same, with these differences:
 
@@ -1254,7 +1256,7 @@ The language is the same, with these differences:
 - **References are 8 bytes**, so types with references are larger: use `sizeof`, not fixed numbers.
 - **Arithmetic is the same as on Particle:** overflow wraps; dividing by zero gives all ones (the remainder: the dividend); a shift count is masked to 5 bits (6 for a 64-bit value).
 - **`trap(N)`** exits the program with status N, so `trap(0)` is success. `main` may return a `u32`, its exit status, and may take the command line as `ref string args[]` (see [3.7](#37-functions)).
-- **Run-time checks** that fail print a message and exit with 15: `action: index 5 is out of range for 'a' (length 4) at main.act:12:8`, `action: null reference in field 'next' at …` (an empty reference), or `action: out of memory at …`.
+- **Run-time checks** that fail print a message to standard error and exit with 15: `action: index 5 is out of range for 'a' (length 4) at main.act:12:8`, `action: null reference in field 'next' at …` (an empty reference), or `action: out of memory at …`.
 - **C functions** are declared with `extern`, and may take `...`:
 
   ```c
@@ -1324,26 +1326,27 @@ void main() {
 
 The rules:
 
-- A build is a target and an operating system. The targets are `particle` and `llvm`. The operating systems are `none` (Particle runs without one), and `macos` and `linux` for LLVM, which builds for the computer it runs on. So the builds are `particle` with `none`, and `llvm` with `macos` or `linux`.
+- A build is a target and an operating system. The targets are `particle` and `llvm`. The operating systems are `none` (Particle runs without one), and `macos`, `linux` and `windows` for LLVM, which builds for the computer it runs on. So the builds are `particle` with `none`, and `llvm` with `macos`, `linux` or `windows`.
 - The directive is an expression of those names with `!`, `&&`, `||` and parentheses. `!` binds tightest, then `&&`, then `||`: `//act:build llvm && (macos || linux)`, `//act:build !particle`.
 - It is written `//act:build`, with no space after `//`: `// act:build` is an ordinary comment. Only comments and blank lines may come before it, and a file has at most one.
 - A file whose directive is false for the build is **left out entirely**. It is read only as far as the directive: it is not parsed or checked, and its declarations do not exist for that build. Importing it adds nothing.
 - It is an error when every file named on the command line is left out (`no source files are built for llvm on macos`).
 - A misplaced or repeated directive, an unknown name (such as a misspelled `llmv`) and a directive that can never be true (`particle && macos`) are errors.
 
-By convention a file for one target or operating system says so in its name, after the last `_`: the target first, then the operating system, as in `console_llvm.act`, `console_particle.act`, `clock_macos.act` and `clock_llvm_linux.act`. Only the directive decides what is built; the editor warns when a file's name and its directive disagree (see [2.9](#29-editor-support)).
+By convention a file for one target or operating system says so in its name, after the last `_`: the target first, then the operating system, as in `console_llvm.act`, `console_particle.act`, `clock_macos.act`, `clock_llvm_linux.act` and `clock_windows.act`. Only the directive decides what is built; the editor warns when a file's name and its directive disagree (see [2.9](#29-editor-support)).
 
 ### Target constants
 
 `pbuild` and `llbuild` define these constants (with `-D`) for every build:
 
-| Constant | `pbuild` | `llbuild` on macOS | `llbuild` on Linux |
-|----------|----------|--------------------|--------------------|
-| `COMPILER_TARGET_PARTICLE` | 1 | 0 | 0 |
-| `COMPILER_TARGET_LLVM` | 0 | 1 | 1 |
-| `COMPILER_OS_NONE` | 1 | 0 | 0 |
-| `COMPILER_OS_MACOS` | 0 | 1 | 0 |
-| `COMPILER_OS_LINUX` | 0 | 0 | 1 |
+| Constant | `pbuild` | `llbuild` on macOS | `llbuild` on Linux | `llbuild` on Windows |
+|----------|----------|--------------------|--------------------|----------------------|
+| `COMPILER_TARGET_PARTICLE` | 1 | 0 | 0 | 0 |
+| `COMPILER_TARGET_LLVM` | 0 | 1 | 1 | 1 |
+| `COMPILER_OS_NONE` | 1 | 0 | 0 | 0 |
+| `COMPILER_OS_MACOS` | 0 | 1 | 0 | 0 |
+| `COMPILER_OS_LINUX` | 0 | 0 | 1 | 0 |
+| `COMPILER_OS_WINDOWS` | 0 | 0 | 0 | 1 |
 
 They come after any `-D` of your own, so they cannot be overridden. A constant condition decides at compile time, and the branch that is not taken is not checked, so it may use what only the other target has:
 

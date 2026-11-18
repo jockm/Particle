@@ -78,8 +78,14 @@ class LlvmGen extends Checker {
   /// Emit debug information.
   final bool debugInfo;
 
+  /// The operating system the program runs on (one of [buildOses]), or
+  /// null when it is not known. Only Windows changes the code: its C
+  /// library has no `dprintf`.
+  final String? os;
+
   LlvmGen(
-      {this.boundsCheck = true,
+      {this.os,
+      this.boundsCheck = true,
       this.referenceCheck = true,
       this.debugInfo = true,
       Map<String, int> predefinedConstants = const {}})

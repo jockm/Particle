@@ -448,8 +448,22 @@ extension _LlvmFunctions on LlvmGen {
 
   /// The helpers run-time checks call: print a message, exit with 15.
   void _genRuntime() {
-    _declare('declare i32 @dprintf(i32, ptr, ...)');
+    // Windows' C library (UCRT) has no dprintf: the messages go to
+    // fprintf(stderr), where stderr is __acrt_iob_func(2)
+    final windows = os == 'windows';
+    if (windows) {
+      _declare('declare ptr @__acrt_iob_func(i32)');
+      _declare('declare i32 @fprintf(ptr, ptr, ...)');
+    } else {
+      _declare('declare i32 @dprintf(i32, ptr, ...)');
+    }
     _declare('declare void @exit(i32) #2');
+    List<String> report(String fmt, String args) => windows
+        ? [
+            '  %err = call ptr @__acrt_iob_func(i32 2)',
+            '  %r = call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr $fmt, $args)',
+          ]
+        : ['  %r = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr $fmt, $args)'];
     final msgs = {
       'index': 'action: index %u is out of range for \'%s\' (length %u) at %s\n',
       'null': 'action: null reference in %s at %s\n',
@@ -459,19 +473,19 @@ extension _LlvmFunctions on LlvmGen {
     msgs.forEach((k, m) => g[k] = _stringConst(m));
     _funcIr.addAll([
       'define internal void @act.fail.index(i32 %i, ptr %what, i32 %len, ptr %where) #2 {',
-      '  %r = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr ${g['index']}, i32 %i, ptr %what, i32 %len, ptr %where)',
+      ...report(g['index']!, 'i32 %i, ptr %what, i32 %len, ptr %where'),
       '  call void @exit(i32 15)',
       '  unreachable',
       '}',
       '',
       'define internal void @act.fail.null(ptr %what, ptr %where) #2 {',
-      '  %r = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr ${g['null']}, ptr %what, ptr %where)',
+      ...report(g['null']!, 'ptr %what, ptr %where'),
       '  call void @exit(i32 15)',
       '  unreachable',
       '}',
       '',
       'define internal void @act.fail.oom(ptr %where) #2 {',
-      '  %r = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr ${g['oom']}, ptr %where)',
+      ...report(g['oom']!, 'ptr %where'),
       '  call void @exit(i32 15)',
       '  unreachable',
       '}',

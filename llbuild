@@ -41,7 +41,8 @@ Sources:
                          C source, object or library, linked in
 
 Options:
-  -o, --output <file>    Output program (default: build/llvm/<name>)
+  -o, --output <file>    Output program (default: build/llvm/<name>; on Windows,
+                         .exe is added to a name without an extension)
   -I, --include <dir>    Additional include search directory (repeatable)
   -D, --define <sym>     Predefine symbol (NAME or NAME=VALUE; repeatable)
   -l <lib>               Link with library <lib> (repeatable)
@@ -136,6 +137,14 @@ if [ -n "$CLANG_MAJOR" ] && [ "$CLANG_MAJOR" -lt "$MIN_LLVM" ]; then
     exit 1
 fi
 
+# This computer's operating system, as a build name
+case "$(uname -s)" in
+    Darwin)                  HOST_OS=macos ;;
+    Linux)                   HOST_OS=linux ;;
+    MINGW*|MSYS*|CYGWIN*)    HOST_OS=windows ;;
+    *)                       HOST_OS=unknown ;;
+esac
+
 if [ -z "$OUTPUT" ]; then
     base="$(basename "${ACT_INPUTS[0]}" .act)"
     OUTPUT="${PROJECT_ROOT}/build/llvm/${base}"
@@ -146,6 +155,13 @@ if [ $EMIT_ONLY -eq 1 ] && [[ "$OUTPUT" == *.ll ]]; then
     LL="$OUTPUT"
 else
     LL="${OUTPUT}.ll"
+fi
+# On Windows a program needs .exe; added when its name has no extension
+if [ "$HOST_OS" = windows ] && [ $EMIT_ONLY -eq 0 ]; then
+    case "$(basename "$OUTPUT")" in
+        *.*) ;;
+        *)   OUTPUT="${OUTPUT}.exe" ;;
+    esac
 fi
 
 run_step() {
@@ -159,10 +175,11 @@ GFLAG=()
 # Which compiler and operating system this is (this computer's); after the
 # user's -D, so it cannot be overridden
 TARGET_DEFINES=(-D COMPILER_TARGET_LLVM=1 -D COMPILER_TARGET_PARTICLE=0 -D COMPILER_OS_NONE=0)
-case "$(uname -s)" in
-    Darwin) TARGET_DEFINES+=(-D COMPILER_OS_MACOS=1 -D COMPILER_OS_LINUX=0) ;;
-    Linux)  TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=1) ;;
-    *)      TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=0) ;;
+case "$HOST_OS" in
+    macos)   TARGET_DEFINES+=(-D COMPILER_OS_MACOS=1 -D COMPILER_OS_LINUX=0 -D COMPILER_OS_WINDOWS=0) ;;
+    linux)   TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=1 -D COMPILER_OS_WINDOWS=0) ;;
+    windows) TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=0 -D COMPILER_OS_WINDOWS=1) ;;
+    *)       TARGET_DEFINES+=(-D COMPILER_OS_MACOS=0 -D COMPILER_OS_LINUX=0 -D COMPILER_OS_WINDOWS=0) ;;
 esac
 run_step "$ACTION_LLVM" "${ACT_INPUTS[@]}" -o "$LL" -I "$LIB_DIR" \
     ${INCLUDES[@]+"${INCLUDES[@]}"} ${DEFINES[@]+"${DEFINES[@]}"} "${TARGET_DEFINES[@]}" ${ACT_FLAGS[@]+"${ACT_FLAGS[@]}"}

@@ -122,8 +122,8 @@ make test                              # hardware and simulator tests
 
 ### 4. Build Action Programs for Your Computer (LLVM)
 
-Action also compiles through LLVM to native programs for 64-bit macOS and
-Linux, which is handy for testing algorithms and libraries off the hardware.
+Action also compiles through LLVM to native programs for 64-bit macOS,
+Linux and Windows, which is handy for testing algorithms and libraries off the hardware.
 It needs clang (LLVM 15 or later).
 
 ```bash

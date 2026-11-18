@@ -282,8 +282,9 @@ make test-parcore-isa
 
 ## Building for your computer (LLVM)
 
-Action programs can also run on the computer you work on (64-bit macOS or
-Linux). `make llvm-tools` builds the LLVM compiler
+Action programs can also run on the computer you work on (64-bit macOS,
+Linux or Windows; on Windows, use the LLVM installed in
+[Installing dependencies](#windows) and the `pdev.cmd` shell). `make llvm-tools` builds the LLVM compiler
 (`build/tools/action_llvm`), and the `llbuild` script at the repository root
 compiles and links a program with clang:
 

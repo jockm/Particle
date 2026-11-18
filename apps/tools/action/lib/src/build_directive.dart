@@ -22,10 +22,15 @@ const buildTargets = ['particle', 'llvm'];
 /// The operating systems a file can be built for. Particle programs run
 /// without one (`none`); LLVM programs run on the computer they are built
 /// on.
-const buildOses = ['none', 'macos', 'linux'];
+const buildOses = ['none', 'macos', 'linux', 'windows'];
 
 /// Every target with each operating system it can have.
-const validBuilds = [('particle', 'none'), ('llvm', 'macos'), ('llvm', 'linux')];
+const validBuilds = [
+  ('particle', 'none'),
+  ('llvm', 'macos'),
+  ('llvm', 'linux'),
+  ('llvm', 'windows'),
+];
 
 /// The marker that starts a build directive.
 const buildDirectiveMark = '//act:build';
@@ -35,6 +40,7 @@ const buildDirectiveMark = '//act:build';
 String? hostOs() {
   if (Platform.isMacOS) return 'macos';
   if (Platform.isLinux) return 'linux';
+  if (Platform.isWindows) return 'windows';
   return null;
 }
 

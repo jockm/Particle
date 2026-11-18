@@ -8,13 +8,14 @@ import 'package:test/test.dart';
 
 import 'support.dart';
 
-/// LLVM IR for [source] (written to a temporary `main.act`).
-String llvmOf(String source, {bool debugInfo = true}) {
+/// LLVM IR for [source] (written to a temporary `main.act`), for [os] or
+/// this computer's operating system.
+String llvmOf(String source, {bool debugInfo = true, String? os}) {
   final dir = Directory.systemTemp.createTempSync('action_llvm_');
   try {
     final main = File('${dir.path}/main.act')..writeAsStringSync(source);
     return compileLlvm([main.path],
-        options: CompileOptions(includeDirs: [dir.path]), debugInfo: debugInfo);
+        options: CompileOptions(includeDirs: [dir.path], os: os), debugInfo: debugInfo);
   } finally {
     dir.deleteSync(recursive: true);
   }
@@ -43,10 +44,11 @@ final bool haveClang = () {
   final dir = Directory.systemTemp.createTempSync('action_llvm_run_');
   try {
     File('${dir.path}/p.ll').writeAsStringSync(llvmOf(source));
+    final exe = '${dir.path}/${Platform.isWindows ? 'p.exe' : 'p'}';
     final cc = Process.runSync(Platform.environment['CLANG'] ?? 'clang',
-        ['-w', '-g', '${dir.path}/p.ll', '-o', '${dir.path}/p']);
+        ['-w', '-g', '${dir.path}/p.ll', '-o', exe]);
     if (cc.exitCode != 0) throw StateError('clang failed: ${cc.stderr}');
-    final r = Process.runSync('${dir.path}/p', []);
+    final r = Process.runSync(exe, []);
     return (r.exitCode, r.stderr as String);
   } finally {
     dir.deleteSync(recursive: true);
@@ -87,6 +89,36 @@ void main() {
     test('debug information can be left out', () {
       expect(llvmOf('void main() { }\n'), contains('!llvm.dbg.cu'));
       expect(llvmOf('void main() { }\n', debugInfo: false), isNot(contains('!dbg')));
+    });
+
+    test('on Windows, run-time messages go to fprintf(stderr), not dprintf', () {
+      const src = 'u32 a[4];\nvoid main() { u32 i = 5; a[i] = 1; }\n';
+      final win = llvmOf(src, os: 'windows');
+      expect(win, contains('declare ptr @__acrt_iob_func(i32)'));
+      expect(win, contains('declare i32 @fprintf(ptr, ptr, ...)'));
+      expect(win, contains('%err = call ptr @__acrt_iob_func(i32 2)'));
+      expect(win, contains('call i32 (ptr, ptr, ...) @fprintf(ptr %err, ptr '));
+      expect(win, isNot(contains('dprintf')));
+      for (final os in ['macos', 'linux']) {
+        final ir = llvmOf(src, os: os);
+        expect(ir, contains('declare i32 @dprintf(i32, ptr, ...)'));
+        expect(ir, contains('call i32 (i32, ptr, ...) @dprintf(i32 2, ptr '));
+        expect(ir, isNot(contains('__acrt_iob_func')));
+      }
+    });
+
+    test('a Windows build takes the files built for windows', () {
+      final dir = Directory.systemTemp.createTempSync('action_build_');
+      try {
+        File('${dir.path}/k_windows.act').writeAsStringSync('//act:build windows\nconst u32 K = 7;\n');
+        File('${dir.path}/k_other.act').writeAsStringSync('//act:build !windows\nconst u32 K = 3;\n');
+        final main = File('${dir.path}/main.act')..writeAsStringSync(
+            'import "k_windows.act";\nimport "k_other.act";\nu32 g = K;\nvoid main() { }\n');
+        expect(compileLlvm([main.path], options: const CompileOptions(os: 'windows')), contains('i32 7'));
+        expect(compileLlvm([main.path], options: const CompileOptions(os: 'linux')), contains('i32 3'));
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
     });
 
     test('references are 8 bytes', () {

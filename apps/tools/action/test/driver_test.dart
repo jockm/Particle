@@ -56,8 +56,10 @@ void main() {
       expect(d.builds, [('llvm', 'macos'), ('llvm', 'linux')]);
       expect(read('//act:build !llvm\n')!.builds, [('particle', 'none')]);
       expect(read('//act:build particle || llvm && !linux\n')!.builds,
-          [('particle', 'none'), ('llvm', 'macos')]);
+          [('particle', 'none'), ('llvm', 'macos'), ('llvm', 'windows')]);
       expect(read('/* a\n   b */\n//act:build linux\n')!.builds, [('llvm', 'linux')]);
+      expect(read('//act:build windows\n')!.builds, [('llvm', 'windows')]);
+      expect(read('//act:build llvm && !windows\n')!.builds, [('llvm', 'macos'), ('llvm', 'linux')]);
     });
 
     test('"// act:build" with a space is an ordinary comment', () {
@@ -75,6 +77,8 @@ void main() {
       expect(errorOf('//act:build (llvm\n'), contains("a '(' is not closed"));
       expect(errorOf('//act:build llvm)\n'), contains("unexpected ')'"));
       expect(errorOf('//act:build particle && macos\n'), contains('can never be true'));
+      expect(errorOf('//act:build particle && windows\n'), contains('can never be true'));
+      expect(errorOf('//act:build llmv\n'), contains('none, macos, linux and windows'));
     });
 
     test('a file left out is not parsed; an import of one adds nothing', () {
