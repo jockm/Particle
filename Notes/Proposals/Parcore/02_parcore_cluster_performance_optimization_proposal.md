@@ -1,6 +1,17 @@
-# Parcore Cluster Performance Optimization Proposal
+# Parcore Architecture Proposal 02: Parcore Cluster Performance Optimization
 
-## 1. Executive Summary & Objective
+**Document ID:** ARCH-PROP-02  
+**Status:** Proposed  
+**Target Platform:** Lattice ECP5-45F / ECP5-85F (ULX3S)  
+**Hardware Description:** Intel ROHD (Dart)  
+
+---
+
+## 1. Executive Summary & Dependency Declaration
+
+### Dependency Declaration
+* **Depends on:**
+  1. **`01_the_parcore_conductor_architecture_proposal.md` (`ARCH-PROP-01`)**: Provides deterministic reset control, Port B TCM multiplexing, and out-of-band firmware staging for rapid microkernel deployment.
 
 The objective of this proposal is to increase the throughput and instructions-per-cycle (IPC) of the **Parcore distributed multi-core cluster** without moving to radical paradigm shifts (such as JIT/dynamic binary translation). 
 
@@ -10,6 +21,8 @@ This proposal categorizes targeted improvements into:
 1. **Pure Firmware Changes** (Immediate microkernel optimizations requiring zero hardware resynthesis).
 2. **Pure HDL Changes** (ROHD hardware datapath & interconnect enhancements requiring no microcode changes).
 3. **Hardware / Microkernel Co-Design** (Coordinated ISA, interconnect, and microcode additions offering maximum ROI).
+
+> **Width Parameterization Mandate (Particle-64 Readiness):** All new datapath hardware introduced in this proposal—specifically the **Shared Architectural Register Fabric (SARF)** (`SharedRegFabric`), inter-stage FIFO channels (`ParcoreInterconnect`), and Port B byte-lane steering—must accept a `dataWidth` constructor parameter (default `32`, supporting `64` for **Proposal 12: `12_particle_64_bit_architecture_extension_proposal.md`**) so that widening the cluster to 64 bits requires zero architectural redesign.
 
 ---
 
@@ -69,7 +82,7 @@ These changes optimize the ROHD datapath and top-level wiring while preserving a
 ### 4.3. Port B Sub-Word Byte-Lane Steering & Sign Extension
 * **Problem**: Core 3 must execute software shifts and arithmetic sign extensions (`SHIFTL + ASHIFTR`) for `LB`, `LBU`, `LH`, `LHU`, `SB`, and `SH`.
 * **Implementation**:
-  * In `cpu_core.dart` and `parcore_tcm.dart`, enhance the Port B memory controller to align data and byte enables (`bEnB`) according to `addrB[1:0]`.
+  * In `cpu_core.dart` and `parcore_tcm.dart`, enhance the Port B memory controller to align data and byte enables (`bEnB`, width `dataWidth ~/ 8`) according to the sub-word address offset (`addrB[1:0]` for 32-bit, `addrB[2:0]` for 64-bit).
   * For sub-word reads, provide hardware sign/zero extension directly onto `memPortBRData`.
 * **Impact**: Removes 6–8 instructions per memory operation in `core3_mem.asm`.
 
@@ -113,7 +126,7 @@ These enhancements combine targeted hardware primitives with updated microkernel
 
 ### 5.5. Out-of-Band Shared Architectural Register Fabric (SARF)
 * **HDL Changes**:
-  * Implement a 32-entry $\times$ 32-bit multi-port distributed LUT-RAM accessible across cores via dedicated SARF ports (`sarfRs1Data`, `sarfRs2Data`, `sarfRdAddr`, `sarfRdData`, `sarfRdWe`).
+  * Implement a 32-entry $\times$ `dataWidth`-bit (default 32-bit) multi-port distributed LUT-RAM accessible across cores via dedicated SARF ports (`sarfRs1Data`, `sarfRs2Data`, `sarfRdAddr`, `sarfRdData`, `sarfRdWe`).
   * Include internal write-to-read forwarding.
 * **Firmware Changes**:
   * Remove software register file emulation and scoreboard tracking from Core 1's local TCM. Cores read operands and commit writebacks directly into the SARF.

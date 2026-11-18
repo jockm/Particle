@@ -1,21 +1,27 @@
-# Parcore Architecture Proposal 09: Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration
+# Parcore Architecture Proposal 10: Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration
+
+**Document ID:** ARCH-PROP-10  
+**Status:** Proposed  
+**Target Platform:** Lattice ECP5-45F / ECP5-85F (ULX3S)  
+**Hardware Description:** Intel ROHD (Dart)  
+
+---
 
 ## 1. Executive Summary & Dependency Declaration
 
-This proposal defines the architectural mechanisms, supervisor switching protocols, and microkernel overlay formats for **Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration** on the Parcore cluster.
-
 ### Dependency Declaration
+This proposal represents **Tier 10** of the Parcore architecture roadmap and directly **depends on and extends**:
+1. **`01_the_parcore_conductor_architecture_proposal.md` (`ARCH-PROP-01`)**: Provides supervisor reset sequencing, Port B TCM multiplexing, and SPI Flash peripheral mastership.
+2. **`02_parcore_cluster_performance_optimization_proposal.md` (`ARCH-PROP-02`)**: Implements the Pre-Decode Classification RAM, stream windowing primitives (`FIFO.PEEK`, `FIFO.ADV`), and the Shared Architectural Register Fabric (SARF).
+3. **`03_parcore_verification_golden_trace_co_simulation_suite.md` (`ARCH-PROP-03`)**: Exposes the diagnostic commit log bus for lockstep trace verification across multiple target ISAs.
+4. **`04_parcore_multi_ex_dynamic_out_of_order_architecture_proposal.md` (`ARCH-PROP-04`)**: Establishes heterogeneous functional units (Core 2A ALU, Core 2B DSP/Div, Core 3 AGU) and scoreboarded dynamic issue.
+5. **`05_parcore_autonomous_accelerator_coprocessor_architecture_proposal.md` (`ARCH-PROP-05`)**: Provides extensible worker core dispatch for ISA-specific math/DSP acceleration.
+6. **`06_parcore_memory_hierarchy_sdram_dma_proposal.md` (`ARCH-PROP-06`)**: Provides the multi-master memory crossbar and hardware SDRAM burst engine.
+7. **`07_parcore_interrupt_timer_ipi_subsystem.md` (`ARCH-PROP-07`)**: Defines the CLINT timer and cross-core Inter-Processor Interrupt (IPI) signaling.
+8. **`08_parcore_tiered_execution_model.md` (`ARCH-PROP-08`)**: Establishes cold-path interpretation and dynamic template compilation.
+9. **`09_parcore_code_cache_osr_software_mmu_proposal.md` (`ARCH-PROP-09`)**: Defines the Software MMU, Micro-TLB, and dynamic Code Cache eviction.
 
-This proposal represents **Tier 9** of the Parcore architecture roadmap and directly **depends on and extends** the specifications established in:
-
-1. **`01_the_parcore_conductor_architecture_proposal.md`**: Provides supervisor reset sequencing, Port B TCM multiplexing, and SPI Flash peripheral mastership.
-2. **`02_parcore_cluster_performance_optimization_proposal.md`**: Implements the Pre-Decode Classification RAM, stream windowing primitives (`FIFO.PEEK`, `FIFO.ADV`), and the Shared Architectural Register Fabric (SARF).
-3. **`03_parcore_multi_ex_dynamic_out_of_order_architecture_proposal.md`**: Establishes heterogeneous functional units (Core 2A ALU, Core 2B DSP/Div, Core 3 AGU) and scoreboarded dynamic issue.
-4. **`04_parcore_tiered_execution_model.md`**: Establishes cold-path interpretation and dynamic template compilation.
-5. **`05_parcore_code_cache_osr_and_software_mmu_proposal.md`**: Defines the Software MMU, Micro-TLB, and dynamic Code Cache eviction.
-6. **`06_parcore_verification_and_golden_trace_proposal.md`**: Exposes the diagnostic commit log bus for lockstep trace verification across multiple target ISAs.
-7. **`07_parcore_interrupt_and_timer_subsystem_proposal.md`**: Defines the CLINT timer and cross-core Inter-Processor Interrupt (IPI) signaling.
-8. **`08_parcore_l1_l2_cache_coherency_and_sdram_dma_proposal.md`**: Provides the multi-master memory crossbar and hardware SDRAM burst engine.
+This proposal defines the architectural mechanisms, supervisor switching protocols, and microkernel overlay formats for **Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration** on the Parcore cluster.
 
 ### Strategic Objective
 
@@ -33,7 +39,7 @@ This proposal defines the **Personality Overlay Image (POI)** format and the **H
 
 ## 2. Multi-ISA Architectural Substrate
 
-Dynamic personality switching is made possible by the decoupling introduced in Proposals 01, 02, and 05:
+Dynamic personality switching is made possible by the decoupling introduced in **Proposals 01, 02, and 09**:
 
 ```
                             SPI FLASH MEMORY (ULX3S)
@@ -131,7 +137,7 @@ Switching personalities is orchestrated entirely by the Conductor over Port B TC
    a. Streams 512 bytes into Core 1 Classification RAM.
    b. Writes new microkernel code into Core 0, 1, 2, 3 local TCMs.
    c. Clears SARF registers and resets scoreboard masks to zero.
-   d. Clears Code Cache Directory in BRAM (Proposal 05).
+   d. Clears Code Cache Directory in BRAM (Proposals 08–09).
 5. Conductor sets target starting PC in Core 0.
 6. Conductor de-asserts Port B multiplexer and releases core resets simultaneously.
 7. Cluster resumes execution immediately under the new ISA personality.
@@ -151,8 +157,8 @@ Switching personalities is orchestrated entirely by the Conductor over Port B TC
 └──────────────────┘     └──────────────────┘     └──────────────────┘     └──────────────────┘
 ```
 
-### Phase 1: Tooling & Overlay Packaging (Software / Python)
-* Create `tools/mkoverlay.py` to package compiled microkernels and classification tables into `.poi` binary files.
+### Phase 1: Tooling & Overlay Packaging (Software)
+* Create overlay packager tooling (`apps/tools/mkoverlay/` or `tools/mkoverlay.py`) to package compiled microkernels and classification tables into `.poi` binary files.
 * Build the x86 real-mode opcode classification table.
 
 ### Phase 2: Conductor Overlay Loader (Firmware & RTL)
@@ -165,13 +171,13 @@ Switching personalities is orchestrated entirely by the Conductor over Port B TC
 * Author `firmware/parcore/x86/core2_x86_ex.asm` implementing x86 arithmetic and `EFLAGS` evaluation.
 
 ### Phase 4: Verification & Multi-ISA Co-Simulation (Test)
-* Add test cases in `test/parcore_multi_isa_test.dart` executing an RV32 compute loop, triggering an overlay swap to x86, executing an x86 real-mode routine, and asserting correct SARF output via Proposal 06's Commit Log Bus.
+* Add test cases in `test/parcore_multi_isa_test.dart` executing an RV32 compute loop, triggering an overlay swap to x86, executing an x86 real-mode routine, and asserting correct SARF output via **Proposal 03's** Commit Log Bus.
 
 ---
 
 ## 7. Summary of Architectural Impact
 
-| Dimension | Fixed Silicon Soft-Cores | Parcore with Proposal 09 |
+| Dimension | Fixed Silicon Soft-Cores | Parcore with Proposal 10 |
 | :--- | :--- | :--- |
 | **ISA Flexibility** | Hardwired to a single ISA (e.g., RV32 only) | **Multi-personality (RV32, x86, Retro, DSP)** |
 | **Reconfiguration Cost** | Full FPGA bitstream reload (several seconds) | **Software microkernel overlay swap (< 1.5 ms)** |

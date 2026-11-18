@@ -1,20 +1,27 @@
-# Parcore Multi-EX & Dynamic Out-of-Order Architecture Proposal
+# Parcore Architecture Proposal 04: Parcore Multi-EX & Dynamic Out-of-Order Architecture
+
+**Document ID:** ARCH-PROP-04  
+**Status:** Proposed  
+**Target Platform:** Lattice ECP5-45F / ECP5-85F (ULX3S)  
+**Hardware Description:** Intel ROHD (Dart)  
+
+---
 
 ## 1. Executive Summary & Dependency Declaration
 
-This proposal outlines the architectural specification and phased implementation roadmap for extending the **Parcore** cluster with **Heterogeneous Multiple Execution Units (Multi-EX)** and **Scoreboarded Dynamic Out-of-Order (OoO) Dispatch**.
-
 ### Dependency Declaration
-This document directly **depends on and extends** the foundational optimizations established in:
-> `docs/parcore_performance_proposal.md` (*Parcore Cluster Performance Optimization Proposal*)
+This proposal represents **Tier 04** of the Parcore architecture roadmap and directly **depends on and extends**:
+1. **`01_the_parcore_conductor_architecture_proposal.md` (`ARCH-PROP-01`)**: Provides deterministic firmware staging for the expanded execution microkernels (`core2a_alu.asm`, `core2b_math.asm`, `core3_mem.asm`).
+2. **`02_parcore_cluster_performance_optimization_proposal.md` (`ARCH-PROP-02`)**: Establishes the foundational hardware interfaces required by this architecture:
+   * **Tier 3.5: Out-of-Band Shared Architectural Register Fabric (SARF):** Multi-port distributed LUT-RAM with hardwired $x0$, collision arbitration, and zero-cycle write-to-read forwarding.
+   * **Tier 3.2: Pre-Decode Classification RAM (`UNPACK`):** Front-end accelerated bit-slicing and opcode classification.
+   * **Tier 3.1: Stream Windowing Primitives (`FIFO.PEEK` & `FIFO.ADV`):** Non-destructive instruction header inspection.
+   * **Tier 2.1 & 2.2: Synchronous FIFO Flushing and Hardware Branch Target Latching:** Fast control redirection directly from execution units back to Core 0 (IF).
+3. **`03_parcore_verification_golden_trace_co_simulation_suite.md` (`ARCH-PROP-03`)**: Provides lockstep golden-trace co-simulation via the Commit Log Bus to verify out-of-order retirement, multi-port SARF arbitration, and speculative flush recovery.
 
-Specifically, this architecture assumes the following prerequisites from the previous proposal are either concurrently deployed or established as baseline interfaces:
-1. **Tier 3.5: Out-of-Band Shared Architectural Register Fabric (SARF):** The 32-entry $\times$ 32-bit multi-port distributed LUT-RAM with hardwired $x0$, collision arbitration, and zero-cycle write-to-read forwarding.
-2. **Tier 3.2: Pre-Decode Classification RAM (`UNPACK`):** Front-end accelerated bit-slicing and opcode classification.
-3. **Tier 3.1: Stream Windowing Primitives (`FIFO.PEEK` & `FIFO.ADV`):** Non-destructive instruction header inspection.
-4. **Tier 2.1 & 2.2: Synchronous FIFO Flushing and Hardware Branch Target Latching:** Fast control redirection directly from execution units back to Core 0 (IF).
+This proposal outlines the architectural specification and phased implementation roadmap for extending the **Parcore** cluster with **Heterogeneous Multiple Execution Units (Multi-EX)** and **Scoreboarded Dynamic Out-of-Order (OoO) Dispatch**. By building on top of the SARF and Classification Front-End, this design transforms Parcore from a single-issue, in-order emulated pipeline into an **agile spatial compute fabric** capable of hiding multi-cycle math latency (DSP multiplication, 34-cycle division) and memory access stalls.
 
-By building on top of the SARF and Classification Front-End, this design transforms Parcore from a single-issue, in-order emulated pipeline into an **agile spatial compute fabric** capable of hiding multi-cycle math latency (DSP multiplication, 34-cycle division) and memory access stalls.
+> **Width Parameterization Mandate (Particle-64 Readiness):** The split dispatch FIFOs (`idToExA`, `idToExB`, `idToMem`) and all multi-port SARF read/write buses are parameterized to `dataWidth` (default `32`, scaling to `64` in **Proposal 12: `12_particle_64_bit_architecture_extension_proposal.md`**).
 
 ---
 
@@ -93,10 +100,10 @@ The `SharedRegFabric` module (`hdl/particle/lib/shared_reg_fabric.dart`) is augm
   * If a concurrent dispatch and retirement target the same register index, the writeback takes precedence or priority rules maintain correct state.
 
 ### 4.2. Top-Level Multi-EX Interconnect (`parcore_interconnect.dart`)
-Replace single `idToEx` FIFO with three independent point-to-point queues:
-1. `idToExA` (Width: 32, Depth: 8–16): Channels single-cycle integer ALU ops and branches to Core 2A.
-2. `idToExB` (Width: 32, Depth: 8–16): Channels RV32M multiply, divide, and remainder operations to Core 2B.
-3. `idToMem` (Width: 32, Depth: 8–16): Channels loads, stores, and fence operations to Core 3.
+Replace single `idToEx` FIFO with three independent point-to-point queues (each parameterized to `dataWidth`):
+1. `idToExA` (Width: `dataWidth`, Depth: 8–16): Channels single-cycle integer ALU ops and branches to Core 2A.
+2. `idToExB` (Width: `dataWidth`, Depth: 8–16): Channels RV32M multiply, divide, and remainder operations to Core 2B.
+3. `idToMem` (Width: `dataWidth`, Depth: 8–16): Channels loads, stores, and fence operations to Core 3.
 
 ### 4.3. Multi-Port Writeback Arbiter
 The SARF integrates a 3-way write arbiter (Core 2A, Core 2B, Core 3) with prioritized write-to-read forwarding:
@@ -152,7 +159,7 @@ To maintain verification discipline and avoid breaking regression suites, implem
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Stage 1: Dual-EX Interconnect & Scoreboard Hardware Foundation        │
+│ Stage 1: Dual-EX Interconnect & Scoreboard Hardware Foundation         │
 │   - Add 32-bit hardware reservation mask to SharedRegFabric (ROHD).    │
 │   - Split idToEx into idToExA and idToExB in parcore_interconnect.     │
 │   - Unit test scoreboard bit set/clear & forwarding in isolation.      │
@@ -160,8 +167,8 @@ To maintain verification discipline and avoid breaking regression suites, implem
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Stage 2: Integer / Math Stage Separation (Core 2A & Core 2B)          │
-│   - Create core2a_alu.asm and core2b_math.asm microkernels.           │
+│ Stage 2: Integer / Math Stage Separation (Core 2A & Core 2B)           │
+│   - Create core2a_alu.asm and core2b_math.asm microkernels.            │
 │   - Update core1_dispatch.asm to route RV32M to 2B and ALU to 2A.      │
 │   - Verify concurrent execution: DIV in 2B overlapping with ADDs in 2A.│
 └──────────────────────────────────┬─────────────────────────────────────┘
@@ -176,10 +183,10 @@ To maintain verification discipline and avoid breaking regression suites, implem
                                    │
                                    ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Stage 4: Dynamic Reordering & Precise Exception Recovery              │
-│   - Integrate synchronous branch/trap FIFO flush across all queues.   │
-│   - Scoreboard rollback logic on branch mispredictions / Trap 14.     │
-│   - Full RV32IM_Zbb compliance suite regression.                       │
+│ Stage 4: Dynamic Reordering & Precise Exception Recovery               │
+│   - Integrate synchronous branch/trap FIFO flush across all queues.    │
+│   - Scoreboard rollback logic on branch mispredictions / Trap 14.      │
+│   - Full RV32IM_Zbb compliance suite regression (via Proposal 03).     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -195,7 +202,7 @@ To maintain verification discipline and avoid breaking regression suites, implem
 * **Deliverables:**
   * Implement `firmware/parcore/riscv/core2a_alu.asm` and `core2b_math.asm`.
   * Update `firmware/parcore/riscv/core1_dispatch.asm` to check `regBusy` and dispatch to Channel 1 (ALU) or Channel 2 (Math).
-  * Test: Verify that a loop containing interleaved `DIV` and `ADD` operations executes without stalling the integer instructions.
+  * Test: Verify that a loop containing interleaved `DIV` and `ADD` operations executes without stalling the integer instructions (activating Proposal 03's *Divide Collision* test).
 
 ### Stage 3: Out-of-Order Memory Decoupling (Core 3 AGU / Direct SARF)
 * **Objective:** Allow execution cores to complete without routing non-memory tokens through Core 3.
@@ -208,7 +215,7 @@ To maintain verification discipline and avoid breaking regression suites, implem
 * **Objective:** Guarantee clean pipeline recovery during taken branches, jumps, and memory misalignments (Trap 14).
 * **Deliverables:**
   * Route Core 2A branch strobe to synchronously flush all three dispatch queues (`idToExA`, `idToExB`, `idToMem`) and reset the SARF busy bitmask.
-  * Execute the full `parcore_rv32_pipeline_test.dart` and architectural compliance benchmarks.
+  * Execute the full `parcore_rv32_pipeline_test.dart` and Proposal 03's lockstep `riscv-tests` compliance suite.
 
 ---
 

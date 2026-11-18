@@ -1,18 +1,20 @@
-# Parcore Architecture Proposal 06: Verification & Golden Trace Co-Simulation Suite
+# Parcore Architecture Proposal 03: Verification & Golden Trace Co-Simulation Suite
+
+**Document ID:** ARCH-PROP-03  
+**Status:** Proposed  
+**Target Platform:** Lattice ECP5-45F / ECP5-85F (ULX3S)  
+**Hardware Description:** Intel ROHD (Dart)  
+
+---
 
 ## 1. Executive Summary & Dependency Declaration
 
-This proposal defines the architectural specification, observability hardware hooks, and testbench co-simulation infrastructure for the **Parcore Verification & Golden Trace Suite**.
-
 ### Dependency Declaration
+* **Depends on:**
+  1. **`01_the_parcore_conductor_architecture_proposal.md` (`ARCH-PROP-01`)**: Provides supervisor control, deterministic reset sequencing, and memory pre-loading.
+  2. **`02_parcore_cluster_performance_optimization_proposal.md` (`ARCH-PROP-02`)**: Implements the Shared Architectural Register Fabric (SARF), fast stream decode, and synchronous FIFO flushes.
 
-This proposal represents **Tier 6** of the Parcore acceleration and robustness roadmap and directly **depends on and extends** the specifications established in:
-
-1. **`01_the_parcore_conductor_architecture_proposal.md`**: Provides supervisor control, deterministic reset sequencing, and memory pre-loading.
-2. **`02_parcore_cluster_performance_optimization_proposal.md`**: Implements the Shared Architectural Register Fabric (SARF), fast stream decode, and synchronous FIFO flushes.
-3. **`03_parcore_multi_ex_dynamic_out_of_order_architecture_proposal.md`**: Introduces parallel execution cores (Core 2A, Core 2B, Core 3) and scoreboarded dynamic issue.
-4. **`04_parcore_tiered_execution_model.md`**: Establishes interpreted cold paths and Hotspot JIT compilation into local TCM.
-5. **`05_parcore_code_cache_osr_and_software_mmu_proposal.md`**: Introduces the Micro-TLB, On-Stack Replacement (OSR), and transactional exception rollback.
+This proposal represents **Tier 03** of the Parcore architecture roadmap. It is intentionally positioned **ahead of** Multi-EX Out-of-Order execution (**Proposal 04**), Memory Crossbar/MSHR (**Proposal 06**), and Tiered JIT/Software MMU (**Proposals 08–09**) so that an automated, cycle-by-cycle lockstep regression net is operational before speculative hazards, out-of-order retirement, or dynamic code generation are introduced.
 
 ### Strategic Objective
 
@@ -20,9 +22,11 @@ As Parcore evolves from a single-issue sequential interpreter into a distributed
 
 The goal of this proposal is to establish:
 * An **Architectural Instruction Retirement Bus (Commit Log)** exposed as non-synthesizable/debug signals in ROHD.
-* A **Lockstep Golden Trace Co-Simulator** running alongside ROHD simulations that validates guest execution against a reference emulator (e.g., Spike / QEMU / Python reference model).
+* A **Lockstep Golden Trace Co-Simulator** running alongside ROHD simulations that validates guest execution against a reference emulator (e.g., Spike / QEMU / Dart reference model).
 * A **Deterministic Inter-Core Replay Engine** that records FIFO handshake timings, asynchronous interrupts, and MBOX strobes for cycle-accurate debugging.
 * Automated integration into the continuous integration (`dart test`) test suite.
+
+> **Width Parameterization Mandate (Particle-64 Readiness):** `commitGuestPc` and `commitRdData` on the Commit Log Diagnostic Bus are parameterized to `dataWidth` (default `32`, scaling to `64` in **Proposal 12: `12_particle_64_bit_architecture_extension_proposal.md`**), while `commitInstWord` remains 32-bit for RV32/RV64 guest instruction encoding.
 
 ---
 
@@ -33,7 +37,7 @@ To monitor guest instruction retirement across the distributed cluster without p
 ```
                            PARCORE CLUSTER
 ┌──────────────────────────────────────────────────────────────────┐
-│  Core 0 (IF)   Core 1 (ID)   Core 2A/2B (EX)   Core 3 (MEM/WB)   │
+│  Core 0 (IF)   Core 1 (ID)   Core 2[A/B] (EX)  Core 3 (MEM/WB)   │
 └─────────────────────────────────┬────────────────────────────────┘
                                   │
                                   ▼
@@ -45,10 +49,10 @@ To monitor guest instruction retirement across the distributed cluster without p
                                   │
                                   ▼
                       COMMIT LOG DIAGNOSTIC BUS
-                      [ 128-bit Structured Token ]
+                      [ Structured Commit Token ]
         ┌──────────────┬───────────┬─────────────┬──────────────┐
         │ Guest PC     │ Inst Word │ Rd Index    │ Write Data   │
-        │ [63:32]      │ [31:0]    │ [7:0]       │ [31:0]       │
+        │ [W-1:0]      │ [31:0]    │ [5:0]       │ [W-1:0]      │
         └──────────────┴───────────┴─────────────┴──────────────┘
                                   │
                                   ▼
@@ -65,20 +69,22 @@ In `hdl/parcore/lib/parcore_top.dart`, the diagnostic commit interface is expose
 ```dart
 // Diagnostic Architectural Retirement Signals
 Logic get commitValid => output('commit_valid');
-Logic get commitGuestPc => output('commit_guest_pc');       // 32-bit
+Logic get commitGuestPc => output('commit_guest_pc');       // dataWidth-bit (32 or 64)
 Logic get commitInstWord => output('commit_inst_word');     // 32-bit
 Logic get commitRdAddr => output('commit_rd_addr');         // 6-bit (x0..x31 or f0..f31)
-Logic get commitRdData => output('commit_rd_data');         // 32-bit
-Logic get commitMmuFault => output('commit_mmu_fault');     // 1-bit
-Logic get commitIsJit => output('commit_is_jit');           // 1-bit (Interpreter vs JIT block)
+Logic get commitRdData => output('commit_rd_data');         // dataWidth-bit (32 or 64)
+Logic get commitMmuFault => output('commit_mmu_fault');     // 1-bit (Staged hook: tied 0 until Proposal 09)
+Logic get commitIsJit => output('commit_is_jit');           // 1-bit (Staged hook: tied 0 until Proposal 08)
 ```
+
+*Staged Forward Hooks:* `commitMmuFault` and `commitIsJit` are declared on the interface at Tier 03 and tied to `0` until **Proposal 08 (Tiered Execution / JIT)** and **Proposal 09 (Software MMU)** activate them, ensuring testbench API stability across all subsequent tiers.
 
 ### 2.2. Retirement Qualification Rules
 
 An instruction token is asserted on the Commit Bus **if and only if** it has irrevocably committed its architectural side effects:
 1. **In-Order Retirement Point**: For interpreted instructions, the token fires when Core 3 (MEM/WB) writes to the SARF or releases the scoreboard bit.
-2. **JIT Execution Retirement**: For compiled basic blocks executing in the Code Cache, tokens are emitted as each native instruction commits to the SARF.
-3. **Speculative Discard**: Instructions invalidated by a pipeline flush (`c2BranchStrobe`) or rolled back due to an MMU page fault **must not** assert `commitValid`.
+2. **JIT Execution Retirement *(activates at Proposal 08)***: For compiled basic blocks executing in the Code Cache, tokens are emitted as each native instruction commits to the SARF with `commitIsJit = 1`.
+3. **Speculative Discard**: Instructions invalidated by a pipeline flush (`c2BranchStrobe`) or rolled back due to an MMU page fault *(Proposal 09)* **must not** assert `commitValid`.
 4. **Zero-Register Writes**: Instructions writing to $x0$ ($R_d = 0$) still emit a commit token with `commitRdAddr = 0` and `commitRdData = 0` to verify program counter progression.
 
 ---
@@ -114,7 +120,7 @@ Rather than comparing register states only at the end of a test run, the testben
 
 ### 3.2. Divergence Diagnostic Reporting
 
-When a mismatch occurs, the testbench immediately halts simulation and outputs a comprehensive divergence snapshot:
+When a mismatch occurs, the testbench immediately halts simulation and outputs a comprehensive divergence snapshot (with Multi-EX Core 2A/2B and JIT mode telemetry automatically populating once Proposals 04 and 08 are active):
 
 ```text
 ================================================================================
@@ -176,25 +182,25 @@ This enables zero-latency reproduction of transient multi-core deadlocks and haz
 
 ## 5. Comprehensive Compliance Test Suites
 
-The verification suite integrates three layers of standard test suites:
+The verification suite integrates three layers of standard test suites, activating progressively as later tiers are implemented:
 
-### 5.1. Layer 1: RISC-V Architectural Compliance (`riscv-tests`)
+### 5.1. Layer 1: RISC-V Architectural Compliance (`riscv-tests`) *(Active at Tier 03)*
 Executes the official RISC-V compliance suite:
 * **`rv32ui-p-*`**: User-mode integer instructions (ADDI, ADD, SUB, AND, OR, XOR, SLT, Branches, Loads, Stores, Jumps).
 * **`rv32um-p-*`**: Multiplier and divider extension (MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU).
 * **`rv32uc-p-*`**: Compressed 16-bit instruction decoding (via Pre-Decode RAM).
 * **`rv32uzbb-p-*`**: Basic bit-manipulation operations (CLZ, CTZ, CPOP, ROL, ROR).
 
-### 5.2. Layer 2: Stress & Hazard Micro-benchmarks
+### 5.2. Layer 2: Stress & Hazard Micro-benchmarks *(Active at Tier 03; Divide Collision activates at Tier 04)*
 Targeted test cases designed to force worst-case pipeline conditions:
 * **RAW Hazard Hammer**: Tight sequences of back-to-back dependent arithmetic instructions testing SARF write-to-read forwarding.
 * **Branch Thrash**: Alternating taken/untaken branches designed to trigger continuous hardware FIFO flushes and target latch redirects.
-* **Divide Collision**: Issuing single-cycle ALU instructions immediately behind long-latency unsigned division to stress out-of-order dynamic issue.
+* **Divide Collision *(Tier 04 Multi-EX)***: Issuing single-cycle ALU instructions immediately behind long-latency unsigned division to stress out-of-order dynamic issue.
 * **Memory Stride & Unaligned Spanning**: Accessing sub-word and misaligned addresses across word boundaries to trigger Core 3 alignment routines and Trap 14 handling.
 
-### 5.3. Layer 3: OSR & JIT Invalidation Verification
-* **Hotspot Transition Test**: Loops configured with trip counts spanning 1 to 100,000 iterations to verify seamless promotion from interpreted mode to JIT code cache mode via On-Stack Replacement.
-* **Self-Modifying Code (SMC) Attack**: A guest program writes new instructions into its own loop header, asserting that the Micro-TLB write-protect trap invalidates the compiled JIT block and prevents executing stale instructions.
+### 5.3. Layer 3: OSR & JIT Invalidation Verification *(Activates at Tiers 08–09)*
+* **Hotspot Transition Test**: Loops configured with trip counts spanning 1 to 100,000 iterations to verify seamless promotion from interpreted mode to JIT code cache mode via On-Stack Replacement (**Proposal 09**).
+* **Self-Modifying Code (SMC) Attack**: A guest program writes new instructions into its own loop header, asserting that both crossbar write-snooping (**Proposal 06**) and Micro-TLB write-protect traps (**Proposal 09**) invalidate the compiled JIT block and prevent executing stale instructions.
 
 ---
 
@@ -210,7 +216,7 @@ Targeted test cases designed to force worst-case pipeline conditions:
 
 ### Phase 1: Diagnostic Commit Log Interface (HDL & Simulation)
 * Implement the architectural retirement monitor in `hdl/parcore/lib/parcore_top.dart`.
-* Expose `commitValid`, `commitGuestPc`, `commitInstWord`, `commitRdAddr`, and `commitRdData`.
+* Expose `commitValid`, `commitGuestPc`, `commitInstWord`, `commitRdAddr`, `commitRdData`, and staged hooks `commitMmuFault` / `commitIsJit`.
 * Verify that speculative flushes and stalled instructions do not emit spurious commit tokens.
 
 ### Phase 2: Golden Reference Bridge (Dart / Test Framework)
@@ -226,7 +232,7 @@ Targeted test cases designed to force worst-case pipeline conditions:
 ### Phase 4: Deterministic Replay & Continuous Integration (CI)
 * Implement the event recording logger and replay harness.
 * Integrate full regression runs into `dart test` under CI environments.
-* Set regression gating: zero divergence allowed across all standard compliance tests.
+* Set regression gating: zero divergence allowed across all standard compliance tests (expanding automatically to Layer 3 once Proposals 08–09 land).
 
 ---
 
@@ -240,4 +246,4 @@ Targeted test cases designed to force worst-case pipeline conditions:
 | **Compliance Test Harness** | Official test suite automation | `hdl/parcore/test/compliance/riscv_tests.dart` |
 | **Deterministic Replay** | Multi-core race condition reproduction | `hdl/parcore/test/helpers/replay_harness.dart` |
 
-This verification foundation ensures that subsequent architectural changes—such as adding functional units, modifying cache refill bursts, or tuning JIT templates—can be undertaken with complete regression safety.
+This verification foundation ensures that all subsequent architectural changes—including Multi-EX OoO (**Proposal 04**), Memory Crossbar/MSHR (**Proposal 06**), Interrupts (**Proposal 07**), and Tiered JIT/MMU (**Proposals 08–09**)—can be undertaken with complete regression safety.

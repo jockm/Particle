@@ -1,20 +1,29 @@
-# Addendum 02: Particle 64-Bit Architecture Extension Proposal
+# Parcore Architecture Proposal 12: Particle 64-Bit Architecture Extension
 
-**Document Identifier:** ARCH-PROP-ADDENDUM-02  
-**Status:** Proposed / Draft  
-**Target Architecture:** Particle Processor ISA & Parcore Multi-Core Fabric  
-**Primary Target HDL:** Intel ROHD (Dart sdk >= 3.0.0)  
-**Target Hardware:** Lattice ECP5 (ULX3S) / Modern FPGA Platforms  
+**Document ID:** ARCH-PROP-12  
+**Status:** Proposed  
+**Target Platform:** Lattice ECP5-85F (ULX3S) / Modern FPGA Platforms  
+**Hardware Description:** Intel ROHD (Dart)  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Dependency Declaration
 
-This addendum investigates the feasibility and architectural definition of extending the native **Particle** processor architecture from a 32-bit datapath ($W = 32$) to a native 64-bit datapath ($W = 64$, **Particle-64**). 
+### Dependency Declaration
+This proposal represents **Tier 12** of the Parcore architecture roadmap and directly **depends on and activates** the cluster-wide `dataWidth` parameterization established across earlier tiers:
+1. **`01_the_parcore_conductor_architecture_proposal.md` (`ARCH-PROP-01`)**: Parameterized Conductor staging bus and Port B 2:1 TCM multiplexers (`wordShift = 3` for 64-bit).
+2. **`02_parcore_cluster_performance_optimization_proposal.md` (`ARCH-PROP-02`)**: Parameterized SARF storage cells, inter-stage FIFOs, and Port B byte-lane steering (`bEnB` width = `dataWidth ~/ 8`).
+3. **`03_parcore_verification_golden_trace_co_simulation_suite.md` (`ARCH-PROP-03`)**: Parameterized `commitGuestPc` and `commitRdData` on the Commit Log Bus for RV64 lockstep co-simulation.
+4. **`04_parcore_multi_ex_dynamic_out_of_order_architecture_proposal.md` (`ARCH-PROP-04`)**: Parameterized split dispatch FIFOs (`idToExA`, `idToExB`, `idToMem`) and multi-port SARF buses.
+5. **`05_parcore_autonomous_accelerator_coprocessor_architecture_proposal.md` (`ARCH-PROP-05`)**: Escaped 32-bit `XTRA` (`0xFF`) prefix used for extended immediate shifts and multi-word literal streaming.
+6. **`06_parcore_memory_hierarchy_sdram_dma_proposal.md` (`ARCH-PROP-06`)**: Parameterized Multi-Master Crossbar (`req_addr`, `req_wdata`, `resp_rdata`, `req_ben`).
+7. **`08_parcore_tiered_execution_model.md` (`ARCH-PROP-08`)** & **`11_parcore_gdb_remote_debugger_host_console_bridge.md` (`ARCH-PROP-11`)**: Parameterized BFT/Code Cache Directory PC tags and hardware breakpoint/watchpoint comparators.
+
+This proposal defines the extension of the native **Particle** processor architecture from a 32-bit datapath ($W = 32$) to a native 64-bit datapath ($W = 64$, **Particle-64**). 
 
 The primary objectives are:
 1. Preserve Particle's compact, uniform 16-bit instruction format (`[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`).
-2. Provide native support for 64-bit integer registers, wide memory addressing, 64-bit doubleword arithmetic/logic, and sub-word (32-bit) integer operations for modern OS runtimes and emulation.
+2. Provide native support for 64-bit integer registers, wide memory addressing, 64-bit doubleword arithmetic/logic, and sub-word (32-bit) integer operations for modern OS runtimes and emulation (RV64IM_Zbb / x86-64).
 3. Validate that the remaining unallocated opcode budget within the Particle 8-bit opcode space (`0x00`–`0xFF`) is sufficient to accommodate these additions without requiring breaking architectural changes.
 
 ---
@@ -35,7 +44,7 @@ The Particle architecture allocates the high byte (`inst[15:8]`) as the canonica
 | `0xB0` – `0xCF` | Relative Branches (`FBRA.*`, `BBRA.*`) | 18 | **14 free** (`0xBC`–`0xBF`, `0xCC`–`0xCF`) |
 | `0xD0` – `0xDF` | Shadow register exchange, `RBASE` windowing | 5 | **11 free** (`0xD5`–`0xDF`) |
 | `0xE0` – `0xFE` | Interconnect (`FIFO.*`, `MBOX`) & System Expansion | 6 | **24 free** (`0xE6`–`0xFD`) |
-| `0xFF` | Escape Prefix (`XTRA`) | 1 | Dedicated 32-bit Prefix Hook |
+| `0xFF` | Escape Prefix (`XTRA` — **Proposal 05**) | 1 | Dedicated 32-bit Prefix Hook |
 | **Total** | | **148 Allocated** | **108 Free Slots (42.2%)** |
 
 ### Feasibility Conclusion
@@ -103,7 +112,7 @@ Because Particle maintains a strict 16-bit instruction format, immediate fields 
 * **Immediate Shifts (`SHIFTL Rr, Imm4`, etc.):**  
   The 4-bit immediate field (`[3:0] Imm4`) can only express offsets $0 \le N \le 15$. For immediate shifts $>15$, software either:
   1. Loads the shift count into a scratch register (`R14` or general register) and executes register-based shifts.
-  2. Uses the 32-bit escaped instruction prefix (`0xFF` / `XTRA`) described below.
+  2. Uses the 32-bit escaped instruction prefix (`0xFF` / `XTRA` from **Proposal 05**) described below.
 
 ### 4.2 Loading 64-Bit Literals
 In Particle-32, loading a 32-bit immediate requires a 4-instruction sequence via `PUSH8` into `R14` (`LOAD32`). In Particle-64, loading a full 64-bit constant requires an expanded macro sequence:
@@ -123,7 +132,7 @@ LD      Rr,  R14
 
 To optimize code size for address loading:
 1. **Sign-Extended 32-bit Literals (`LOAD32S`):** Execute a 4-instruction `LOAD32` into `Rr` followed by `SEXTD Rr` (5 instructions total for any address in the negative or positive 2 GB ranges).
-2. **Coprocessor / Escape Prefix (`XTRA 0xFF`):** Multi-word literals can be streamed directly via two-halfword prefix formats.
+2. **Coprocessor / Escape Prefix (`XTRA 0xFF`, Proposal 05):** Multi-word literals can be streamed directly via two-halfword prefix formats.
 
 ---
 
@@ -144,18 +153,19 @@ Extending the hardware datapath in Intel ROHD (`cpu_core.dart`, `alu.dart`, `reg
 
 ## 6. Parcore Multi-Core Integration
 
-When Particle-64 cores are incorporated into the **Parcore** multi-core cluster (e.g., as emulators for RV64IMZbb or x86-64 long mode):
-1. **Inter-Stage FIFOs (`fifo_subsystem.dart`):** Widened to 64 bits data width. Packet protocols preserve existing 2-to-4 word transfers while doubling register payload capacity.
-2. **Shared Architectural Register Fabric (SARF):** Storage cells expand from $64 \times 32\text{-bit}$ to $64 \times 64\text{-bit}$, allowing full 64-bit architectural register updates without splitting into high/low register pairs.
+When Particle-64 cores are incorporated into the **Parcore** multi-core cluster (e.g., as emulators for RV64IMZbb or x86-64 long mode) by setting `dataWidth = 64` in `ParcoreConfig`:
+1. **Inter-Stage FIFOs (`fifo_subsystem.dart` / `parcore_interconnect.dart`):** Widened to 64 bits data width. Packet protocols preserve existing 2-to-4 word transfers while doubling register payload capacity.
+2. **Shared Architectural Register Fabric (SARF):** Storage cells expand from $32 \times 32\text{-bit}$ to $32 \times 64\text{-bit}$ (or $64 \times 64\text{-bit}$ with FP bank), allowing full 64-bit architectural register updates without splitting into high/low register pairs.
 3. **True Dual-Port TCM (`parcore_tcm.dart`):** Port A remains 16 bits wide (instruction fetch stream is unaltered); Port B widens to 64 bits data width with 8-bit byte-enable lanes.
+4. **Multi-Master Crossbar (`parcore_memory_crossbar.dart`):** Request/response data and address buses widen cleanly via the `dataWidth` parameter established in **Proposal 06**.
 
 ---
 
 ## 7. Implementation Checklist
 
-- [ ] **ROHD Constants (`constants.dart`):** Define `ParticleWidths.doubleWord = 64`, add memory opcodes `0x3A`–`0x3F`, `0x2A`–`0x2D`, sub-word arithmetic `0x49`–`0x4C`, `0x58`–`0x5B`, and `DMULL`/`DMULH` (`0x1A`–`0x1D`).
+- [ ] **ROHD Constants & Config (`constants.dart`, `cpu_config.dart`):** Activate `dataWidth: ParticleWidths.doubleWord` (64), add memory opcodes `0x3A`–`0x3F`, `0x2A`–`0x2D`, sub-word arithmetic `0x49`–`0x4C`, `0x58`–`0x5B`, and `DMULL`/`DMULH` (`0x1A`–`0x1D`).
 - [ ] **ALU Datapath (`alu.dart`):** Expand operand busses to 64 bits; implement 6-bit shift amounts (`shiftAmt6`) and 32-bit sign-extending arithmetic (`ADDW`, `SUBW`).
 - [ ] **Register File (`register_file.dart`):** Expand data registers and shadow bank to 64 bits.
 - [ ] **Memory Interface (`memory_bus.dart`):** Implement 8-byte alignment verification (Trap 14 on `Addr[2:0] != 000`) and 8-bit byte enables.
-- [ ] **Assembler (`tools/pasm.py`):** Register new 64-bit mnemonics and synthesize `LOAD64` macro expansions.
-- [ ] **Simulator (`tools/psim.py`):** Update architectural register masks to `0xFFFFFFFFFFFFFFFF` and add 64-bit execution semantics.
+- [ ] **Assembler (`apps/tools/pasm/`):** Register new 64-bit mnemonics and synthesize `LOAD64` macro expansions.
+- [ ] **Simulator (`apps/tools/psim/`):** Update architectural register masks to 64-bit (`BigInt` / `0xFFFFFFFFFFFFFFFF`) and add 64-bit execution semantics.

@@ -1,13 +1,16 @@
-# Architecture Proposal: The Parcore Conductor
+# Parcore Architecture Proposal 01: The Parcore Conductor
 
-**System:** Parcore Heterogeneous Multi-Core Fabric  
-**Subsystem:** System Lifecycle & Firmware Boot Supervisor  
+**Document ID:** ARCH-PROP-01  
+**Status:** In Progress  
 **Target Platform:** Lattice ECP5-45F / ECP5-85F (ULX3S)  
 **Hardware Description:** Intel ROHD (Dart)  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Dependency Declaration
+
+### Dependency Declaration
+* **Depends on:** None (Foundational Tier 01 — System Lifecycle & Firmware Boot Supervisor).
 
 In the current Parcore architecture, application stage firmware for Cores 0–5 (IF, ID, EX, MEM, WB, CC) is embedded directly into synthesized Block RAM initialization vectors or loaded statically at testbench construction.
 
@@ -61,7 +64,9 @@ In the current Parcore architecture, application stage firmware for Cores 0–5 
 
 Each core's `ParcoreTcm` block provides:
 * **Port A (16-bit):** Instruction fetch port (dedicated to local core's program counter).
-* **Port B (32-bit):** Data load/store port with byte enables.
+* **Port B (`dataWidth`-bit, default 32-bit):** Data load/store port with byte enables (`dataWidth ~/ 8`).
+
+> **Width Parameterization Mandate (Particle-64 Readiness):** To allow seamless activation of **Proposal 12 (`12_particle_64_bit_architecture_extension_proposal.md`)**, `conductorConfig` and `ParcoreTcm` inherit a cluster-wide `dataWidth` parameter (default `32`, optionally `64`). Port B address slicing uses `wordShift = dataWidth == 64 ? 3 : 2` (`condMemAddr.slice(addrBits - 1, wordShift)`), and both inputs to the 2:1 Port B multiplexers (`condMemWData` / `core.memPortBWData` and `condMemBEn` / `core.memPortBBEn`) are sized to `dataWidth` and `dataWidth ~/ 8` respectively. Port A remains fixed at 16 bits.
 
 In `parcore_top.dart`, each core’s Port B inputs are wrapped in a 2:1 multiplexer controlled by the Conductor's reset state for that core:
 
@@ -69,12 +74,13 @@ $$\text{sel}_i = \text{condCoreReset}[i] \ \& \ (\text{condTargetCore} == i)$$
 
 ```dart
 // Conceptual ROHD Muxing per Core in parcore_top.dart
+final wordShift = dataWidth == 64 ? 3 : 2;
 final isConductorActive = condCoreReset[i] & condTargetCore.eq(Const(i, width: 3));
 
 final muxedAddrB = mux(
   isConductorActive,
-  condMemAddr.slice(addrBits - 1, 2),
-  core.memPortBAddr.slice(addrBits - 1, 2),
+  condMemAddr.slice(addrBits - 1, wordShift),
+  core.memPortBAddr.slice(addrBits - 1, wordShift),
 );
 
 final muxedWDataB = mux(
@@ -92,7 +98,7 @@ final muxedBEnB = mux(
 final muxedWEnB = mux(
   isConductorActive,
   condMemWEn,
-  core.memPortBWEn & (core.memPortBAddr.slice(31, 28).neq(Const(0xF, width: 4))),
+  core.memPortBWEn & (core.memPortBAddr.slice(dataWidth - 1, dataWidth - 4).neq(Const(0xF, width: 4))),
 );
 
 final muxedREnB = mux(
@@ -137,6 +143,7 @@ To preserve maximum FPGA fabric on the Lattice ECP5 for application pipeline cor
 ```dart
 static const CpuConfig conductorConfig = CpuConfig(
   coreId: 7,                  // Designated supervisor ID
+  dataWidth: 32,              // Parameterized cluster dataWidth (32 or 64)
   tcmSizeBytes: 2 * 1024,     // 2 KB (Smallest viable block RAM slice)
   fifoChannels: 0,            // Omit FIFO subsystem entirely
   fifoDepth: 0,

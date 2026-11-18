@@ -1,12 +1,20 @@
-# Architectural Proposal: Autonomous Accelerator & Functional Extension Subsystem in Parcore
+# Parcore Architecture Proposal 05: Autonomous Accelerator & Functional Extension Subsystem
 
-**Document ID:** RFC-PARCORE-2026-EXT01  
-**Target Architecture:** Parcore Distributed Spatial Multi-Core / Particle ISA  
-**Status:** Draft / Proposed  
+**Document ID:** ARCH-PROP-05  
+**Status:** Proposed  
+**Target Platform:** Lattice ECP5-45F / ECP5-85F (ULX3S)  
+**Hardware Description:** Intel ROHD (Dart)  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Dependency Declaration
+
+### Dependency Declaration
+This proposal represents **Tier 05** of the Parcore architecture roadmap and directly **depends on and extends**:
+1. **`01_the_parcore_conductor_architecture_proposal.md` (`ARCH-PROP-01`)**: Provides deterministic firmware staging for programmable worker cores.
+2. **`02_parcore_cluster_performance_optimization_proposal.md` (`ARCH-PROP-02`)**: Implements the Shared Architectural Register Fabric (SARF) and stream windowing primitives.
+3. **`03_parcore_verification_golden_trace_co_simulation_suite.md` (`ARCH-PROP-03`)**: Exposes the Commit Log Bus for lockstep verification of extended instructions.
+4. **`04_parcore_multi_ex_dynamic_out_of_order_architecture_proposal.md` (`ARCH-PROP-04`)**: Establishes the heterogeneous Multi-EX topology (`Core 2A`, `Core 2B`, `Core 3`), split dispatch FIFOs, and the 32-bit SARF hardware reservation scoreboard (`regBusy[31:0]`).
 
 As the Parcore architecture matures beyond base integer emulation (RV32I) into complex computational domains—such as IEEE 754 floating-point arithmetic (Single/Double precision), vector processing, DSP transforms, and cryptographic accelerators—the architectural mechanism used to express, dispatch, and execute these operations must be finalized.
 
@@ -15,7 +23,7 @@ Due to Particle’s compact **16-bit fixed-length instruction format**, instruct
 This proposal specifies a unified hardware and firmware architecture:
 1. **Instruction Surface:** A **32-bit Escaped Instruction (`XTRA` / `0xFF`)** that preserves 16-bit density for scalar operations while providing an extensible 16-bit payload for sub-opcodes, rounding modes, and 3-operand register specifiers.
 2. **Execution Substrate:** Replacing the traditional synchronous coprocessor sidecar with an **Autonomous Heterogeneous Worker Core (`Core 2B` / `Core 2C`)**.
-3. **Decoupled Dataflow & Synchronization:** Work dispatching over point-to-point **Streaming FIFOs** combined with direct operand access and out-of-band writeback via the **Shared Architectural Register Fabric (SARF)** and hardware scoreboarding.
+3. **Decoupled Dataflow & Synchronization:** Work dispatching over point-to-point **Streaming FIFOs** combined with direct operand access and out-of-band writeback via the **Shared Architectural Register Fabric (SARF)** and **Proposal 04's** hardware scoreboard.
 
 ---
 
@@ -53,7 +61,7 @@ Under this model:
 * Core 1 acts as an instruction classifier and non-blocking task scheduler.
 * Core 2B (FPU/Extension) receives work tokens via streaming FIFOs.
 * Operands are read directly from the SARF, and completed values are committed directly back to the SARF.
-* Hazard mitigation is completely non-blocking: Core 1 marks destination registers as **Busy** in a hardware scoreboard. Standard integer operations continue executing on Core 2A in parallel unless an explicit Read-After-Write (RAW) dependency exists.
+* Hazard mitigation is completely non-blocking: Core 1 marks destination registers as **Busy** in the SARF hardware scoreboard (**Proposal 04**). Standard integer operations continue executing on Core 2A in parallel unless an explicit Read-After-Write (RAW) dependency exists.
 
 ---
 
@@ -162,7 +170,7 @@ Because Core 2B communicates exclusively over a standard **FIFO interface** (inb
 
 ## 5. Token Protocol & FIFO Dispatch Specification
 
-When Core 1 decodes an `0xFF` escaped instruction, it packs and pushes a single 32-bit dispatch token over the dedicated extension FIFO (`id_to_c2b_fifo`):
+When Core 1 decodes an `0xFF` escaped instruction, it packs and pushes a single 32-bit dispatch token over the dedicated extension FIFO (`id_to_c2b_fifo` / `idToExB`):
 
 ### 5.1 Token Data Format
 ```
@@ -175,7 +183,7 @@ When Core 1 decodes an `0xFF` escaped instruction, it packs and pushes a single 
 
 ### 5.2 Handshake Sequence
 1. **Core 1 (Dispatch):**
-   * Inspects the SARF scoreboard.
+   * Inspects the SARF scoreboard (`regBusy[31:0]`).
    * If registers $R_{s1}$ or $R_{s2}$ are marked **Busy**, Core 1 holds dispatch until the producing functional unit clears the flag.
    * Marks $R_d$ as **Busy** in the SARF scoreboard mask.
    * Pushes the token to Core 2B via `fifoPushEn`.
@@ -192,30 +200,15 @@ When Core 1 decodes an `0xFF` escaped instruction, it packs and pushes a single 
 
 ---
 
-## 6. Scoreboard & Hazard Management in SARF
+## 6. Scoreboard & Hazard Integration with Proposal 04
 
-To maintain sequential program consistency while executing out-of-order across Core 2A (Integer ALU) and Core 2B (Accelerator), the SARF hardware incorporates a **32-bit Scoreboard Mask**:
+Rather than introducing a separate hazard tracker, autonomous worker cores **directly reuse and extend** the 32-bit hardware reservation mask (`regBusy[31:0]`) established in `SharedRegFabric` by **Proposal 04 (`04_parcore_multi_ex_dynamic_out_of_order_architecture_proposal.md`)**:
 
-```dart
-// Conceptual Hardware Scoreboard Logic within SharedRegFabric
-final scoreboardBusy = Logic(name: 'scoreboard_busy', width: 32);
-
-Sequential(clk, reset: reset, resetValues: {
-  scoreboardBusy: Const(0, width: 32),
-}, [
-  // Issue Stage: Mark Rd as busy when dispatched by Core 1
-  If(core1DispatchExtEn & (core1RdAddr.neq(Const(0, width: 5))), then: [
-    scoreboardBusy < (scoreboardBusy | (Const(1, width: 32) << core1RdAddr)),
-  ]),
-  // Writeback Stage: Clear Rd when Core 2B commits
-  If(core2bCommitEn & (core2bRdAddr.neq(Const(0, width: 5))), then: [
-    scoreboardBusy < (scoreboardBusy & ~(Const(1, width: 32) << core2bRdAddr)),
-  ]),
-]);
-```
-
-* If an incoming integer instruction on Core 1 requires an operand where `scoreboardBusy[Rs] == 1`, Core 1 pauses issuing to Core 2A.
-* Unrelated instructions (operating on non-busy registers) execute with zero stall cycles, achieving true latency hiding for multi-cycle accelerator operations.
+* **Unified Issue Reservation:** When Core 1 dispatches an `XTRA` token to Core 2B (or an auxiliary Core 2C worker), it asserts the existing `sarfReserveEn` / `sarfReserveRdAddr` strobe, setting bit `Rd` in `regBusy[31:0]`.
+* **Unified Retirement Release:** Any attached worker core's SARF writeback commit (`sarfWrEn` / `sarfWrAddr`) clears its corresponding `regBusy` bit through the same multi-port arbiter defined in Proposal 04 Section 4.3.
+* **Optional Additional Worker Ports:** If an optional third worker (e.g., `Core 2C`) is instantiated alongside `Core 2B`, `SharedRegFabric`'s writeback arbiter simply expands from 3-way to 4-way with no change to Core 1's hazard-check logic:
+  * If an incoming integer instruction on Core 1 requires an operand where `regBusy[Rs] == 1`, Core 1 pauses issuing to Core 2A.
+  * Unrelated instructions (operating on non-busy registers) execute with zero stall cycles, achieving true latency hiding for multi-cycle accelerator operations.
 
 ---
 
@@ -226,7 +219,7 @@ Sequential(clk, reset: reset, resetValues: {
 | **Instruction Footprint** | Zero base ISA changes (Uses standard `LD`/`ST`) | Consumes precious 8-bit opcodes in 16-bit space | Uses a single 8-bit escape (`0xFF`), providing clean 16-bit extension space |
 | **Call Latency** | 4–8 cycles (Address generation, stores, loads) | 1 cycle issue | 1 cycle issue via streaming FIFO |
 | **Pipeline Interlock** | Software polling or interrupt handling | Freezes Core execution stage (Pipeline stall) | Decoupled non-blocking dispatch; SARF scoreboard stalls only on true RAW dependencies |
-| **Register Pressure** | Requires burning integer registers for addresses | Dedicated private register file (requires move instructions) | Direct read/write access to unified 32-bit architectural registers |
+| **Register Pressure** | Requires burning integer registers for addresses | Dedicated private register file (requires move instructions) | Direct read/write access to unified architectural registers |
 | **Modularity & Reuse** | Tied to memory crossbar / bus fabric | Hardwired into ALU datapath logic | Worker core can be swapped (Particle, MR4, or pure RTL FSM) without pipeline redesign |
 
 ---
@@ -235,18 +228,17 @@ Sequential(clk, reset: reset, resetValues: {
 
 1. **Phase 1: Toolchain & Instruction Definition**
    * Assign `0xFF` as `XTRA` in `hdl/particle/lib/constants.dart`.
-   * Update assembler (`tools/pasm.py`) to recognize 2-word syntax:
+   * Update the Dart assembler (`apps/tools/pasm/`) to recognize 2-word syntax:
      ```assembly
      XTRA.F32  FADD, R4, R2, R1     ; Escaped float add: R4 = R2 + R1
      XTRA.F32  FMUL, R6, R4, R3     ; Escaped float mul: R6 = R4 * R3
      ```
-2. **Phase 2: SARF Scoreboard Extension**
-   * Add the 32-bit `busyMask` tracking register to `hdl/particle/lib/shared_reg_fabric.dart`.
-   * Route scoreboard status lines to Core 1 hazard detection logic.
+2. **Phase 2: SARF Arbiter & Dispatch Wiring**
+   * Extend `SharedRegFabric` (from Proposal 04) if an auxiliary `Core 2C` port is enabled, reusing `regBusy[31:0]`.
+   * Route `XTRA` decode vectors in Core 1 to push extension tokens onto `idToExB` / `id_to_c2b_fifo`.
 3. **Phase 3: Top-Level Integration (`ParcoreTop`)**
-   * Instantiate Core 2B in `parcore_top.dart`.
-   * Connect `id_to_c2b` FIFO channel in `ParcoreInterconnect`.
-   * Wire Core 2B read/write ports into SARF Port 2.
+   * Parameterize Core 2B's implementation slot in `parcore_top.dart` so Particle, MR4, or pure RTL worker modules bind cleanly to the same FIFO + SARF port contract.
+   * Validate retirement observability through **Proposal 03's** Commit Log Bus.
 4. **Phase 4: Prototyping Accelerator Blocks**
    * Implement Option 1 (Particle firmware math microkernel) to validate dispatch and synchronization.
    * Synthesize Option 4 (direct ROHD hardware FSM) for high-performance IEEE 754 single-precision benchmarks.
