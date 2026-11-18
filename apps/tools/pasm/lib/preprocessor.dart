@@ -109,10 +109,11 @@ class Preprocessor {
     String? undefined;
     expr = expr.replaceAllMapped(tokenPattern, (match) {
       final tok = match.group(1)!;
+      if (regMap.containsKey(tok.toLowerCase())) {
+        throw AssemblerError("'$tok' is a register; a value is expected here", null, null, "register");
+      }
       if (symbols.containsKey(tok)) return "${symbols[tok]}";
       if (defines.containsKey(tok)) return "${defines[tok]}";
-      final lower = tok.toLowerCase();
-      if (regMap.containsKey(lower)) return "${regMap[lower]}";
       if (_parseLiteral(tok) == null) undefined ??= tok;
       return tok;
     });
@@ -272,6 +273,8 @@ class Preprocessor {
 
     final expanded = <SourceLine>[];
     final condStack = <bool>[];
+    // The line of each open .if, .ifdef or .ifndef
+    final condLines = <int>[];
     bool inMacro = false;
     String macroName = "";
     List<String> macroParams = [];
@@ -296,23 +299,29 @@ class Preprocessor {
 
         if (directive == ".ifdef") {
           condStack.add(defines.containsKey(arg));
+          condLines.add(lno);
           continue;
         } else if (directive == ".ifndef") {
           condStack.add(!defines.containsKey(arg));
+          condLines.add(lno);
           continue;
         } else if (directive == ".if") {
           final val = _located(absPath, lno, () => parseExpr(arg, defines));
           condStack.add(val != 0);
+          condLines.add(lno);
           continue;
         } else if (directive == ".else") {
-          if (condStack.isNotEmpty) {
-            condStack[condStack.length - 1] = !condStack.last;
+          if (condStack.isEmpty) {
+            throw AssemblerError("'.else' without '.if'", absPath, lno);
           }
+          condStack[condStack.length - 1] = !condStack.last;
           continue;
         } else if (directive == ".endif") {
-          if (condStack.isNotEmpty) {
-            condStack.removeLast();
+          if (condStack.isEmpty) {
+            throw AssemblerError("'.endif' without '.if'", absPath, lno);
           }
+          condStack.removeLast();
+          condLines.removeLast();
           continue;
         }
 
@@ -330,6 +339,9 @@ class Preprocessor {
           macroStartLine = lno;
           continue;
         } else if (directive == ".endmacro") {
+          if (!inMacro) {
+            throw AssemblerError("'.endmacro' without '.macro'", absPath, lno);
+          }
           macros[macroName] = Macro(macroName, macroParams, List.from(macroBody), absPath, macroStartLine, List.from(macroLines));
           inMacro = false;
           continue;
@@ -344,6 +356,12 @@ class Preprocessor {
           continue;
         } else if (directive == ".define") {
           final defParts = arg.split(RegExp(r"\s+"));
+          if (regMap.containsKey(defParts[0].toLowerCase())) {
+            throw AssemblerError("'${defParts[0]}' is a register name and cannot be defined", absPath, lno, "reserved-name");
+          }
+          if (defines.containsKey(defParts[0])) {
+            throw AssemblerError("'${defParts[0]}' is already defined", absPath, lno, "duplicate-symbol");
+          }
           final val = defParts.length > 1
               ? _located(absPath, lno, () => parseExpr(arg.substring(defParts[0].length).trim(), defines))
               : 1;
@@ -369,6 +387,10 @@ class Preprocessor {
         final args = argStr.isNotEmpty
             ? argStr.split(",").map((a) => a.trim()).toList()
             : <String>[];
+        if (args.length != m.params.length) {
+          final want = m.params.length == 1 ? "1 argument" : "${m.params.length} arguments";
+          throw AssemblerError("macro ${m.name} expects $want, got ${args.length}", absPath, lno);
+        }
         macroCounter++;
         final uniqueSuffix = "_$macroCounter";
 
@@ -409,6 +431,12 @@ class Preprocessor {
       expanded.add((absPath, lno, line, const <MacroFrame>[]));
     }
 
+    if (inMacro) {
+      throw AssemblerError("'.macro $macroName' has no '.endmacro'", absPath, macroStartLine);
+    }
+    if (condLines.isNotEmpty) {
+      throw AssemblerError("this conditional has no '.endif'", absPath, condLines.last);
+    }
     return expanded;
   }
 }

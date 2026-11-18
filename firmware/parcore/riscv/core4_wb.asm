@@ -17,8 +17,8 @@ _reset_vector:
     ST32    (R14), R4           ; Clear INSTRET_HI
 
 _wb_main_loop:
-    FIFO.R  R10, 0              ; Pop from Core 3 (Ch0): Rd
-    FIFO.R  R11, 0              ; Pop from Core 3 (Ch0): Data
+    FIFO.R  R10, R0              ; Pop from Core 3 (Ch0): Rd
+    FIFO.R  R11, R0              ; Pop from Core 3 (Ch0): Data
 
     ; Check for flush sentinel 0xFFFFFFFF (R10 + 1 == 0)
     LD      R4, R10
@@ -42,14 +42,14 @@ _wb_main_loop:
 ._commit_retire:
     FBRA.Z  R10, ._retire_x0
 
-    FIFO.W  R10, 1              ; Channel 1 to Core 1 (Feedback)
-    FIFO.W  R11, 1
+    FIFO.W  R10, R1              ; Channel 1 to Core 1 (Feedback)
+    FIFO.W  R11, R1
     LOAD16  R14, _wb_main_loop
     JMP     R14, R0
 
 ._retire_x0:
     LD      R12, 0
-    FIFO.W  R12, 1
-    FIFO.W  R12, 1
+    FIFO.W  R12, R1
+    FIFO.W  R12, R1
     LOAD16  R14, _wb_main_loop
     JMP     R14, R0

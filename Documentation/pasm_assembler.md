@@ -28,8 +28,13 @@ A listing, with each line's address, bytes and source line number and a symbol t
 
 ### Symbol & Origin Control
 * `.org <expr>`: Sets the program emission counter to `<expr>`. Used to locate code at vector slots (e.g., `.org 0x00000100`).
-* `.align <boundary>`: Pads emission with zero bytes until the current address is aligned to an integer multiple of `<boundary>` bytes.
-* `.define <symbol> <expression>`: Defines a compile-time numeric constant or label alias.
+* `.align <boundary>`: Pads emission with zero bytes until the current address is aligned to an integer multiple of `<boundary>` bytes. The boundary must be positive; it need not be a power of two.
+* `.define <symbol> <expression>`: Defines a compile-time numeric constant or label alias. A symbol can be defined only once, and a register name (`R0`–`R15`, `SP`) cannot be defined.
+* `.global <symbol>` and `.data`: Accepted and ignored (every label is visible to every file already). Any other unknown directive is an error.
+
+Labels must be unique, and cannot be register names. Instructions must be at even addresses, and bytes cannot be emitted twice at the same address (an `.org` back over earlier code is an error).
+
+Register names cannot appear in expressions: `BBRA R1` and `LDI R2, R3 + 4` are errors, not the numbers 1 and 7.
 
 ### Data Allocation Directives
 * `.byte <v1>, <v2>, ...`: Emits one or more 8-bit bytes.
@@ -47,7 +52,7 @@ Conditionals may be nested:
 * `.if <expression>` ... `.else` ... `.endif`
 
 ### Macro Engine
-Macros support parameter substitution via `%parameter` syntax and unique local label generation using `._label_%`:
+Macros support parameter substitution via `%parameter` syntax and unique local label generation using `._label_%`. A macro must be called with exactly as many arguments as it has parameters, and every `.macro` needs its `.endmacro` (and every `.if`, `.ifdef` and `.ifndef` its `.endif`):
 ```assembly
 .macro LOAD16 reg, value
     LD      R14, ((%value) >> 8) & 0xFF
@@ -84,21 +89,23 @@ Every error and warning, from `pasm` and from `pasm_lint`, ends with a code in b
 
 | Code | Kind | What it covers |
 |------|------|----------------|
-| `syntax` | error | Unknown mnemonic, wrong number of operands, a malformed operand, branch condition or string |
-| `register` | error | An unknown or out-of-range register |
-| `range` | error | An immediate or data value out of range (`.byte`, `.half`, LDI, LDIS, LD, 4-bit immediates, trap numbers, bit indexes) |
+| `syntax` | error | Unknown mnemonic or directive, wrong number of operands or macro arguments, a memory operand where none is allowed, a malformed operand, branch condition or string, an unmatched `.macro` or `.if` |
+| `register` | error | An unknown or out-of-range register, a register where a value is needed (including inside an expression), or a value where a register is needed |
+| `range` | error | An immediate or data value out of range (`.byte`, `.half`, `.word`, LDI, LDIS, LD, PUSH4, PUSH8, 4-bit immediates (`-8..7` for the signed forms of SADD, SSUB, SDIV, SMOD, SMULH and SSLT), trap numbers, window offsets, MBOX vectors, bit indexes, `.align`) |
 | `undefined-symbol` | error | A symbol or branch target that is not defined |
 | `expression` | error | A malformed expression |
 | `branch-range` | error | A branch target too far away |
 | `branch-direction` | error | A forward branch that goes backward, or a backward branch that goes forward |
 | `jump` | error | A `JUMP` to an odd address, or `JUMP` sizes that do not settle |
 | `include` | error | An include file that is not found |
-| `reserved-name` | error | A label with the name the assembler defines for the end of the image |
+| `reserved-name` | error | A label with the name the assembler defines for the end of the image, or a label or `.define` named like a register |
+| `duplicate-symbol` | error | A label or `.define` defined twice |
+| `overlap` | error | Bytes emitted at an address already used (an `.org` back over earlier code) |
 | `r0-write` | error | An instruction that writes `R0` |
 | `stack-misaligned` | error | `SP` adjusted by something other than a multiple of 4 |
 | `external-call` | warning | An `RCALL` target not defined in the file or its includes |
 | `r14-clobbered` | warning | `R14` read after something overwrote it |
-| `misaligned` | warning | Data or code after byte-sized data with no `.align` |
+| `misaligned` | error / warning | An instruction at an odd address (error, from the assembler); data or code after byte-sized data with no `.align` (warning, from the linter) |
 | `stack-balance` | warning | Pushes and pops that do not match |
 
 ---

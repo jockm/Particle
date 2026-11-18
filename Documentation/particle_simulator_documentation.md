@@ -1,136 +1,132 @@
-# Particle Instruction Simulator & Debugger (`psim.py`)
+# Particle Instruction Simulator & Debugger (`psim`)
 
-`psim.py` is an instruction-accurate, cycle-tracking software emulator and interactive debugger (`p4db`) for the Particle processor architecture. It models the native 32-bit datapath, true dual-port memory, multi-channel streaming FIFOs, hardware shadow register banking, and the direct stride exception system. 
+`psim` is an instruction-accurate, cycle-counting simulator and interactive debugger (`p4db`) for the Particle processor architecture, written in Dart (`apps/tools/psim`, built into `build/tools/psim` by `make tools`). It models the 32-bit datapath, the register file with its shadow bank and `RBASE` window, byte-addressed memory, the streaming FIFO channels, and the direct stride trap vectors.
 
-It supports both single-core execution and multi-core cluster execution driven by a JSON configuration file, complete with point-to-point FIFO routing, atomic shared-memory MMIO synchronization, and cross-core hardware strobe interrupts (`MBOX`).
+It runs a single core from a binary image, or several cores together (a *cluster*) described by a JSON file: their FIFO channels routed between cores, a shared memory window, and `MBOX` traps from one core to another.
 
 ---
 
 ## 1. Command-Line Usage
 
 ```bash
-# Single-core execution
-python3 tools/psim.py <binary_file> [options]
+# One core
+build/tools/psim <binary_file> [options]
 
-# Multi-core cluster execution
-python3 tools/psim.py -C <cluster_config.json> [options]
+# A cluster of cores
+build/tools/psim -C <cluster.json> [options]
 ```
 
-### CLI Arguments & Options
-
-| Flag | Parameter | Description |
+| Option | Parameter | Description |
 | :--- | :--- | :--- |
-| `binary` | `<path>` | Binary image to load in single-core mode (optional if `-C` is passed). |
-| `-C`, `--cluster` | `<config.json>` | Path to multi-core JSON configuration file. |
-| `-b`, `--base` | `<addr>` | Load address for binary image in single-core mode (default: `0x00000100`). |
-| `-d`, `--debug` | None | Launch into interactive `p4db` debugger. |
-| `--max-cycles` | `<int>` | Max cycle count threshold before simulation aborts (default: `10000000`). |
+| `binary` | `<path>` | Binary image to load and run on a single core. Without it (and without `-C`), psim starts the debugger with empty memory. |
+| `-C`, `--cluster` | `<file.json>` | Run the cluster described by the file (see §3). Not with a binary. |
+| `-b`, `--base` | `<addr>` | Load address of the binary (default `0x00000100`, the reset vector). |
+| `-d`, `--debug` | — | Start the `p4db` debugger instead of running (§4). |
+| `--max-cycles` | `<n>` | Stop after `n` cycles (default 10,000,000). |
+| `--no-exit-on-reset` | — | `TRAP 0` jumps to the reset vector like any other trap, instead of ending the run. |
+
+### Exit codes
+
+| Code | Meaning |
+| :--- | :--- |
+| 0 | The run ended with `TRAP 0` (in a cluster: every core did). |
+| 15 | A `TRAP 15` instruction (an out-of-bounds or sentinel trap). |
+| 16 | A simulator error: file not found, bad arguments, or a cluster file that cannot be used. |
+| 17 | The cycle limit was reached. |
+| 18 | The PC ran past the end of memory. |
+| 19 | A cluster deadlocked: every running core is waiting on an empty FIFO. |
+
+In a cluster, the exit code is 0 when every core ended with `TRAP 0`; otherwise it is the code of the lowest-numbered core that ended another way.
 
 ---
 
-## 2. Multi-Core Simulation & Architecture
+## 2. Simulation Conventions
 
-When started with `-C / --cluster`, `psim.py` operates as a lock-step multi-core execution engine:
+These are specific to the simulator (see also §5 of `particle_spec.md`):
 
-* **Lock-step Clocking**: All active cores execute one clock cycle in lock-step via `step_all()`. Cores that halt cease execution, and the cluster simulation terminates once all cores have halted or the cycle limit is reached.
-* **Shared Memory & MMIO Bus (`SharedMemory`)**:
-  * An address window (default: `0x80000000` to `0x80000000 + shared_memory_size`) is shared across all cores.
-  * Direct atomic read/write and atomic test-and-set / swap (`TAS (Rr), Rl`) operations across this window are immediately consistent across all cores.
-* **Inter-Core Streaming Interconnect (`MultiCoreInterconnect`)**:
-  * Point-to-point FIFO virtual channels route streaming packets (`FIFO.W`, `FIFO.TRYW` to `FIFO.R`, `FIFO.TRYR`) between arbitrary core endpoints.
-  * A write to channel $X$ on Core $A$ is routed directly to channel $Y$ on Core $B$ according to the configuration routing matrix.
-* **Cross-Core Strobe Interrupts (`MBOX`)**:
-  * When a core executes `MBOX Rr, Rl` or `MBOX Rr, Imm4`, the target core index ($Rr$) is signaled with vector $Rl$ or `Imm4`, triggering an immediate Direct Stride Trap vector branch on the target core.
+* **Console**: Channel 0 is the console. `FIFO.W` to channel 0 prints `Rr[7:0]` to stdout (unless a cluster routes channel 0 to another core).
+* **Ending a run**: `TRAP 0` ends the run on that core, printing `R1` (unless `--no-exit-on-reset`). `TRAP 15` ends it as an out-of-bounds or sentinel trap. Every other trap, including a misaligned access (vector 14), goes to its vector as on hardware.
+* **FIFOs**: Each core has 4 channels of 256 entries; a channel number is taken modulo 4. `FIFO.R` on an empty channel stalls: the PC stays on the instruction, and the stalled cycles count. A write to a full channel is dropped (`FIFO.TRYW` reports it in `R14`).
+* **Memory**: 128 KiB per core by default; data addresses wrap within it.
+* **Unlisted opcodes** execute as no-ops (hardware raises vector 15).
+* **R0** always reads 0; writes to it are discarded.
+* **Alignment**: misaligned 16- and 32-bit accesses, and an odd PC, raise vector 14 before any state changes.
 
 ---
 
-## 3. JSON Configuration Schema (`cluster_config.json`)
+## 3. Clusters
+
+`psim -C <file.json>` runs several cores in lock step: each cycle, every running core executes one instruction, in id order. A core that ends its run stops; the cluster run ends when every core has stopped, the cycle limit is reached, or the cluster deadlocks.
+
+* **FIFO routing**: a core's `fifo_connections.tx` routes each local channel to a receive channel on another core. A write to a routed channel (`FIFO.W`, `FIFO.TRYW`) goes into the target core's channel, where its `FIFO.R`/`FIFO.TRYR` read it. A channel that is not routed stays local, as on a single core. `FIFO.STAT` reports the core's own (receiving) channel.
+* **Shared memory**: when `shared_memory_size` is not 0, the window from `shared_memory_base` is the same memory on every core. Loads, stores and `TAS` in it are seen at once by all cores, so `TAS` works as a lock between cores.
+* **MBOX**: `MBOX Rr, Imm4` raises trap `Imm4` on another core, before that core's next instruction. In a two-core cluster the target is the other core and `Rr` is not used, as on the hardware. With more cores, each core's `mbox_target` names its target. A core stalled on an empty FIFO is interrupted: its `R14` gets the address of the stalled instruction, so returning from the handler (`JMP R14, R0`) runs it again. An `MBOX` to a core that has stopped does nothing. With a single core, `MBOX` does nothing.
+* **Deadlock**: when every running core is waiting on an empty FIFO and no `MBOX` trap is pending, nothing can change. psim stops with exit code 19 and names each core and the channel it waits on.
+
+### Cluster file
 
 ```json
 {
-  "topology": "point_to_point_fifo",
-  "shared_memory_size": 131072,
   "shared_memory_base": "0x80000000",
+  "shared_memory_size": 4096,
   "cores": [
     {
       "id": 0,
-      "name": "Core_Producer",
+      "name": "producer",
       "mem_size": 131072,
       "binary": "build/producer.bin",
       "base_addr": "0x00000100",
-      "initial_registers": {
-        "R1": "0x00001000",
-        "R15": "0x00010000"
-      },
+      "initial_registers": { "R13": 0, "SP": "0x00010000" },
       "fifo_connections": {
-        "tx": [
-          { "channel": 0, "target_core": 1, "target_channel": 0 }
-        ]
+        "tx": [ { "channel": 1, "target_core": 1, "target_channel": 1 } ]
       }
     },
     {
       "id": 1,
-      "name": "Core_Consumer",
-      "mem_size": 131072,
+      "name": "consumer",
       "binary": "build/consumer.bin",
-      "base_addr": "0x00000100",
-      "initial_registers": {
-        "R15": "0x00010000"
-      },
-      "fifo_connections": {
-        "tx": [
-          { "channel": 0, "target_core": 0, "target_channel": 0 }
-        ]
-      }
+      "initial_registers": { "R13": 1 }
     }
   ]
 }
 ```
 
-### Configuration Fields
+| Field | Default | Meaning |
+| :--- | :--- | :--- |
+| `shared_memory_size` | `0` | Bytes of shared memory; `0` for none. |
+| `shared_memory_base` | `0x80000000` | Address of the shared window. |
+| `cores` | — | The cores, at least one. |
+| `id` | its position | The core's number, used by routes, `mbox_target` and the exit code. |
+| `name` | `core<id>` | The core's name in messages and the debugger. |
+| `mem_size` | `131072` | The core's own memory, in bytes (a power of two). |
+| `binary` | none | Binary image to load; a relative path is relative to the cluster file's folder. |
+| `base_addr` | `0x00000100` | Where `binary` is loaded. |
+| `initial_registers` | none | Starting values: `R0`–`R15` or `SP`. |
+| `fifo_connections.tx` | none | Routes: local `channel` (0–3) to `target_channel` (0–3, default the same) on `target_core`. |
+| `mbox_target` | the other core of a pair | The core this core's `MBOX` signals. |
 
-* `topology`: Descriptive interconnect type string (`point_to_point_fifo`, `mesh_fifo`, etc.).
-* `shared_memory_size`: Total byte size of shared memory allocated across cores (e.g., `131072` for 128 KB). Set to `0` to disable shared memory.
-* `shared_memory_base`: Hexadecimal or integer base address for the shared memory window (e.g., `"0x80000000"`).
-* `cores`: Array of core configuration blocks:
-  * `id`: Core identifier integer ($0, 1, \dots$).
-  * `name`: Friendly display name for logs and `p4db`.
-  * `mem_size`: Local private memory size in bytes (default: `131072`).
-  * `binary`: Optional file path to raw binary executable image to load into local memory.
-  * `base_addr`: Memory address where `binary` is loaded (default: `0x00000100`).
-  * `initial_registers`: Key-value pairs of initial register values (e.g., `"R1": "0x00001000"`, `"R15": "0x00010000"`).
-  * `fifo_connections.tx`: Routing definitions:
-    * `channel`: Local TX channel index ($0 \dots 3$).
-    * `target_core`: Remote core ID to deliver data to.
-    * `target_channel`: Remote RX channel index on the target core.
+Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields, such as `topology`, are ignored.
+
+The cluster tests (`make test-sim-cluster`, part of `make test`) are examples: `apps/asm/cluster/` has a producer and consumer (`stream.json`), an `MBOX` that interrupts a stalled core (`mbox.json`), a counter in shared memory under a `TAS` lock (`shared.json`), and a deadlock (`deadlock.json`).
 
 ---
 
 ## 4. Interactive Debugger (`p4db`)
 
-Launching `psim.py` with `-d` (in single-core or multi-core mode) halts execution at cycle 0 and provides an interactive inspection shell.
-
-### Commands
+`psim -d` (with a binary or a cluster) stops before the first instruction and gives a prompt. In a cluster, `r`, `m`, `w`, `wh`, `wb`, `b` and `fifo` work on the selected core (marked `*`).
 
 | Command | Arguments | Description |
 | :--- | :--- | :--- |
-| `cores` | None | Lists all cores in the cluster, their cycle counts, PCs, and status (`RUNNING`, `STALLED`, `HALTED`), indicating the currently selected core. |
-| `switch` | `<core_id>` | Switches active debug focus to core `<core_id>`. Subsequent register/memory commands apply to this core. |
-| `s` | None | Single-steps one instruction. In multi-core mode, advances all cluster cores synchronously by one cycle. |
-| `c` | None | Continues execution until a breakpoint is hit on any core, or all cores halt. |
-| `b` | `<addr>` | Sets an instruction breakpoint at hex/decimal address `<addr>`. |
-| `r` | None | Displays the active register bank ($R0$–$R15$) and shadow bank ($S0$–$S15$) of the focused core. |
-| `m` | `<addr> [count]` | Hex/ASCII memory dump starting at `<addr>` for `[count]` bytes (default: 16). Correctly accesses shared memory if `<addr>` falls in the shared window. |
-| `fifo` | None | Displays occupancy depth, head values, and flags for all FIFOs belonging to the focused core. |
-| `q` | None | Exits the debugger and terminates the simulation session. |
-
----
-
-## 5. Architectural Simulation Invariants
-
-1. **R0 Immutability**: All writes targeting $R0$ are discarded; reads always yield `0x00000000`.
-2. **Post/Pre-Increment Ordering**: For `LD32 Rr, (Rl++)`, the initial address in $Rl$ is accessed first, and $Rl$ is incremented by 4 subsequently.
-3. **Interruptible Stalls & FIFO Blocking**: Operations waiting on empty FIFOs (`FIFO.R`) or full FIFOs (`FIFO.W`) stall the core and hold the Program Counter on the faulting instruction until the condition clears.
-4. **Hardware Alignment Traps**: Unaligned memory accesses (halfwords at odd bytes, words not aligned to 4 bytes) or odd $PC$ jump targets vector directly to Trap 14 (`0x00000480`) before committing state changes.
-5. **Direct Stride Exception Vectoring**: Reset, traps, and interrupts calculate branch targets directly via:
-   $$\text{Vector Target} = \text{TRAP\_TABLE\_BASE} + (\text{Vector Number} \times 64)$$
+| `s` | `[count]` | Step one cycle (or `count`). In a cluster, every core steps, and each core's PC is shown. |
+| `c` | — | Continue until a breakpoint on any core, every core stops, the cycle limit, or (in a cluster) a deadlock. Selects the core that hit the breakpoint. |
+| `b` | `<addr>` | Set a breakpoint on the selected core. |
+| `r` | — | Show the PC, cycles, `RBASE`, the 32 physical registers, the shadow bank, and `R0`–`R15`. |
+| `m` | `<addr> [count]` | Hex and ASCII dump of `count` bytes (default 16). Addresses in the shared window show shared memory. |
+| `w` | `<addr> <v> ...` | Write 32-bit words. |
+| `wh` | `<addr> <v> ...` | Write 16-bit halfwords. |
+| `wb` | `<addr> <v> ...` | Write bytes. |
+| `cores` | — | List the cores: PC, cycles, and `RUNNING`, `STALLED` (with the channel) or `HALTED`. |
+| `switch` | `<n>` | Select core `n` (its position, as `cores` lists it). |
+| `fifo` | — | The selected core's channels: entries, the head value, `EMPTY`/`FULL`, and where writes are routed. |
+| `help` | `[cmd]` | List the commands, or describe one. |
+| `q` | — | Quit. |

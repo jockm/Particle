@@ -24,7 +24,6 @@ particle/
 ├── Documentation/
 │   ├── action-language-guide.md       # Action language guide and reference
 │   ├── particle_spec.md               # Master architectural specification
-│   ├── particle_processor_architecture_specification.md  # Processor architecture specification
 │   ├── pasm_assembler.md              # Macro assembler documentation
 │   ├── particle_simulator_documentation.md  # Simulator & p4db debugger reference
 │   ├── act16_compiler.md              # Action systems language specification

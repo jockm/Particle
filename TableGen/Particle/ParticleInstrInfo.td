@@ -487,18 +487,18 @@ def XCHGMOST : FN<0xD2, (outs), (ins), "xchgmost", []>;
 def RBASEI   : FI8<0xD3, (outs), (ins uimm8:$imm), "rbase $imm", []>;
 def RBASER   : FR<0xD4, (outs), (ins GPR:$rr), "rbase $rr", []>;
 
-// FIFO opcode map follows psim.py (differs from the spec):
-//   E0 fifo.r Rr, chan      blocking read (stalls while empty)
-//   E1 fifo.w Rr, chan      write
-//   E4 fifo.stat Rr, Rl     status, channel in Rl
-//   E5 fifo.stat Rr, chan   status: [0]=empty [1]=full [15:8]=count
+// FIFO and mailbox opcode map (psim and the spec):
+//   E0 fifo.r Rr, Rl        blocking read, channel in Rl (stalls while empty)
+//   E1 fifo.w Rr, Rl        write, channel in Rl
+//   E4 fifo.stat Rr, Rl     status, channel in Rl: [0]=empty [1]=full [15:8]=count
+//   E5 mbox Rr, imm         raise trap imm on another core
 //   E6 fifo.tryr Rr, Rl     non-blocking read, channel in Rl; R14 <- 1 ok / 0
 //   E7 fifo.tryw Rr, Rl     non-blocking write, channel in Rl; R14 <- 1 ok / 0
 let mayLoad = 1, mayStore = 1 in {
-def FIFO_R     : FRI4<0xE0, (outs GPR:$rr), (ins uimm4:$imm), "fifo.r $rr, $imm", []>;
-def FIFO_W     : FRI4<0xE1, (outs), (ins GPR:$rr, uimm4:$imm), "fifo.w $rr, $imm", []>;
+def FIFO_R     : FRR<0xE0, (outs GPR:$rr), (ins GPR:$rl), "fifo.r $rr, $rl", []>;
+def FIFO_W     : FRR<0xE1, (outs), (ins GPR:$rr, GPR:$rl), "fifo.w $rr, $rl", []>;
 def FIFO_STATr : FRR<0xE4, (outs GPR:$rr), (ins GPR:$rl), "fifo.stat $rr, $rl", []>;
-def FIFO_STAT  : FRI4<0xE5, (outs GPR:$rr), (ins uimm4:$imm), "fifo.stat $rr, $imm", []>;
+def MBOX       : FRI4<0xE5, (outs), (ins GPR:$rr, uimm4:$imm), "mbox $rr, $imm", []>;
 let Defs = [R14] in {
 def FIFO_TRYR  : FRR<0xE6, (outs GPR:$rr), (ins GPR:$rl), "fifo.tryr $rr, $rl", []>;
 def FIFO_TRYW  : FRR<0xE7, (outs), (ins GPR:$rr, GPR:$rl), "fifo.tryw $rr, $rl", []>;

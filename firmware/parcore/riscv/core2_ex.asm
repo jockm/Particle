@@ -914,7 +914,7 @@ _do_xnor:
 
 _do_clz:
     LD      R15, R11
-    CLZ     R15
+    CLZ     R15, R15
     LOAD16  R14, _forward_to_mem
     JMP     R14, R0
 
@@ -924,7 +924,7 @@ _do_ctz:
     LD      R5, R11
     NOT     R5
     AND     R4, R5
-    CLZ     R4
+    CLZ     R4, R4
     LOAD16  R15, 32
     SUB     R15, R4
     LOAD16  R14, _forward_to_mem

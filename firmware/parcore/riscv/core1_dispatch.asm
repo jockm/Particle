@@ -27,7 +27,7 @@ _reset_vector:
 
 _dispatch_loop:
     ; Wait for incoming branch/flow micro-op header packet from Core 0
-    FIFO.R  R2, 0               ; R2 = [Opcode:31..24, Rd:23..16, Rs1:15..8, Rs2:7..0]
+    FIFO.R  R2, R0               ; R2 = [Opcode:31..24, Rd:23..16, Rs1:15..8, Rs2:7..0]
 
     ; Unpack Opcode (Bits 31..24)
     LD      R3, R2
@@ -53,10 +53,10 @@ _dispatch_loop:
     AND     R6, R14              ; R6 = Rs2 index / value
 
     ; Pop Payload 1 (Immediate / Offset)
-    FIFO.R  R7, 0               ; R7 = Imm32 / Offset
+    FIFO.R  R7, R0               ; R7 = Imm32 / Offset
 
     ; Pop Payload 2 (Current Guest PC)
-    FIFO.R  R8, 0               ; R8 = Current Guest PC
+    FIFO.R  R8, R0               ; R8 = Current Guest PC
 
     ; Route via Opcode Table Jump
     ; Opcode 1..8 mapped to dispatch table
@@ -120,7 +120,7 @@ _exec_bgeu:
 _branch_taken:
     LD      R11, R8
     ADD     R11, R7         ; Target PC = Current PC + Imm Offset
-    FIFO.W  R11, 1              ; Stream resolved PC back to Core 0
+    FIFO.W  R11, R1              ; Stream resolved PC back to Core 0
     MBOX    R11, 1              ; Strobe Core 0 with Trap Vector 1 (Branch Redirect)
     BBRA    _dispatch_loop
 
@@ -130,7 +130,7 @@ _branch_taken:
 _exec_jal:
     LD      R10, R8
     ADD     R10, 4          ; Link register Rd = PC + 4
-    FIFO.W  R10, 1              ; Commit writeback
+    FIFO.W  R10, R1              ; Commit writeback
     LD      R11, R8
     ADD     R11, R7         ; Target PC = Current PC + Imm Offset
     MBOX    R11, 1              ; Redirect Core 0
@@ -139,7 +139,7 @@ _exec_jal:
 _exec_jalr:
     LD      R10, R8
     ADD     R10, 4          ; Link register Rd = PC + 4
-    FIFO.W  R10, 1
+    FIFO.W  R10, R1
     LD      R11, R5
     ADD     R11, R7
     LOAD32  R14, 0xFFFFFFFE

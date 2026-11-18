@@ -77,6 +77,30 @@ class ParticleCore {
   bool _trapTaken = false;
   bool stalled = false;
 
+  /// The channel this core is waiting on while [stalled], for messages.
+  int? waitingChannel;
+
+  // ---------------- Multi-core (cluster) connections ----------------
+
+  /// The core's name in messages, set in a cluster.
+  String? label;
+
+  /// Where each local channel's writes go: another core's receive channel,
+  /// or null for this core's own channel (and the console on channel 0).
+  final List<(ParticleCore, int)?> txRoutes = List.filled(4, null);
+
+  /// Memory shared by every core of a cluster, at [sharedBase].
+  Uint8List? shared;
+  int sharedBase = 0;
+
+  /// Called when this core executes MBOX with vector Imm4; null when there
+  /// is no other core (MBOX does nothing).
+  void Function(int vector)? onMbox;
+
+  /// A trap another core raised with MBOX, taken before the next
+  /// instruction.
+  int? pendingTrap;
+
   ParticleCore({this.memSize = 0x20000, int numFifos = 4})
       : fifos = List.generate(numFifos, (_) => Queue<int>()),
         byteData = ByteData(memSize) {
@@ -95,6 +119,8 @@ class ParticleCore {
     halted = false;
     haltCode = null;
     stalled = false;
+    waitingChannel = null;
+    pendingTrap = null;
     for (final f in fifos) {
       f.clear();
     }
@@ -110,7 +136,7 @@ class ParticleCore {
     if (fromInstruction && trapIdx == 0 && exitOnReset) {
       final r1Hex = r[1].toRadixString(16).toUpperCase().padLeft(8, "0");
       final pcHex = ret.toRadixString(16).toUpperCase().padLeft(8, "0");
-      stdout.writeln("\n[SIM] Reset Trap 0 triggered at PC: 0x$pcHex (R1=0x$r1Hex, Cycles=$cycleCount)");
+      stdout.writeln("\n[SIM] ${label == null ? "" : "$label: "}Reset Trap 0 triggered at PC: 0x$pcHex (R1=0x$r1Hex, Cycles=$cycleCount)");
       halted = true;
       haltCode = 0;
       return;
@@ -118,7 +144,7 @@ class ParticleCore {
 
     if (fromInstruction && trapIdx == 15) {
       final pcHex = ret.toRadixString(16).toUpperCase().padLeft(8, "0");
-      stdout.writeln("\n[SIM] Out-of-Bounds / Sentinel Trap 15 triggered at PC: 0x$pcHex (Cycles=$cycleCount)");
+      stdout.writeln("\n[SIM] ${label == null ? "" : "$label: "}Out-of-Bounds / Sentinel Trap 15 triggered at PC: 0x$pcHex (Cycles=$cycleCount)");
       halted = true;
       haltCode = 15;
       return;
@@ -128,11 +154,26 @@ class ParticleCore {
     _trapTaken = true;
   }
 
+  /// The offset of [addr] in the shared window, or -1 outside it.
+  int _sharedOffset(int addr) {
+    final sh = shared;
+    if (sh == null) return -1;
+    final off = (addr & mask32) - sharedBase;
+    return (off >= 0 && off < sh.length) ? off : -1;
+  }
+
   int read8(int addr) {
+    final off = _sharedOffset(addr);
+    if (off >= 0) return shared![off];
     return mem[addr & (memSize - 1)];
   }
 
   void write8(int addr, int val) {
+    final off = _sharedOffset(addr);
+    if (off >= 0) {
+      shared![off] = val & 0xFF;
+      return;
+    }
     mem[addr & (memSize - 1)] = val & 0xFF;
   }
 
@@ -141,6 +182,7 @@ class ParticleCore {
       triggerTrap(14, pc);
       return 0;
     }
+    if (_sharedOffset(addr) >= 0) return read8(addr) | (read8(addr + 1) << 8);
     final a = addr & (memSize - 1);
     return mem[a] | (mem[(a + 1) & (memSize - 1)] << 8);
   }
@@ -148,6 +190,11 @@ class ParticleCore {
   void write16(int addr, int val) {
     if ((addr & 1) != 0) {
       triggerTrap(14, pc);
+      return;
+    }
+    if (_sharedOffset(addr) >= 0) {
+      write8(addr, val);
+      write8(addr + 1, val >> 8);
       return;
     }
     final a = addr & (memSize - 1);
@@ -159,6 +206,9 @@ class ParticleCore {
     if ((addr & 3) != 0) {
       triggerTrap(14, pc);
       return 0;
+    }
+    if (_sharedOffset(addr) >= 0) {
+      return read8(addr) | (read8(addr + 1) << 8) | (read8(addr + 2) << 16) | (read8(addr + 3) << 24);
     }
     final a = addr & (memSize - 1);
     return mem[a] |
@@ -172,6 +222,12 @@ class ParticleCore {
       triggerTrap(14, pc);
       return;
     }
+    if (_sharedOffset(addr) >= 0) {
+      for (var i = 0; i < 4; i++) {
+        write8(addr + i, val >> (8 * i));
+      }
+      return;
+    }
     final a = addr & (memSize - 1);
     mem[a] = val & 0xFF;
     mem[(a + 1) & (memSize - 1)] = (val >> 8) & 0xFF;
@@ -179,11 +235,31 @@ class ParticleCore {
     mem[(a + 3) & (memSize - 1)] = (val >> 24) & 0xFF;
   }
 
+  /// The queue a write to local channel [fid] goes into: the routed core's
+  /// receive channel, or this core's own.
+  Queue<int> _txQueue(int fid) {
+    final route = fid < txRoutes.length ? txRoutes[fid] : null;
+    return route == null ? fifos[fid] : route.$1.fifos[route.$2];
+  }
+
   bool step() {
     if (halted || pc >= memSize) {
       if (!halted) haltCode = exitPcOutOfMemory;
       halted = true;
       return false;
+    }
+
+    // A trap raised by another core's MBOX: a stalled instruction is
+    // abandoned, and runs again when the handler returns
+    final pending = pendingTrap;
+    if (pending != null) {
+      pendingTrap = null;
+      stalled = false;
+      waitingChannel = null;
+      triggerTrap(pending, pc);
+      _trapTaken = false;
+      cycleCount++;
+      return true;
     }
 
     if ((pc & 1) != 0) {
@@ -194,6 +270,8 @@ class ParticleCore {
     }
 
     _trapTaken = false;
+    stalled = false;
+    waitingChannel = null;
 
     final inst = read16(pc);
     final opcode = (inst >> 8) & 0xFF;
@@ -650,25 +728,33 @@ class ParticleCore {
 
     // ---------------- Streaming FIFOs (0xE0 - 0xE7) ----------------
     } else if (opcode == 0xE0) {
-      final fid = imm4 % fifos.length;
+      final fid = r[rl] % fifos.length;
       if (fid == 0 && fifos[fid].isEmpty) {
         // Non-blocking poll of host stdin for Console RX
       }
       if (fifos[fid].isEmpty) {
-        return true; // Stall core on empty FIFO
+        // Stall on the empty channel: the PC stays here, and the cycle counts
+        stalled = true;
+        waitingChannel = fid;
+        cycleCount++;
+        return true;
       }
       r[rr] = fifos[fid].removeFirst();
     } else if (opcode == 0xE1) {
-      final fid = imm4 % fifos.length;
-      final val = r[rr] & 0xFF;
-      if (fid == 0) {
-        stdout.writeCharCode(val);
+      final fid = r[rl] % fifos.length;
+      final route = fid < txRoutes.length ? txRoutes[fid] : null;
+      if (fid == 0 && route == null) {
+        stdout.writeCharCode(r[rr] & 0xFF);
       }
-      if (fifos[fid].length < 256) {
-        fifos[fid].add(r[rr]);
+      final q = _txQueue(fid);
+      if (q.length < 256) {
+        q.add(r[rr]);
       }
-    } else if (opcode == 0xE4 || opcode == 0xE5) {
-      final fid = ((opcode == 0xE4) ? r[rl] : imm4) % fifos.length;
+    } else if (opcode == 0xE5) {
+      // MBOX: raise trap Imm4 on another core
+      onMbox?.call(imm4);
+    } else if (opcode == 0xE4) {
+      final fid = r[rl] % fifos.length;
       final emptyB = fifos[fid].isEmpty ? 1 : 0;
       final fullB = (fifos[fid].length >= 256) ? 2 : 0;
       r[rr] = (fifos[fid].length << 8) | fullB | emptyB;
@@ -682,8 +768,9 @@ class ParticleCore {
       }
     } else if (opcode == 0xE7) {
       final fid = r[rl] % fifos.length;
-      if (fifos[fid].length < 256) {
-        fifos[fid].add(r[rr]);
+      final q = _txQueue(fid);
+      if (q.length < 256) {
+        q.add(r[rr]);
         r[14] = 1;
       } else {
         r[14] = 0;

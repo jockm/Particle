@@ -3,7 +3,7 @@
 ## 1. Overview
 Particle is a high-efficiency 32-bit load/store RISC processor architecture utilizing compact 16-bit instructions (plus 32-bit two-word immediate load instructions `LDI` and `LDIS`), inspired by the Hitachi SH-2, ARM Thumb, and MiniRISC4 architectures. It is implemented in pure Intel ROHD (Rapid Open Hardware Development in Dart) without legacy Verilog codebases, synthesizing directly to SystemVerilog for modern FPGA platforms (such as Lattice ECP5 on the ULX3S).
 
-This revision of the specification is aligned with the reference simulator `psim.py`. Where the two disagree, the simulator's behaviour is normative.
+This revision of the specification is aligned with the reference simulator `psim`. Where the two disagree, the simulator's behaviour is normative.
 
 ---
 
@@ -29,6 +29,8 @@ This revision of the specification is aligned with the reference simulator `psim
 - **Immediates**: `Imm4` and `Imm8` are zero-extended unless an instruction is marked **(signed imm)**, in which case `Imm4` is sign-extended to $-8 \ldots 7$ and `Imm8` to $-128 \ldots 127$. The `-Imm4` / `-Imm8` forms encode a magnitude ($0 \ldots 15$ / $0 \ldots 255$) and use its negation.
 - **Alignment**: Instruction fetch requires an even PC. 16-bit memory accesses require 2-byte alignment and 32-bit accesses require 4-byte alignment; a misaligned access or fetch raises Vector 14. Byte accesses have no alignment requirement.
 - **Endianness**: Little-endian (instructions and data).
+- **Memory System**: Byte-addressed, unified code and data address space in on-chip true dual-port block RAM. Port A fetches instructions (driven by the PC); port B serves data loads and stores, memory-mapped I/O and atomic access (`TAS`).
+- **Multi-Core & Streaming**: Cores exchange data through point-to-point hardware FIFO channels (`FIFO.R`, `FIFO.W`, `FIFO.STAT`, `FIFO.TRYR`, `FIFO.TRYW`) and signal each other with `MBOX`, which raises a trap on the target core.
 
 ---
 
@@ -45,6 +47,8 @@ $$\text{Target} = \text{TRAP\_TABLE\_BASE} + (\text{Vector} \times 64)$$
 - Vector 15 (`0x000004C0`): Undefined / Illegal Opcode Decoded
 
 **Trap entry**: $R14 \leftarrow \text{return PC}$; $PC \leftarrow \text{Target}$. For `TRAP` instructions the return PC is the following instruction ($PC + 2$). For a misalignment fault the return PC is the address of the faulting instruction.
+
+**Interruptible stalls**: A trap raised by another core's `MBOX` is taken before the core's next instruction. If the core is stalled (on an empty FIFO, or in a multi-cycle divide), the stall is abandoned and the return PC is the address of the stalled instruction, so returning from the handler (`JMP R14, R0`) runs it again.
 
 ---
 
@@ -246,11 +250,11 @@ Displacements are unsigned halfword counts added to (forward) or subtracted from
 - `0xD4`: `RBASE Rr` — Set register bank window offset dynamically ($rbase \leftarrow Rr[4:0]$)
 
 FIFO channels are 256 entries deep. A channel number is taken modulo the number of implemented channels.
-- `0xE0`: `FIFO.R Rr, Chan` — Blocking read from channel `Chan` (Imm4); stalls until data is available
-- `0xE1`: `FIFO.W Rr, Chan` — Write `Rr` to channel `Chan` (Imm4); dropped if the channel is full
+- `0xE0`: `FIFO.R Rr, Rl` — Blocking read from channel `Rl` into `Rr`; stalls until data is available
+- `0xE1`: `FIFO.W Rr, Rl` — Write `Rr` to channel `Rl`; dropped if the channel is full
 - `0xE4`: `FIFO.STAT Rr, Rl` — Status of channel `Rl` into `Rr`
-- `0xE5`: `FIFO.STAT Rr, Chan` — Status of channel `Chan` (Imm4) into `Rr`
   - Status word: `bit[0]` = empty, `bit[1]` = full, `bits[16:8]` = current entry count
+- `0xE5`: `MBOX Rr, Imm4` — Signal another core: it takes trap vector `Imm4` (see §3, interruptible stalls). The two-core hardware signals the other core and does not use `Rr`; in `psim`, a cluster's configuration names each core's target.
 - `0xE6`: `FIFO.TRYR Rr, Rl` — Non-blocking read from channel `Rl`: if data, $Rr \leftarrow$ data and $R14 \leftarrow 1$; else $R14 \leftarrow 0$ ($Rr$ unchanged)
 - `0xE7`: `FIFO.TRYW Rr, Rl` — Non-blocking write of `Rr` to channel `Rl`: $R14 \leftarrow 1$ if accepted, $0$ if full
 
@@ -261,9 +265,11 @@ These behaviours are specific to the simulator and are not architectural:
 - Channel 0 is the console: `FIFO.W` to channel 0 prints `Rr[7:0]` to stdout, and `FIFO.R` on an empty channel 0 polls stdin.
 - A `TRAP 0` instruction ends the run (reporting `R1`), unless psim is given `--no-exit-on-reset`, in which case it jumps to the reset vector. A `TRAP 15` instruction ends the run as an out-of-bounds / sentinel trap. In the debugger (`--debug`) both stop at the debugger prompt instead.
 - Every other trap, including a misaligned access (Vector 14), goes to its vector as on hardware.
-- Execution stops if the PC leaves simulated memory (default 128 KiB, address-wrapped for data accesses), or after 10,000,000 cycles.
-- Exit code: 0 after `TRAP 0`, 15 after `TRAP 15` (1–14 are reserved for traps that may end a run in future), 16 for a simulator error (file not found, bad arguments), 17 when the cycle limit is reached, 18 when the PC runs past the end of memory.
+- Execution stops if the PC leaves simulated memory (default 128 KiB, address-wrapped for data accesses), or after 10,000,000 cycles (change it with `--max-cycles`).
+- Exit code: 0 after `TRAP 0`, 15 after `TRAP 15` (1–14 are reserved for traps that may end a run in future), 16 for a simulator error (file not found, bad arguments), 17 when the cycle limit is reached, 18 when the PC runs past the end of memory, 19 when a cluster deadlocks.
 - Opcodes not listed in this document execute as no-ops in the simulator; on hardware they raise Vector 15.
+- `psim -C <file.json>` runs several cores in lock step, with FIFO channels routed between cores, a shared memory window, and `MBOX` between cores (see the simulator documentation). With one core, `MBOX` does nothing.
+- A cluster run that can make no progress (every running core waiting on an empty FIFO) ends with exit code 19.
 
 ---
 
@@ -271,10 +277,14 @@ These behaviours are specific to the simulator and are not architectural:
 Added `LDI` (`0x07`) and `LDIS` (`0x08`) per Addendum 03:
 - §4 / §4.1: Documented 32-bit (2-word) instruction layout and semantics for `LDI Rl, Imm16` and `LDIS Rl, Imm16`.
 
-Aligned with `psim.py`:
+Aligned with `psim` (then `psim.py`):
 - §4.2: Memory opcode layout replaced. Pre-increment and post-decrement forms were added. The base+offset and SP+offset forms were removed.
 - §4.10: FIFO opcodes moved to `0xE4`–`0xE7`. Register-channel forms were added, and TRYR/TRYW now report status in R14.
 - §4.9: Register-displacement branches `0xB1`–`0xB3` / `0xC1`–`0xC3` were added. Displacements are now defined relative to the branch address.
 - §4.6: BEXTR is now a bit-field extract. CLZ and TAS are now fully specified. JTBL takes only `Rr`.
 - §4.3 / §4.5 / §4.7: Signed-immediate forms were marked. Divide-by-zero results were defined.
 - §3: Trap entry writes R14.
+
+Merged from the retired `particle_processor_architecture_specification.md`, and aligned with the hardware:
+- §2: Memory system and multi-core summary. §3: Interruptible stalls.
+- §4.10: `0xE5` is `MBOX Rr, Imm4`, as in the hardware; the immediate-channel `FIFO.STAT Rr, Chan` form was removed. `FIFO.R` and `FIFO.W` take the channel in a register (`Rl`), as in the hardware, instead of an immediate.

@@ -1314,14 +1314,17 @@ extension _Expressions on CodeGen {
       return;
     }
 
+    // FIFO.R and FIFO.W take the channel in a register, as TRYR does
     if (expr.name == 'readFifo') {
       final chan = _fifoChannel(expr);
-      emit('FIFO.R  R$targetReg, $chan');
+      emitImmediate(14, chan);
+      emit('FIFO.R  R$targetReg, R14', 'Blocking read from channel $chan');
       return;
     } else if (expr.name == 'writeFifo') {
       final chan = _fifoChannel(expr);
       genExpr(expr.args[1], 1);
-      emit('FIFO.W  R1, $chan');
+      emitImmediate(14, chan);
+      emit('FIFO.W  R1, R14', 'Write to channel $chan');
       return;
     } else if (expr.name == 'tryReadFifo') {
       // tryReadFifo(chan, x): if channel `chan` has data, x = data and the

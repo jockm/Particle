@@ -16,17 +16,17 @@ These files go in `llvm/lib/Target/Particle/`. They describe the whole Particle 
 
 Tested with `llvm-tblgen` 18.1.3 and the matching `llvm/include` headers. All 10 backends generate cleanly: register-info, instr-info, emitter, asm-writer, asm-matcher, disassembler, dag-isel, callingconv, subtarget and pseudo-lowering.
 
-- **Opcodes:** the opcode set matches psim.py exactly (diffed mechanically).
+- **Opcodes:** the opcode set matches psim exactly (diffed mechanically).
 - **Selection patterns:** the generated selector has 132 patterns.
 
 ## Source of truth
 
-Encodings and semantics follow **psim.py**. Every opcode it decodes is defined here, and nothing else (checked mechanically: 149 opcodes). Where psim.py and the markdown spec disagree, psim.py wins:
+Encodings and semantics follow **psim** (`psim.py` when this was written). Every opcode it decodes is defined here, and nothing else (checked mechanically: 149 opcodes). Where psim and the markdown spec disagreed, psim won:
 
 | Area | Markdown spec | psim.py (implemented) |
 |---|---|---|
 | Memory map (0xN0–0xN9) | Loads and stores interleave; base+offset and SP+offset forms | `+0` (Rl), `+1` (++Rl), `+2` (Rl++), `+3` (--Rl), `+4` (Rl--) loads; `+5…+9` the same for stores. No offset modes. |
-| FIFO (0xE0–0xE7) | E2 stat, E3 tryr, E4 tryw | E4 stat (chan in Rl), E5 stat (chan imm), E6 tryr and E7 tryw (chan in Rl, R14 ← 1 success / 0 fail) |
+| FIFO (0xE0–0xE7) | E2 stat, E3 tryr, E4 tryw | E4 stat, E6 tryr and E7 tryw (chan in Rl, R14 ← 1 success / 0 fail). E0 fifo.r and E1 fifo.w take the channel in Rl, and E5 is MBOX, as in the hardware (the spec has since been updated to match). |
 | 0xB1–B3, 0xC1–C3 | Not listed | Conditional branches with the displacement in Rl |
 | BEXTR | Single bit | Bit field: Rl[4:0] = position, Rl[9:5] = length |
 | Signed Imm4/Imm8 | Not stated | Sign-extended for SADD, SSUB, SDIV, SMOD, SMULH and SSLT (−8…7 and −128…127) |

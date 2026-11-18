@@ -72,11 +72,11 @@
       "patterns": [
         {
           "name": "keyword.control.branch.pasm",
-          "match": "(?i)\\b(FBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BRANCH|JMP|JUMP|RJUMP|JTBL|RCALL|CALL|RRET|RET|RETI|TRAP|FAST_ENTER_TRAP|FAST_EXIT_TRAP|HALT|RESET|WAIT|INTR)\\b"
+          "match": "(?i)\\b(FBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BRANCH|JMP|JUMP|RJUMP|JTBL|RCALL|RRET|TRAP|FAST_ENTER_TRAP|FAST_EXIT_TRAP)\\b"
         },
         {
           "name": "support.function.macro.pasm",
-          "match": "(?i)\\b(LOAD16|LOAD24|LOAD32|PUSH32|POP32|PUSH16|POP16|POP8)\\b"
+          "match": "(?i)\\b(LOAD16|LOAD24|LOAD32|PUSH32|POP32)\\b"
         },
         {
           "name": "keyword.operator.mnemonic.pasm",

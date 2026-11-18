@@ -66,7 +66,7 @@ MULTI_NAMES   := $(notdir $(patsubst %/,%,$(wildcard $(MULTI_ROOT)/*/)))
 MULTI_BINS    := $(patsubst %,$(BUILD_DIR)/%.bin,$(MULTI_NAMES))
 MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
-.PHONY: all setup test test-all test-particle test-parcore test-parcore-isa test-sim compiler-tests test-lint \
+.PHONY: all setup test test-all test-particle test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         firmware apps clean help
 
@@ -88,6 +88,7 @@ help:
 	@echo "  make test-parcore     - Run Parcore multi-core ROHD tests"
 	@echo "  make test-parcore-isa - Build and run official RISC-V ISA tests (rv32ui, rv32um, rv32uzbb)"
 	@echo "  make test-sim         - Run instruction simulator verification"
+	@echo "  make test-sim-cluster - Run the simulator's multi-core (cluster) tests"
 	@echo "  make compiler-tests   - Run Action compiler unit tests and all test suites in psim"
 	@echo "  make action           - Build the Action compiler ($(ACTION_BIN))"
 	@echo "  make action-lsp       - Build the Action language server ($(ACTION_LSP_BIN))"
@@ -144,7 +145,7 @@ generate-parcore: setup
 # Verification & Test Suites
 # ------------------------------------------------------------------------------
 
-test: test-particle test-parcore test-sim
+test: test-particle test-parcore test-sim test-sim-cluster
 	@$(DOT_CLEAN_CMD)
 
 test-particle: setup
@@ -174,6 +175,27 @@ test-sim: $(PSIM) $(BUILD_DIR)/branch_suite.bin
 	@echo "==> Running instruction-level simulation tests ($(PSIM))..."
 	$(PSIM) $(BUILD_DIR)/branch_suite.bin
 	@$(DOT_CLEAN_CMD)
+
+# Multi-core simulator tests: each cluster file in apps/asm/cluster runs its
+# programs (assembled into build/cluster) and must end with the exit code
+# listed here: 0 when every core ends with TRAP 0, 19 for a deadlock.
+CLUSTER_TESTS := stream:0 mbox:0 shared:0 deadlock:19
+
+test-sim-cluster: $(PSIM) $(PASM_BIN)
+	@echo "==> Running multi-core simulator tests..."
+	@mkdir -p $(BUILD_DIR)/cluster
+	@for f in apps/asm/cluster/*.asm; do \
+		$(PASM_BIN) "$$f" -I . -o $(BUILD_DIR)/cluster/$$(basename "$${f%.asm}").bin > /dev/null || exit 1; \
+	done
+	@failed=0; \
+	for t in $(CLUSTER_TESTS); do \
+		name=$${t%%:*}; want=$${t##*:}; \
+		$(PSIM) -C apps/asm/cluster/$$name.json --max-cycles 1000000 > $(BUILD_DIR)/cluster/$$name.out; got=$$?; \
+		if [ $$got -eq $$want ]; then echo "  [PASS] $$name (exit $$got)"; \
+		else echo "  [FAIL] $$name: exit $$got, expected $$want"; tail -5 $(BUILD_DIR)/cluster/$$name.out; failed=1; fi; \
+	done; \
+	if [ $$failed -ne 0 ]; then exit 1; fi
+	@echo "==> [PASS] All multi-core simulator tests passed."
 
 # Tests that must end in a trap other than trap 0. For now each must stop
 # with trap 15 at one of the compiler's checks: by default a bounds check;
@@ -326,6 +348,8 @@ LINT_PASS_SRCS := $(wildcard apps/asm/lint_passes/*.asm)
 
 test-lint: pasm-lint
 	@echo "==> Running pasm_lint test suite..."
+	@echo "  -> Checking that the linter and the assembler agree..."
+	@cd apps/tools/pasm_lint && $(DART) pub get > /dev/null && $(DART) test
 	@echo "  -> Validating production assembly sources (must pass)..."
 	@for f in apps/asm/*.asm $(LINT_PASS_SRCS); do \
 		$(PASM_LINT_BIN) "$$f" -I lib > /dev/null || { echo "[FAIL] Unexpected lint failure on valid file: $$f"; exit 1; }; \

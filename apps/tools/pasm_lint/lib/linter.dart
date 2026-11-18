@@ -96,31 +96,10 @@ const Set<String> imm4ArithLogic = {
   "SNE",
 };
 
-/// Instructions strictly expecting 0 operands.
-const Set<String> zeroOperandOps = {
-  "NOP", "HALT", "RESET", "WAIT", "INTR", "RET", "RETI", "RRET"
-};
 
-/// Single-register ALU / unary operations strictly expecting 1 operand.
-const Set<String> unaryRegisterOps = {
-  "REV32", "NEG", "NOT", "NEZ", "CLZ", "SEXT8", "SEXT16",
-  "FAST_ENTER_TRAP", "FAST_EXIT_TRAP",
-};
 
-/// Instructions where parenthesized indirect memory operands are forbidden.
-const Set<String> memIndirectDisallowed = {
-  "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR",
-  "LD", "LDI", "LDIS", "ADD", "SUB", "AND", "OR", "XOR", "SHIFTL", "SHIFTR", "ASHIFTR",
-  "ROTL", "ROTR", "MULL", "MULH", "SMULH", "MULHU", "MULHSU",
-  "REV32", "NEG", "NOT", "NEZ", "CLZ", "BEXTR", "SEXT8", "SEXT16",
-  "SLT", "SSLT", "SLE", "SSLE", "SEQ", "SNE", "BSET", "BCLR", "BINV", "BGET"
-};
 
-/// Memory store operations requiring parenthesized destination (ST* (Rd), Rs).
-const Set<String> storeOps = {"ST8", "ST16", "ST32"};
 
-/// Memory load/store operations supporting either LD* Rd, (Rs) or LD* (Rd), Rs.
-const Set<String> loadWidthOps = {"LD8", "LD16", "LD32"};
 
 /// Instructions whose first operand is a register they write (some also
 /// read it). LD and LD8/16/32 write their first operand only in the load
@@ -143,8 +122,8 @@ const Set<String> unconditionalTransfers = {
 /// Full canonical set of valid native Particle RISC mnemonics.
 const Set<String> allValidMnemonics = {
   // System & Control
-  "NOP", "HALT", "RESET", "WAIT", "INTR", "RET", "RETI", "TRAP",
-  "RCALL", "RRET", "BRANCH", "JUMP", "JMP", "RJUMP", "CALL",
+  "NOP", "TRAP",
+  "RCALL", "RRET", "BRANCH", "JUMP", "JMP", "RJUMP",
 
   // PC-Relative Branching
   "FBRA", "FBRA.Z", "FBRA.NZ", "FBRA.P", "FBRA.N",
@@ -152,7 +131,7 @@ const Set<String> allValidMnemonics = {
 
   // Multi-byte Pseudo-ops / Macros
   "LOAD16", "LOAD24", "LOAD32", "PUSH32", "POP32",
-  "PUSH4", "PUSH8", "PUSH16", "POP8", "POP16",
+  "PUSH4", "PUSH8",
   "FAST_ENTER_TRAP", "FAST_EXIT_TRAP",
 
   // Comparisons (Signed and Unsigned)
@@ -179,6 +158,147 @@ const Set<String> allValidMnemonics = {
 // -----------------------------------------------------------------------------
 // Helper Routines
 // -----------------------------------------------------------------------------
+
+/// The number of parameters of each macro found while linting, by its
+/// name in capitals.
+final Map<String, int> macroParamCounts = {};
+
+void _recordMacroParams(String line) {
+  final m = RegExp(r"^\s*\.macro\s+([A-Za-z0-9_\.]+)(.*)$", caseSensitive: false).firstMatch(line);
+  if (m == null) return;
+  final rest = m.group(2)!.trim();
+  macroParamCounts[m.group(1)!.toUpperCase()] =
+      rest.isEmpty ? 0 : rest.split(",").where((p) => p.trim().isNotEmpty).length;
+}
+
+/// The operand forms of each instruction, as the spec gives them. Each
+/// form lists its operands: `R` a register, `R14` register R14 only, `M` a
+/// memory operand such as `(R1)` or `(R1++)`, `(M)` the plain `(Rr)` only,
+/// and `V` a value (a number, label or expression), with `V:lo:hi` giving
+/// the range of a plain number. Kept separate from the assembler's own
+/// checks; a test checks the two agree.
+const Map<String, List<String>> instructionForms = {
+  "NOP": [""], "XCHGALL": [""], "XCHGMOST": [""],
+  "NEG": ["R"], "NOT": ["R"], "NEZ": ["R"], "SEXT8": ["R"], "SEXT16": ["R"],
+  "REV32": ["R"], "XCHG": ["R"], "JTBL": ["R"], "BRANCH": ["R"],
+  "TRAP": ["R", "V:0:15"], "RBASE": ["R", "V:0:31"],
+  "FBRA": ["V"], "BBRA": ["V"], "JUMP": ["V"],
+  "FBRA.Z": ["R,V"], "FBRA.N": ["R,V"], "FBRA.P": ["R,V"], "FBRA.NZ": ["R,V"],
+  "BBRA.Z": ["R,V"], "BBRA.N": ["R,V"], "BBRA.P": ["R,V"], "BBRA.NZ": ["R,V"],
+  "LD": ["R,R", "R14,V:-255:255", "R,V:-15:15"],
+  "PUSH4": ["R,V:0:15"], "PUSH8": ["R14,V:0:255"],
+  "LDI": ["R,V:0:65535"], "LDIS": ["R,V:-32768:65535"],
+  "LD8": ["R,M", "M,R"], "LD16": ["R,M", "M,R"], "LD32": ["R,M", "M,R"],
+  "ST8": ["M,R"], "ST16": ["M,R"], "ST32": ["M,R"],
+  "ADD": ["R,R", "R,V:0:15"], "SUB": ["R,R", "R,V:0:15"],
+  "DIV": ["R,R", "R,V:0:15"], "MOD": ["R,R", "R,V:0:15"],
+  "SADD": ["R,R", "R,V:-8:7"], "SSUB": ["R,R", "R,V:-8:7"],
+  "SDIV": ["R,R", "R,V:-8:7"], "SMOD": ["R,R", "R,V:-8:7"],
+  "AND": ["R,R", "R,V:0:15"], "OR": ["R,R", "R,V:0:15"], "XOR": ["R,R", "R,V:0:15"],
+  "SHIFTL": ["R,R", "R,V:0:15"], "SHIFTR": ["R,R", "R,V:0:15"],
+  "ASHIFTR": ["R,R", "R,V:0:15"], "ROTL": ["R,R", "R,V:0:15"], "ROTR": ["R,R", "R,V:0:15"],
+  "MULL": ["R,R", "R,V:0:15"], "MULH": ["R,R", "R,V:0:15"],
+  "SMULH": ["R,R", "R,V:-8:7"], "MULHSU": ["R,R", "R,V:0:15"],
+  "BEXTR": ["R,R"], "CLZ": ["R,R"],
+  "BSET": ["R,R", "R,V:0:15"], "BCLR": ["R,R", "R,V:0:15"],
+  "BINV": ["R,R", "R,V:0:15"], "BGET": ["R,R", "R,V:0:15"],
+  "TAS": ["(M),R"],
+  "SLT": ["R,R", "R14,V:-255:255", "R,V:-15:15"],
+  "SSLT": ["R,R", "R14,V:-255:127", "R,V:-15:7"],
+  "SEQ": ["R,R"], "SNE": ["R,R"], "SLE": ["R,R"], "SSLE": ["R,R"],
+  "JMP": ["R,R"], "RJUMP": ["R,R"],
+  "FIFO.R": ["R,R"], "FIFO.W": ["R,R"],
+  "FIFO.STAT": ["R,R"], "FIFO.TRYR": ["R,R"], "FIFO.TRYW": ["R,R"],
+  "MBOX": ["R,V:0:15"],
+};
+
+final _memOperand = RegExp(r"^\((\+\+|--)?\s*([A-Za-z0-9]+)\s*(\+\+|--)?\)$");
+final _registerToken = RegExp(r"(?<![A-Za-z0-9_.])(R1[0-5]|R[0-9]|SP)(?![A-Za-z0-9_.])", caseSensitive: false);
+
+/// The kind of operand [op]: "R" (a register), "M" (a memory operand),
+/// "(M)" (the plain memory operand `(Rr)`), or "V" (anything else).
+String _operandKind(String op) {
+  if (validRegisters.contains(op.toUpperCase())) return "R";
+  final m = _memOperand.firstMatch(op);
+  if (m != null && validRegisters.contains(m.group(2)!.toUpperCase())) {
+    return (m.group(1) == null && m.group(3) == null) ? "(M)" : "M";
+  }
+  return "V";
+}
+
+bool _kindFits(String want, String op) {
+  final kind = _operandKind(op);
+  if (want == "R") return kind == "R";
+  if (want == "R14") return kind == "R" && op.toUpperCase() == "R14";
+  if (want == "M") return kind == "M" || kind == "(M)";
+  if (want == "(M)") return kind == "(M)";
+  return kind == "V"; // V or V:lo:hi
+}
+
+String _describe(String want) => switch (want) {
+      "R" => "a register",
+      "R14" => "R14",
+      "M" => "a memory operand such as (Rr)",
+      "(M)" => "the memory operand (Rr)",
+      _ => "a value",
+    };
+
+/// Checks [ops] against the forms of [mnem], adding what is wrong to
+/// [errors].
+void checkOperands(String mnem, List<String> ops, int lno, List<LintMessage> errors) {
+  final forms = instructionForms[mnem];
+  if (forms == null) return;
+  if (ops.any((o) => o.isEmpty)) {
+    errors.add((lno, "syntax", "$mnem has an empty operand."));
+    return;
+  }
+  final parsed = [for (final f in forms) f.isEmpty ? <String>[] : f.split(",")];
+  final sameCount = [for (final f in parsed) if (f.length == ops.length) f];
+  if (sameCount.isEmpty) {
+    final counts = {for (final f in parsed) f.length}.toList()..sort();
+    final n = counts.join(" or ");
+    errors.add((lno, "syntax", "$mnem expects $n ${counts.length == 1 && counts.first == 1 ? "operand" : "operands"}, but got ${ops.length}."));
+    return;
+  }
+  // A value operand may not name a register (register names in an
+  // expression are an error)
+  for (final op in ops) {
+    if (_operandKind(op) == "V" && _registerToken.hasMatch(op)) {
+      final reg = _registerToken.firstMatch(op)!.group(0)!;
+      final mem = op.startsWith("(") ? "$mnem does not take a memory operand ('$op')." : "'$reg' is a register; a value is expected here.";
+      errors.add((lno, op.startsWith("(") ? "syntax" : "register", mem));
+      return;
+    }
+  }
+  final fitting = [
+    for (final f in sameCount)
+      if ([for (var i = 0; i < ops.length; i++) _kindFits(f[i].split(":")[0], ops[i])].every((x) => x)) f
+  ];
+  if (fitting.isEmpty) {
+    for (var i = 0; i < ops.length; i++) {
+      final wants = {for (final f in sameCount) f[i].split(":")[0]};
+      if (wants.any((w) => _kindFits(w, ops[i]))) continue;
+      final text = wants.map(_describe).toSet().join(" or ");
+      errors.add((lno, wants.contains("R") || wants.contains("R14") ? "register" : "syntax",
+          "$mnem operand ${i + 1} ('${ops[i]}') must be $text."));
+      return;
+    }
+    errors.add((lno, "syntax", "$mnem operands do not match any of its forms: ${forms.join(" | ")}."));
+    return;
+  }
+  // The range of a plain-number value, from the first form it fits
+  final form = fitting.first;
+  for (var i = 0; i < ops.length; i++) {
+    final parts = form[i].split(":");
+    if (parts.length != 3) continue;
+    final n = parseNumeric(ops[i]);
+    if (n == null) continue;
+    final lo = int.parse(parts[1]), hi = int.parse(parts[2]);
+    if (n < lo || n > hi) {
+      errors.add((lno, "range", "Immediate value $n out of range ($lo..$hi) for $mnem${form[0] == "R14" ? " R14" : ""}."));
+    }
+  }
+}
 
 /// An instruction's (or directive's) first word and its operands, split as
 /// the assembler splits them: the word up to the first space, then the
@@ -265,6 +385,7 @@ void scanMacrosFromLines(
     final mMacro = macroRegex.firstMatch(line);
     if (mMacro != null) {
       userMacros.add(mMacro.group(1)!.toUpperCase());
+      _recordMacroParams(line);
       continue;
     }
 
@@ -347,6 +468,7 @@ void scanMacrosFromFile(
     final mMacro = macroRegex.firstMatch(line);
     if (mMacro != null) {
       userMacros.add(mMacro.group(1)!.toUpperCase());
+      _recordMacroParams(line);
       continue;
     }
 
@@ -454,6 +576,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
 
   // Pre-scan all macros from in-memory lines and included files
   final userMacros = <String>{};
+  macroParamCounts.clear();
   scanMacrosFromLines(filepath, lines, incDirs, userMacros, <String>{});
 
   // Pass 1: Record all label positions and directive definitions
@@ -557,98 +680,19 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
       continue;
     }
 
-    // If it is an expanded macro, skip low-level native opcode constraints
+    // A macro call: check its number of arguments, then skip the native
+    // instruction checks
     if (userMacros.contains(mnem)) {
-      continue;
-    }
-
-    // 2. Validate Zero-Operand Instructions
-    if (zeroOperandOps.contains(mnem)) {
-      if (ops.isNotEmpty) {
-        errors.add((lno, "syntax", "$mnem takes 0 operands, but got ${ops.length}."));
+      final want = macroParamCounts[mnem];
+      if (want != null && ops.length != want) {
+        errors.add((lno, "syntax", "macro $mnemWord expects ${want == 1 ? "1 argument" : "$want arguments"}, got ${ops.length}."));
       }
       continue;
     }
 
-    // 3. Validate Single-Register ALU / Unary Operations
-    if (unaryRegisterOps.contains(mnem)) {
-      if (ops.length != 1) {
-        errors.add((lno, "syntax", "$mnem requires exactly 1 operand, but got ${ops.length}."));
-      } else {
-        final regUpper = ops[0].toUpperCase();
-        if (!validRegisters.contains(regUpper)) {
-          errors.add((lno, "register", "Invalid register operand '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
-        }
-      }
-      continue;
-    }
-
-    // 4. Validate Memory Stores: ST* (Rd), Rs
-    if (storeOps.contains(mnem)) {
-      if (ops.length != 2) {
-        errors.add((lno, "syntax", "$mnem expects 2 operands (e.g. $mnem (Rd), Rs), got ${ops.length}."));
-      } else {
-        if (!ops[0].startsWith("(") || !ops[0].endsWith(")")) {
-          errors.add((lno, "syntax", "$mnem destination must use parenthesized memory indirect syntax: $mnem (Rd), Rs."));
-        } else {
-          final baseReg = extractIndirectBaseReg(ops[0]);
-          if (!validRegisters.contains(baseReg)) {
-            errors.add((lno, "register", "Invalid register '$baseReg' in indirect operand '${ops[0]}'."));
-          }
-        }
-        final srcReg = ops[1].toUpperCase();
-        if (!validRegisters.contains(srcReg)) {
-          errors.add((lno, "register", "Invalid source register '${ops[1]}' for $mnem."));
-        }
-      }
-      continue;
-    }
-
-    // 5. Validate Memory Loads & Stores via LD8/LD16/LD32:
-    //    pasm supports both LD* Rd, (Rs) (load) and LD* (Rd), Rs (store / PUSH32 / POP32)
-    if (loadWidthOps.contains(mnem)) {
-      if (ops.length != 2) {
-        errors.add((lno, "syntax", "$mnem expects 2 operands (e.g. $mnem Rd, (Rs) or $mnem (Rd), Rs), got ${ops.length}."));
-      } else {
-        final leftIsMem = ops[0].startsWith("(") && ops[0].endsWith(")");
-        final rightIsMem = ops[1].startsWith("(") && ops[1].endsWith(")");
-
-        if (!leftIsMem && !rightIsMem) {
-          errors.add((lno, "syntax", "$mnem requires a parenthesized memory indirect operand: $mnem Rd, (Rs) or $mnem (Rd), Rs."));
-        } else if (leftIsMem && rightIsMem) {
-          errors.add((lno, "syntax", "$mnem cannot have two memory operands: ${ops[0]}, ${ops[1]}."));
-        } else if (rightIsMem) {
-          // Standard Load: LD* Rd, (Rs)
-          final destReg = ops[0].toUpperCase();
-          if (!validRegisters.contains(destReg)) {
-            errors.add((lno, "register", "Invalid destination register '${ops[0]}' for $mnem."));
-          }
-          final baseReg = extractIndirectBaseReg(ops[1]);
-          if (!validRegisters.contains(baseReg)) {
-            errors.add((lno, "register", "Invalid register '$baseReg' in indirect operand '${ops[1]}'."));
-          }
-        } else {
-          // Store Form via LD*: LD* (Rd), Rs (e.g. PUSH32 / POP32)
-          final baseReg = extractIndirectBaseReg(ops[0]);
-          if (!validRegisters.contains(baseReg)) {
-            errors.add((lno, "register", "Invalid register '$baseReg' in indirect operand '${ops[0]}'."));
-          }
-          final srcReg = ops[1].toUpperCase();
-          if (!validRegisters.contains(srcReg)) {
-            errors.add((lno, "register", "Invalid source register '${ops[1]}' for $mnem."));
-          }
-        }
-      }
-      continue;
-    }
-
-    // 5a. TRAP numbers: there are 16 trap vectors
-    if (mnem == "TRAP" && ops.length == 1) {
-      final n = parseNumeric(ops[0]);
-      if (n != null && (n < 0 || n > 15)) {
-        errors.add((lno, "range", "TRAP $n is out of range: trap numbers are 0..15."));
-      }
-    }
+    // 2. Operands: their number, kinds (register, memory operand or value)
+    // and the range of plain-number values, from [instructionForms]
+    checkOperands(mnem, ops, lno, errors);
 
     // 5b. R0 is hardwired to zero: writing it has no effect
     if (ops.isNotEmpty &&
@@ -664,106 +708,6 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
       final n = parseNumeric(ops[1]);
       if (n != null && n % 4 != 0) {
         errors.add((lno, "stack-misaligned", "$mnem ${ops[0]}, $n leaves the stack pointer misaligned; adjust it by a multiple of 4."));
-      }
-    }
-
-    // 6. Check for disallowed memory-indirect parentheses on native ALU/control ops
-    for (final op in ops) {
-      if (op.startsWith("(") && op.endsWith(")")) {
-        if (memIndirectDisallowed.contains(mnem)) {
-          errors.add((lno, "syntax", "Instruction '$mnem' does not accept indirect memory operand '$op'."));
-        }
-      }
-    }
-
-    // 7. Validate Register Names on General Operands
-    for (final op in ops) {
-      final upper = op.toUpperCase();
-      if (upper.startsWith("R") || upper == "SP") {
-        final cleanReg = upper.replaceAll(RegExp(r"[^A-Za-z0-9]"), "");
-        if (cleanReg.startsWith("R") && cleanReg != "RBASE") {
-          final regNum = int.tryParse(cleanReg.substring(1));
-          if (regNum != null && (regNum < 0 || regNum > 15)) {
-            errors.add((lno, "register", "Register identifier '$cleanReg' is out of range (allowed: r0..r15, sp)."));
-          }
-        }
-      }
-    }
-
-    // 8. Validate immediate shift and rotate limits (4-bit unsigned: 0..15)
-    if (imm4Shifts.contains(mnem)) {
-      if (ops.length == 2) {
-        final imm = parseNumeric(ops[1]);
-        if (imm != null && (imm < 0 || imm > 15)) {
-          errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for $mnem ${ops[0]}."));
-        }
-      } else if (ops.length > 2) {
-        errors.add((lno, "syntax", "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
-      } else if (ops.length < 2) {
-        errors.add((lno, "syntax", "$mnem requires 2 operands, but got ${ops.length}."));
-      }
-    }
-
-    // 9. Validate arithmetic / logic immediate bounds (4-bit unsigned: 0..15)
-    if (imm4ArithLogic.contains(mnem)) {
-      if (ops.length == 2) {
-        final imm = parseNumeric(ops[1]);
-        if (imm != null && (imm < 0 || imm > 15)) {
-          errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for $mnem ${ops[0]}."));
-        }
-      } else if (ops.length > 2) {
-        errors.add((lno, "syntax", "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
-      } else if (ops.length < 2) {
-        errors.add((lno, "syntax", "$mnem requires 2 operands, but got ${ops.length}."));
-      }
-    }
-
-    // 10. Validate LD immediate bounds:
-    //     LD R14, Imm8     -> 0..255 (or -255..0)
-    //     LD R0..R13, Imm4 -> 0..15
-    if (mnem == "LD") {
-      if (ops.length == 2) {
-        final destReg = ops[0].toUpperCase();
-        final imm = parseNumeric(ops[1]);
-        if (destReg == "R14") {
-          if (imm != null && (imm < -255 || imm > 255)) {
-            errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 8-bit unsigned range (0..255) for LD R14. Use LOAD16/LOAD32."));
-          }
-        } else {
-          if (imm != null && (imm < -15 || imm > 15)) {
-            errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for LD ${ops[0]}. Use LOAD16/LOAD32 or load via R14."));
-          }
-        }
-      } else if (ops.length > 2) {
-        errors.add((lno, "syntax", "LD is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
-      } else if (ops.length < 2) {
-        errors.add((lno, "syntax", "LD requires 2 operands, but got ${ops.length}."));
-      }
-    }
-
-    // 10a. Validate LDI / LDIS operand arity and 16-bit immediate bounds
-    if (mnem == "LDI" || mnem == "LDIS") {
-      if (ops.length != 2) {
-        errors.add((lno, "syntax", "$mnem expects 2 operands ($mnem Rl, <imm16>), but got ${ops.length}."));
-      } else {
-        final destReg = ops[0].toUpperCase();
-        if (!validRegisters.contains(destReg)) {
-          errors.add((lno, "register", "Invalid destination register '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
-        }
-        if (validRegisters.contains(ops[1].toUpperCase())) {
-          errors.add((lno, "syntax", "$mnem immediate operand cannot be a register ('${ops[1]}')."));
-        } else {
-          final imm = parseNumeric(ops[1]);
-          if (mnem == "LDI") {
-            if (imm != null && (imm < 0 || imm > 0xFFFF)) {
-              errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 16-bit unsigned range (0..65535) for LDI."));
-            }
-          } else {
-            if (imm != null && (imm < -32768 || imm > 0xFFFF)) {
-              errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 16-bit signed range (-32768..32767) for LDIS."));
-            }
-          }
-        }
       }
     }
 
@@ -830,6 +774,8 @@ const diagnosticCodes = {
   "r0-write", "stack-misaligned",
   // Warnings
   "external-call", "r14-clobbered", "misaligned", "stack-balance",
+  // Errors the assembler alone finds
+  "duplicate-symbol", "overlap",
 };
 
 /// The diagnostics hidden by comments:

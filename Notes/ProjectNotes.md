@@ -1,5 +1,9 @@
 # TODO
 
+- Unimplemented/Broken
+    - MULHU
+    - BEXTR. The spec’s change log says BEXTR is now a bit-field extract, and psim does that. The hardware still extracts a single bit.
+
 - Change Vector Stride to 8 instructions
     - 8 instructions is 16 bytes
     - vector table becomes 256 bytes

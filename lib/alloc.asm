@@ -13,6 +13,10 @@
 ;   offset +0: [next_free_chunk]             (32-bit)
 ; ==============================================================================
 
+; The allocator may follow data of any length (a program's strings), so its
+; code starts on an instruction boundary
+    .align 4
+
     .global _rt_alloc
     .global _rt_alloc_zero
     .global _rt_free

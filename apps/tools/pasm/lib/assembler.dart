@@ -211,6 +211,27 @@ class ParticleAssembler {
       final startPc = pc;
       final emittedBytes = <int>[];
 
+      /// Writes byte [b] at the PC; an address already written is an error.
+      void emit(int b) {
+        if (binaryData.containsKey(pc)) {
+          throw AssemblerError(
+              'overlaps bytes already emitted at 0x${pc.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+              fname, lno, 'overlap');
+        }
+        binaryData[pc] = b;
+        emittedBytes.add(b);
+        pc += 1;
+      }
+
+      /// [expr] as a value from [lo] to [hi], for directive [d].
+      int dataValue(String expr, int lo, int hi, String d) {
+        final v = prep.parseExpr(expr, symbols);
+        if (v < lo || v > hi) {
+          throw AssemblerError('$d value $v out of range ($lo..$hi)', fname, lno, 'range');
+        }
+        return v;
+      }
+
       // An error is recorded and the line takes the room pass 1 gave it,
       // so the lines after it keep their addresses
       try {
@@ -228,61 +249,48 @@ class ParticleAssembler {
             if (rem != 0) {
               final pad = boundary - rem;
               for (int i = 0; i < pad; i++) {
-                binaryData[pc] = 0;
-                emittedBytes.add(0);
-                pc += 1;
+                emit(0);
               }
             }
           } else if (d == '.byte') {
             for (final b in arg.split(',')) {
-              final v = prep.parseExpr(b, symbols) & 0xFF;
-              binaryData[pc] = v;
-              emittedBytes.add(v);
-              pc += 1;
+              emit(dataValue(b, -128, 255, '.byte') & 0xFF);
             }
           } else if (d == '.half') {
             for (final h in arg.split(',')) {
-              final v = prep.parseExpr(h, symbols) & 0xFFFF;
-              binaryData[pc] = v & 0xFF;
-              binaryData[pc + 1] = (v >> 8) & 0xFF;
-              emittedBytes.addAll([v & 0xFF, (v >> 8) & 0xFF]);
-              pc += 2;
+              final v = dataValue(h, -32768, 65535, '.half') & 0xFFFF;
+              emit(v & 0xFF);
+              emit((v >> 8) & 0xFF);
             }
           } else if (d == '.word') {
             for (final w in arg.split(',')) {
-              final v = prep.parseExpr(w, symbols) & 0xFFFFFFFF;
+              final v = dataValue(w, -0x80000000, 0xFFFFFFFF, '.word') & 0xFFFFFFFF;
               for (int i = 0; i < 4; i++) {
-                final b = (v >> (i * 8)) & 0xFF;
-                binaryData[pc + i] = b;
-                emittedBytes.add(b);
+                emit((v >> (i * 8)) & 0xFF);
               }
-              pc += 4;
             }
           } else if (d == '.asciz' || d == '.string') {
             final m = RegExp(r'"(.*)"').firstMatch(arg);
             final rawStr = m != null ? m.group(1)! : '';
             final s = _unescapeAsciz(rawStr);
             for (final ch in s) {
-              binaryData[pc] = ch;
-              emittedBytes.add(ch);
-              pc += 1;
+              emit(ch);
             }
-            binaryData[pc] = 0;
-            emittedBytes.add(0);
-            pc += 1;
+            emit(0);
           }
         } else {
+          if (pc.isOdd) {
+            throw AssemblerError(
+                'instruction at odd address 0x${pc.toRadixString(16).toUpperCase().padLeft(8, '0')}',
+                fname, lno, 'misaligned');
+          }
           final isJump = line.split(RegExp(r'\s+'))[0].toUpperCase() == 'JUMP';
           final words = isJump
               ? _encodeJump(line, pc, _jumpSizes[index] ?? 2, fname, lno)
               : encodeInstructionWords(line, pc, fname, lno);
           for (final w in words) {
-            final b0 = w & 0xFF;
-            final b1 = (w >> 8) & 0xFF;
-            binaryData[pc] = b0;
-            binaryData[pc + 1] = b1;
-            emittedBytes.addAll([b0, b1]);
-            pc += 2;
+            emit(w & 0xFF);
+            emit((w >> 8) & 0xFF);
           }
         }
       } on AssemblerError catch (e) {
@@ -339,6 +347,7 @@ class ParticleAssembler {
   int _pass1(List<SourceLine> processedLines, Map<int, int> jumpAddrs) {
     pc = 0x00000100;
     var imageEnd = pc;
+    final definedAt = <String, (String, int)>{};
     for (var index = 0; index < processedLines.length; index++) {
       final entry = processedLines[index];
       var line = entry.$3;
@@ -355,6 +364,18 @@ class ParticleAssembler {
                 entry.$1,
                 entry.$2, 'reserved-name');
           }
+          if (regMap.containsKey(labelPart.toLowerCase())) {
+            throw AssemblerError(
+                "'$labelPart' is a register name and cannot be used as a label",
+                entry.$1, entry.$2, 'reserved-name');
+          }
+          final earlier = definedAt[labelPart];
+          if (earlier != null) {
+            throw AssemblerError(
+                "label '$labelPart' is already defined at ${earlier.$1.split(RegExp(r'[/\\\\]')).last}:${earlier.$2}",
+                entry.$1, entry.$2, 'duplicate-symbol');
+          }
+          definedAt[labelPart] = (entry.$1, entry.$2);
           symbols[labelPart] = pc;
         }
         line = rest;
@@ -373,6 +394,9 @@ class ParticleAssembler {
           pc = prep.parseExpr(arg, symbols);
         } else if (d == '.align') {
           final boundary = prep.parseExpr(arg, symbols);
+          if (boundary < 1) {
+            throw AssemblerError('.align needs a positive boundary, not $boundary', entry.$1, entry.$2, 'range');
+          }
           final rem = pc % boundary;
           if (rem != 0) {
             pc += (boundary - rem);
@@ -388,6 +412,8 @@ class ParticleAssembler {
           final rawStr = m != null ? m.group(1)! : '';
           final decoded = _unescapeAsciz(rawStr);
           pc += decoded.length + 1; // null terminator byte
+        } else if (d != '.org' && !ignoredDirectives.contains(d)) {
+          throw AssemblerError("unknown directive '${parts[0]}'", entry.$1, entry.$2);
         }
       } else {
         final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
@@ -502,6 +528,33 @@ class ParticleAssembler {
     return out;
   }
 
+  /// Directives accepted and ignored: `.global` names a symbol other files
+  /// use (every label is visible already), `.data` marks where data starts.
+  static const ignoredDirectives = {'.global', '.data'};
+
+  /// The number of operands of each instruction (LDI, LDIS and JUMP are
+  /// checked where they are encoded).
+  static const Map<String, int> operandCounts = {
+    'NOP': 0, 'XCHGALL': 0, 'XCHGMOST': 0,
+    'NEG': 1, 'NOT': 1, 'NEZ': 1, 'SEXT8': 1, 'SEXT16': 1, 'REV32': 1,
+    'XCHG': 1, 'JTBL': 1, 'BRANCH': 1, 'TRAP': 1, 'RBASE': 1,
+    'FBRA': 1, 'BBRA': 1,
+    'LD': 2, 'PUSH4': 2, 'PUSH8': 2,
+    'LD8': 2, 'LD16': 2, 'LD32': 2, 'ST8': 2, 'ST16': 2, 'ST32': 2,
+    'ADD': 2, 'SUB': 2, 'DIV': 2, 'MOD': 2,
+    'SADD': 2, 'SSUB': 2, 'SDIV': 2, 'SMOD': 2,
+    'AND': 2, 'OR': 2, 'XOR': 2,
+    'SHIFTL': 2, 'SHIFTR': 2, 'ASHIFTR': 2, 'ROTL': 2, 'ROTR': 2,
+    'MULL': 2, 'MULH': 2, 'SMULH': 2, 'MULHSU': 2,
+    'BEXTR': 2, 'CLZ': 2, 'BSET': 2, 'BCLR': 2, 'BINV': 2, 'BGET': 2,
+    'TAS': 2, 'SLT': 2, 'SSLT': 2, 'SEQ': 2, 'SNE': 2, 'SLE': 2, 'SSLE': 2,
+    'JMP': 2, 'RJUMP': 2,
+    'FBRA.Z': 2, 'FBRA.N': 2, 'FBRA.P': 2, 'FBRA.NZ': 2,
+    'BBRA.Z': 2, 'BBRA.N': 2, 'BBRA.P': 2, 'BBRA.NZ': 2,
+    'FIFO.R': 2, 'FIFO.W': 2, 'FIFO.STAT': 2, 'FIFO.TRYR': 2, 'FIFO.TRYW': 2,
+    'MBOX': 2,
+  };
+
   /// Encodes an instruction into one or two 16-bit machine words (little-endian).
   List<int> encodeInstructionWords(
       String line, int curPc, String fname, int lno) {
@@ -563,7 +616,33 @@ class ParticleAssembler {
       if (idx >= ops.length)
         throw AssemblerError(
             'Missing immediate or label operand ${idx + 1}', fname, lno);
+      if (ops[idx].startsWith('(') && parseMemOperand(ops[idx], fname, lno) != null) {
+        throw AssemblerError(
+            "$mnem does not take a memory operand ('${ops[idx]}')", fname, lno);
+      }
       return prep.parseExpr(ops[idx], symbols);
+    }
+
+    /// Operand [idx] as a value from [lo] to [hi].
+    int getImm(int idx, int lo, int hi, [String what = 'Immediate value']) {
+      final v = getV(idx);
+      if (v < lo || v > hi) {
+        throw AssemblerError(
+            '$what $v out of range ($lo..$hi) for $mnem', fname, lno, 'range');
+      }
+      return v;
+    }
+
+    /// Whether operand [idx] is a register.
+    bool isReg(int idx) => regMap.containsKey(ops[idx].trim().toLowerCase());
+
+    if (ops.any((o) => o.isEmpty)) {
+      throw AssemblerError('$mnem has an empty operand', fname, lno);
+    }
+    final counts = operandCounts[mnem];
+    if (counts != null && counts != ops.length) {
+      throw AssemblerError(
+          '$mnem expects $counts ${counts == 1 ? 'operand' : 'operands'}', fname, lno);
     }
 
     // -------------------------------------------------------------------------
@@ -658,17 +737,24 @@ class ParticleAssembler {
         return (baseOp << 8) | (rr << 4) | rl;
       } catch (_) {
         final val = getV(1);
+        // SSLT's positive immediates are signed fields: 0..7 (Imm4) and
+        // 0..127 (Imm8); its negative forms take -15..-1 and -255..-1
+        final maxPos4 = mnem == 'SLT' ? 15 : 7;
+        final maxPos8 = mnem == 'SLT' ? 255 : 127;
         if (rr == 14) {
-          if (val >= 0 && val <= 255) return ((baseOp + 3) << 8) | (val & 0xFF);
+          if (val >= 0 && val <= maxPos8) return ((baseOp + 3) << 8) | (val & 0xFF);
           if (val >= -255 && val < 0)
             return ((baseOp + 4) << 8) | ((-val) & 0xFF);
+          throw AssemblerError(
+              'Immediate value $val out of range (-255..$maxPos8) for $mnem R14',
+              fname, lno, 'range');
         }
-        if (val >= 0 && val <= 15)
+        if (val >= 0 && val <= maxPos4)
           return ((baseOp + 1) << 8) | (rr << 4) | (val & 0x0F);
         if (val >= -15 && val < 0)
           return ((baseOp + 2) << 8) | (rr << 4) | ((-val) & 0x0F);
         throw AssemblerError(
-            'Immediate value $val out of range for $mnem', fname, lno, 'range');
+            'Immediate value $val out of range (-15..$maxPos4) for $mnem', fname, lno, 'range');
       }
     }
 
@@ -697,6 +783,10 @@ class ParticleAssembler {
           'post_dec': 4
         };
 
+        if (memRight != null && mnem.startsWith('ST')) {
+          throw AssemblerError(
+              '$mnem stores a register to memory: $mnem (Rr), Rl', fname, lno);
+        }
         if (memRight != null) {
           final rr = parseReg(ops[0], fname, lno);
           final rl = memRight.$1;
@@ -747,13 +837,15 @@ class ParticleAssembler {
 
     if (mnem == 'PUSH4') {
       final rr = getR(0);
-      final v = getV(1);
+      final v = getImm(1, 0, 15);
       return (0x05 << 8) | (rr << 4) | (v & 0x0F);
     }
 
     if (mnem == 'PUSH8') {
-      final rr = getR(0);
-      final v = getV(1);
+      if (getR(0) != 14) {
+        throw AssemblerError('PUSH8 works on R14: PUSH8 R14, <imm8>', fname, lno, 'register');
+      }
+      final v = getImm(1, 0, 255);
       return (0x06 << 8) | (v & 0xFF);
     }
 
@@ -772,13 +864,9 @@ class ParticleAssembler {
         final rl = parseReg(ops[1], fname, lno);
         return (baseLut[mnem]! << 8) | (rr << 4) | rl;
       } catch (_) {
-        final v = getV(1);
-        if (v < 0 || v > 15) {
-          throw AssemblerError(
-              'Immediate multiplier $v out of 4-bit unsigned range (0-15)',
-              fname,
-              lno, 'range');
-        }
+        final v = mnem == 'SMULH'
+            ? getImm(1, -8, 7, 'Immediate multiplier')
+            : getImm(1, 0, 15, 'Immediate multiplier');
         return ((baseLut[mnem]! + 4) << 8) | (rr << 4) | (v & 0x0F);
       }
     }
@@ -839,7 +927,8 @@ class ParticleAssembler {
         final rl = parseReg(ops[1], fname, lno);
         return (rOp << 8) | (rr << 4) | rl;
       } catch (_) {
-        final v = getV(1);
+        const signedOps = {'SADD', 'SSUB', 'SDIV', 'SMOD'};
+        final v = signedOps.contains(mnem) ? getImm(1, -8, 7) : getImm(1, 0, 15);
         return (immOp << 8) | (rr << 4) | (v & 0x0F);
       }
     }
@@ -848,14 +937,14 @@ class ParticleAssembler {
     if (mnem == 'NEZ') return (0x73 << 8) | (getR(0) << 4);
     if (mnem == 'SEXT8') return (0x61 << 8) | (getR(0) << 4);
     if (mnem == 'SEXT16') return (0x6A << 8) | (getR(0) << 4);
-    if (mnem == 'CLZ') return (0x82 << 8) | (getR(0) << 4);
+    if (mnem == 'CLZ') return (0x82 << 8) | (getR(0) << 4) | getR(1);
 
     if (mnem == 'TAS') {
       if (ops.length != 2)
         throw AssemblerError(
             'TAS expects 2 operands: TAS (Rr), Rl', fname, lno);
       final memTarget = parseMemOperand(ops[0], fname, lno);
-      if (memTarget == null)
+      if (memTarget == null || memTarget.$2 != 'standard')
         throw AssemblerError('TAS operand 1 must be (Rr)', fname, lno);
       final rr = memTarget.$1;
       final rl = parseReg(ops[1], fname, lno);
@@ -877,15 +966,11 @@ class ParticleAssembler {
     // Control Flow: JMP, RJUMP, TRAP
     // -------------------------------------------------------------------------
     if (mnem == 'JMP') {
-      final rr = getR(0);
-      final rl = ops.length > 1 ? getR(1) : 0;
-      return (0xA0 << 8) | (rr << 4) | rl;
+      return (0xA0 << 8) | (getR(0) << 4) | getR(1);
     }
 
     if (mnem == 'RJUMP') {
-      final rr = getR(0);
-      final rl = ops.length > 1 ? getR(1) : 0;
-      return (0xA1 << 8) | (rr << 4) | rl;
+      return (0xA1 << 8) | (getR(0) << 4) | getR(1);
     }
 
     if (mnem == 'TRAP') {
@@ -893,7 +978,7 @@ class ParticleAssembler {
         final rr = parseReg(ops[0], fname, lno);
         return (0xA2 << 8) | (rr << 4);
       } catch (_) {
-        final v = getV(0);
+        final v = getImm(0, 0, 15, 'Trap number');
         return (0xA3 << 8) | (v & 0x0F);
       }
     }
@@ -911,7 +996,7 @@ class ParticleAssembler {
         final rr = getR(0);
         return (0xD4 << 8) | ((rr & 0x0F) << 4);
       } else {
-        final imm = getV(0);
+        final imm = getImm(0, 0, 31, 'Window offset');
         return (0xD3 << 8) | (imm & 0xFF);
       }
     }
@@ -920,57 +1005,53 @@ class ParticleAssembler {
     // Streaming FIFOs & Inter-core Mailbox
     // -------------------------------------------------------------------------
     if (mnem == 'FIFO.W') {
-      final rr = getR(0);
-      int chan = 0;
-      if (ops.length > 1) {
-        final op1 = ops[1].trim().toLowerCase();
-        chan = regMap.containsKey(op1)
-            ? regMap[op1]!
-            : (int.tryParse(ops[1]) ?? 0);
+      if (!isReg(1)) {
+        throw AssemblerError(
+            'FIFO.W takes the channel in a register: FIFO.W Rr, Rl', fname, lno, 'register');
       }
-      return (0xE1 << 8) | (rr << 4) | (chan & 0x0F);
+      return (0xE1 << 8) | (getR(0) << 4) | getR(1);
     }
 
     if (mnem == 'FIFO.R') {
-      final rr = getR(0);
-      int chan = 0;
-      if (ops.length > 1) {
-        final op1 = ops[1].trim().toLowerCase();
-        chan = regMap.containsKey(op1)
-            ? regMap[op1]!
-            : (int.tryParse(ops[1]) ?? 0);
+      if (!isReg(1)) {
+        throw AssemblerError(
+            'FIFO.R takes the channel in a register: FIFO.R Rr, Rl', fname, lno, 'register');
       }
-      return (0xE0 << 8) | (rr << 4) | (chan & 0x0F);
+      return (0xE0 << 8) | (getR(0) << 4) | getR(1);
     }
 
     // Register-channel FIFO forms use the opcodes of spec 4.10
     if (mnem == 'FIFO.STAT') {
-      final rr = getR(0);
-      final rl = ops.length > 1 ? parseReg(ops[1], fname, lno) : 0;
-      return (0xE4 << 8) | (rr << 4) | rl;
+      if (!isReg(1)) {
+        throw AssemblerError(
+            'FIFO.STAT takes the channel in a register: FIFO.STAT Rr, Rl', fname, lno, 'register');
+      }
+      return (0xE4 << 8) | (getR(0) << 4) | getR(1);
     }
 
     if (mnem == 'FIFO.TRYR') {
-      final rr = getR(0);
-      final rl = ops.length > 1 ? parseReg(ops[1], fname, lno) : 0;
-      return (0xE6 << 8) | (rr << 4) | rl;
+      if (!isReg(1)) {
+        throw AssemblerError(
+            'FIFO.TRYR takes the channel in a register: FIFO.TRYR Rr, Rl', fname, lno, 'register');
+      }
+      return (0xE6 << 8) | (getR(0) << 4) | getR(1);
     }
 
     if (mnem == 'FIFO.TRYW') {
-      final rr = getR(0);
-      final rl = ops.length > 1 ? parseReg(ops[1], fname, lno) : 0;
-      return (0xE7 << 8) | (rr << 4) | rl;
+      if (!isReg(1)) {
+        throw AssemblerError(
+            'FIFO.TRYW takes the channel in a register: FIFO.TRYW Rr, Rl', fname, lno, 'register');
+      }
+      return (0xE7 << 8) | (getR(0) << 4) | getR(1);
     }
 
     if (mnem == 'MBOX') {
       final rr = getR(0);
-      int vec = 0;
-      if (ops.length > 1) {
-        final op1 = ops[1].trim().toLowerCase();
-        vec = regMap.containsKey(op1)
-            ? parseReg(ops[1], fname, lno)
-            : (int.tryParse(ops[1]) ?? 0);
+      if (isReg(1)) {
+        throw AssemblerError(
+            'MBOX takes a vector number (0..15), not a register: MBOX Rr, <imm4>', fname, lno, 'register');
       }
+      final vec = getImm(1, 0, 15, 'Vector');
       return (0xE5 << 8) | (rr << 4) | (vec & 0x0F);
     }
 
