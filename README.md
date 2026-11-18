@@ -8,7 +8,7 @@
 
 * **Native 32-Bit Datapath**: Registers ($R0$–$R15$), arithmetic units, address space, and internal buses operate at 32-bit width.
 * **Compact 16-Bit Instruction Format**: Instructions are strictly 16 bits wide, fetched sequentially over a dedicated synchronous bus without slot packing.
-* **Register File & Hardware Shadow Bank**: 16 registers ($R0$ hardwired to 0, $R1$–$R15$ general purpose) paired with a dedicated hardware shadow bank enabling single-cycle, zero-memory-spill context switches via `XCHG`, `XCHGALL`, and `XCHGMOST`.
+* **Register File & Hardware Shadow Bank**: 32 registers ($R0$ hardwired to 0, $R1$–$R15$ general purpose) paired with a dedicated hardware shadow bank enabling single-cycle, zero-memory-spill context switches via `XCHG`, `XCHGALL`, and `XCHGMOST`. Sixteen registers are visible at a time, with *Rbase* used to move the register window.
 * **Direct Stride Exception Vectoring**: Base address `0x00000100` with fixed 64-byte (32-instruction) strides per vector slot, jumping directly into vector logic without indirect pointer tables.
 * **Unified Dual-Port Memory System**: Byte-addressed memory mapped to on-chip True Dual-Port Block RAM (Port A: synchronous instruction fetch; Port B: data read/write, MMIO, and atomic access).
 * **Multi-Core & Hardware Streaming**: Built-in point-to-point streaming FIFO channels (`FIFO.R`, `FIFO.W`, `FIFO.STAT`, `FIFO.TRYR`, `FIFO.TRYW`) and cross-core hardware strobe signaling (`MBOX`).
@@ -153,3 +153,16 @@ make generate-particle                 # emits synthesizable particle_top.sv
 
 Both fetch the hardware's Dart dependencies first (`make setup`). `make test`
 and `make generate` cover Parcore as well.
+
+## How LLMs Are Used in This Project.
+Agentic development is not done in this project, however it does make use of LLM's in a Spec -> Revise -> Generate -> Test loop.  Normally for specific features or goals.  Each step is reviewed by a human, as is the output.
+
+In addition human hands have revised code and documents directly and created original code.
+
+Decisions and the direction of development are always made by a human, all research and references are always checked.
+
+Multiple LLMs have been used:
+- Google Gemini
+- Antropic Claude
+- Microsoft Copilot
+
