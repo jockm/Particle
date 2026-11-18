@@ -24,6 +24,40 @@ A listing, with each line's address, bytes and source line number and a symbol t
 
 ---
 
+## Source Format
+
+Each line holds at most one label, instruction, directive or macro call; `;` starts a comment. A label is a name followed by `:` (`loop:`), and may share its line with an instruction. Mnemonics, directives and register names are not case-sensitive; labels and symbols are. Operands are separated by commas.
+
+### Registers
+
+`R0` through `R15`, or `SP` for `R15`. `R0` always reads zero. For their roles in the calling convention, see `memory_map_and_conventions.md`.
+
+### Memory operands
+
+Loads, stores (`LD8`/`LD16`/`LD32`, `ST8`/`ST16`/`ST32`) and `TAS` address memory through a register in parentheses:
+
+| Operand | Address used | Afterwards |
+|---|---|---|
+| `(Rr)` | `Rr` | — |
+| `(Rr++)` | `Rr` | `Rr` += the access size |
+| `(Rr--)` | `Rr` | `Rr` −= the access size |
+| `(++Rr)` | `Rr` + the access size | `Rr` holds that address |
+| `(--Rr)` | `Rr` − the access size | `Rr` holds that address |
+
+A load names the register first (`LD32 R1, (R2)`); a store names the memory operand first (`ST32 (R2), R1`, or `LD32 (R2), R1`). `TAS` takes only `(Rr)`.
+
+### Values and expressions
+
+Where an instruction or directive takes a value, it may be a number, a label, a `.define`d symbol, or an expression of them:
+
+* **Numbers**: decimal (`42`, `-3`), hexadecimal (`0x2A`) or binary (`0b101010`).
+* **Operators**, from the highest precedence to the lowest: parentheses; unary `~` and `-`; `*`, `/`, `%`; `+`, `-`; `<<`, `>>`; `&`; `^`; `|`. Arithmetic is on whole numbers.
+* **Labels** are the address of the line they mark. The assembler also defines `__image_end`, the address just past the last byte of the image (the allocator in `lib/alloc.asm` starts the heap there).
+
+Register names cannot appear in a value. Each instruction's range of values is checked (see *Errors*).
+
+---
+
 ## Directives Reference
 
 ### Symbol & Origin Control
@@ -144,11 +178,31 @@ The longer forms overwrite `R14`. A `JUMP`'s size depends on where its target en
 
 ---
 
-## Register Syntax
-Registers are specified as `R0` through `R15` (case-insensitive) or `SP` (alias for `R15`).
-* `R0`: Hardwired Zero.
-* `R1`–`R4`: Parameter passing / return values.
-* `R5`–`R10`: Callee-saved general registers.
-* `R11`–`R13`: Caller-saved scratchpad registers.
-* `R14`: Return address link register and immediate loading accumulator.
-* `R15`: Stack pointer by convention (full-descending, 4-byte aligned).
+---
+
+## Standard Macros (`lib/common.inc`)
+
+`lib/common.inc` defines the trap constants (`TRAP_TABLE_BASE` = `0x100`, `TRAP_STRIDE_BYTES` = 64, and the vector numbers `TRAP_RESET` 0, `TRAP_MBOX` 1, `TRAP_ALIGN` 14, `TRAP_ILLEGAL` 15) and these macros. Most of them use `R14` as scratch, so they overwrite it.
+
+| Macro | Expands to | Effect |
+|---|---|---|
+| `LOAD16 reg, value` | `LDI` | `reg` = a 16-bit value, zero-extended |
+| `LOAD16S reg, value` | `LDIS` | `reg` = a 16-bit value, sign-extended |
+| `LOAD24 reg, value` | `LDI R14` + `PUSH8` + `LD` | `reg` = a 24-bit value (overwrites `R14`) |
+| `LOAD32 reg, value` | `LDI R14` + 2 × `PUSH8` + `LD` | `reg` = any 32-bit value (overwrites `R14`) |
+| `LOAD_R14_16 value` | `LDI R14` | `R14` = a 16-bit value |
+| `LOAD_R14_32 value` | `LDI R14` + 2 × `PUSH8` | `R14` = any 32-bit value |
+| `LDZP reg, addr` | `LD R14` + `LD` | `reg` = a zero-page address (0–255), in 2 instructions |
+| `LDZP32 reg, addr` | `LD R14` + `LD32` | `reg` = the 32-bit word at a zero-page address |
+| `STZP32 addr, reg` | `LD R14` + `ST32` | stores `reg` at a zero-page address |
+| `START_PROGRAM` | `LOAD32 R15` + `LDI R14` + `JMP` | sets the stack pointer to `0x00010000` and jumps to `_main` |
+| `LJMP target` | `LDI R14` + `JMP R14, R0` | jumps to a target below `0x10000` |
+| `RCALL target` | `LDI R14` + `JMP R14, R14` | calls a routine below `0x10000`; the return address is in `R14` |
+| `RLCALL target` | same as `RCALL` | |
+| `RRET` | `JMP R14, R0` | returns to the address in `R14` |
+| `PUSH32 reg` | `LD32 (--R15), reg` | pushes a register |
+| `POP32 reg` | `LD32 reg, (R15++)` | pops a register |
+| `FAST_ENTER_TRAP` | `XCHGMOST` | starts a trap handler: `R1`–`R14` swap with the shadow bank |
+| `FAST_EXIT_TRAP` | `XCHGMOST` + `JMP R14, R0` | ends a trap handler and returns |
+
+`JUMP` (above) reaches any address; `LJMP` and `RCALL` reach targets below `0x10000`.

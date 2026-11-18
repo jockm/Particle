@@ -1,36 +1,28 @@
 {
   "topology": "point_to_point_fifo",
-  "shared_memory_size": 131072,
   "shared_memory_base": "0x80000000",
+  "shared_memory_size": 4096,
   "cores": [
     {
       "id": 0,
-      "name": "Core_Producer",
+      "name": "producer",
       "mem_size": 131072,
+      "binary": "../build/cluster/stream_producer.bin",
       "base_addr": "0x00000100",
-      "initial_registers": {
-        "R1": "0x00001000",
-        "R15": "0x00010000"
-      },
+      "initial_registers": { "SP": "0x00010000" },
+      "mbox_target": 1,
       "fifo_connections": {
-        "tx": [
-          { "channel": 0, "target_core": 1, "target_channel": 0 }
-        ]
+        "tx": [ { "channel": 1, "target_core": 1, "target_channel": 1 } ]
       }
     },
     {
       "id": 1,
-      "name": "Core_Consumer",
+      "name": "consumer",
       "mem_size": 131072,
+      "binary": "../build/cluster/stream_consumer.bin",
       "base_addr": "0x00000100",
-      "initial_registers": {
-        "R15": "0x00010000"
-      },
-      "fifo_connections": {
-        "tx": [
-          { "channel": 0, "target_core": 0, "target_channel": 0 }
-        ]
-      }
+      "initial_registers": { "SP": "0x00010000" },
+      "mbox_target": 0
     }
   ]
 }

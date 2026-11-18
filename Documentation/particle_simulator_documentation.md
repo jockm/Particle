@@ -107,7 +107,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 
 Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields, such as `topology`, are ignored.
 
-The cluster tests (`make test-sim-cluster`, part of `make test`) are examples: `apps/asm/cluster/` has a producer and consumer (`stream.json`), an `MBOX` that interrupts a stalled core (`mbox.json`), a counter in shared memory under a `TAS` lock (`shared.json`), and a deadlock (`deadlock.json`).
+`Documentation/cluster_config_example.json` is a working file with every field: after `make test-sim-cluster` has built the programs, `build/tools/psim -C Documentation/cluster_config_example.json` runs it. The cluster tests (`make test-sim-cluster`, part of `make test`) are further examples: `apps/asm/cluster/` has a producer and consumer (`stream.json`), an `MBOX` that interrupts a stalled core (`mbox.json`), a counter in shared memory under a `TAS` lock (`shared.json`), and a deadlock (`deadlock.json`).
 
 ---
 

@@ -1031,10 +1031,11 @@ psim runs a binary until it ends. Only two trap **instructions** end a run; ever
 | 1–14 | reserved |
 | 15 | a `TRAP 15` instruction ended the run (for example a failed bounds check) |
 | 16 | psim error: file not found, bad arguments |
-| 17 | the cycle limit (10,000,000) was reached |
+| 17 | the cycle limit (10,000,000, or `--max-cycles`) was reached |
 | 18 | the PC ran past the end of memory without a trap |
+| 19 | a multi-core run deadlocked: every running core was waiting on an empty FIFO |
 
-`--no-exit-on-reset` makes `TRAP 0` jump to the reset vector instead of ending the run. Under `--debug`, `TRAP 0` and `TRAP 15` stop at the debugger prompt.
+`--no-exit-on-reset` makes `TRAP 0` jump to the reset vector instead of ending the run. Under `--debug`, `TRAP 0` and `TRAP 15` stop at the debugger prompt. `psim -C <file.json>` runs several programs as a multi-core cluster, with FIFO channels routed between the cores; see `particle_simulator_documentation.md`.
 
 Programs used as tests end with `trap(0)` on success and `trap(15)` on failure:
 

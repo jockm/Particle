@@ -2,97 +2,92 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Particle: Run ROHD Tests",
+      "label": "Particle: Build Tools",
       "type": "shell",
-      "command": "dart test",
-      "options": {
-        "cwd": "${workspaceFolder}/hdl/particle"
-      },
+      "command": "make tools",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Particle: Build Firmware and Applications",
+      "type": "shell",
+      "command": "make build",
       "group": {
-        "kind": "test",
+        "kind": "build",
         "isDefault": true
       },
-      "problemMatcher": [
-        "$dart-test"
-      ]
+      "problemMatcher": []
     },
     {
-      "label": "Particle: Generate SystemVerilog",
+      "label": "Particle: Assemble Current File",
       "type": "shell",
-      "command": "dart run bin/generate.dart",
-      "options": {
-        "cwd": "${workspaceFolder}/hdl/particle"
-      },
-      "group": "build",
-      "problemMatcher": [
-        "$dart-analyze"
-      ]
-    },
-    {
-      "label": "Particle: Assemble Current File (pasm)",
-      "type": "shell",
-      "command": "python3 tools/pasm.py \"${file}\" -I lib -o \"${workspaceFolder}/build/${fileBasenameNoExtension}.bin\" --format bin",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "command": "make tools > /dev/null && mkdir -p build && build/tools/pasm \"${file}\" -I lib -I . -o \"build/${fileBasenameNoExtension}.bin\"",
       "group": "build",
       "problemMatcher": []
     },
     {
-      "label": "Particle: Compile Action Current File (act16c)",
+      "label": "Particle: Lint Current File",
       "type": "shell",
-      "command": "python3 tools/act16c.py \"${file}\" -o \"${workspaceFolder}/apps/asm/${fileBasenameNoExtension}.asm\"",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "command": "make tools > /dev/null && build/tools/pasm_lint \"${file}\" -I lib -I .",
+      "problemMatcher": []
+    },
+    {
+      "label": "Action: Build and Run Current File in psim",
+      "type": "shell",
+      "command": "./pbuild \"${file}\" -o \"build/${fileBasenameNoExtension}.bin\" --sim",
       "group": "build",
       "problemMatcher": []
     },
     {
-      "label": "Particle: Assemble Comprehensive Test",
+      "label": "Action: Build and Run Current File on This Computer (LLVM)",
       "type": "shell",
-      "command": "mkdir -p build && python3 tools/pasm.py apps/asm/comprehensive_test.asm -I lib -o build/test.bin --format bin",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "command": "./llbuild \"${file}\" --run",
       "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Particle: Generate SystemVerilog (Core)",
+      "type": "shell",
+      "command": "make generate-particle",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Parcore: Generate SystemVerilog",
+      "type": "shell",
+      "command": "make generate-parcore",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Particle: Run ROHD Tests",
+      "type": "shell",
+      "command": "make test-particle",
+      "group": "test",
       "problemMatcher": []
     },
     {
       "label": "Parcore: Run ROHD Tests",
       "type": "shell",
-      "command": "dart test",
-      "options": {
-        "cwd": "${workspaceFolder}/hdl/parcore"
-      },
+      "command": "make test-parcore",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Compiler and Language Server Tests",
+      "type": "shell",
+      "command": "make compiler-tests",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run All Hardware and Simulator Tests",
+      "type": "shell",
+      "command": "make test",
       "group": {
         "kind": "test",
-        "isDefault": false
+        "isDefault": true
       },
-      "problemMatcher": [
-        "$dart-test"
-      ]
-    },
-    {
-      "label": "Parcore: Generate SystemVerilog",
-      "type": "shell",
-      "command": "dart run bin/generate_parcore.dart",
-      "options": {
-        "cwd": "${workspaceFolder}/hdl/parcore"
-      },
-      "group": "build",
-      "problemMatcher": [
-        "$dart-analyze"
-      ]
-    },
-    {
-      "label": "Parcore: Assemble All Stage Kernels",
-      "type": "shell",
-      "command": "mkdir -p build/parcore && for f in firmware/parcore/*.asm; do python3 tools/pasm.py \"$f\" -I lib -o \"build/parcore/$(basename \"$f\" .asm).bin\" --format bin; done",
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "group": "build",
       "problemMatcher": []
     }
   ]

@@ -334,7 +334,7 @@ void main() {
         maxCycles: 15000,
       );
       final regs = res.regs;
-      print('Sub-word memory test completed in ${res.cycles} cycles');
+      print('Sub-word memory test completed in ${res.cycles} cycles | stdout:\n${res.stdout}');
       expect(regs[6]! & 0xFFFFFFFF, equals(0x5A));
       expect(regs[7]! & 0xFFFFFFFF, equals(0xFFFFFFF2));
     });

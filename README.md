@@ -26,10 +26,11 @@ particle/
 │   ├── particle_spec.md               # Master architectural specification
 │   ├── pasm_assembler.md              # Macro assembler documentation
 │   ├── particle_simulator_documentation.md  # Simulator & p4db debugger reference
-│   ├── act16_compiler.md              # Action systems language specification
-│   ├── hdl_architecture.md            # Pure ROHD datapath, memory & execution model
-│   ├── configuration_guide.md         # CpuConfig parameters and synthesis flow
-│   └── memory_map_and_conventions.md  # Vector layout, ABI, and calling conventions
+│   ├── cluster_config_example.json    # Example psim multi-core cluster file
+│   ├── hdl_architecture.md            # ROHD hardware: the core, modules and designs
+│   ├── parcore_architecture.md        # Parcore: RISC-V emulation on a Particle cluster
+│   ├── configuration_guide.md         # CpuConfig, SystemVerilog generation, synthesis, VS Code tasks
+│   └── memory_map_and_conventions.md  # Memory map, vector layout and calling convention
 ├── Makefile                           # Build, test and tool targets ('make help')
 ├── action.json                        # Project file for the Action language server
 ├── pbuild, pbuild.cmd                 # Build (and run) a Particle program in one step
