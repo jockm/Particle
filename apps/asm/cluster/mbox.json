@@ -1,0 +1,6 @@
+{
+  "cores": [
+    { "id": 0, "name": "sender", "binary": "../../../build/cluster/mbox_sender.bin" },
+    { "id": 1, "name": "receiver", "binary": "../../../build/cluster/mbox_receiver.bin" }
+  ]
+}

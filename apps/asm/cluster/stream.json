@@ -1,0 +1,8 @@
+{
+  "topology": "point_to_point_fifo",
+  "cores": [
+    { "id": 0, "name": "producer", "binary": "../../../build/cluster/stream_producer.bin",
+      "fifo_connections": { "tx": [ { "channel": 1, "target_core": 1, "target_channel": 1 } ] } },
+    { "id": 1, "name": "consumer", "binary": "../../../build/cluster/stream_consumer.bin" }
+  ]
+}

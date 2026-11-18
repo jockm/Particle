@@ -1,0 +1,8 @@
+{
+  "shared_memory_base": "0x80000000",
+  "shared_memory_size": 4096,
+  "cores": [
+    { "id": 0, "name": "core0", "binary": "../../../build/cluster/shared_counter.bin", "initial_registers": { "R13": 0 } },
+    { "id": 1, "name": "core1", "binary": "../../../build/cluster/shared_counter.bin", "initial_registers": { "R13": 1 } }
+  ]
+}

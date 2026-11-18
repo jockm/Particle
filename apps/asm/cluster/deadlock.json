@@ -1,0 +1,6 @@
+{
+  "cores": [
+    { "id": 0, "name": "left", "binary": "../../../build/cluster/deadlock.bin" },
+    { "id": 1, "name": "right", "binary": "../../../build/cluster/deadlock.bin" }
+  ]
+}
