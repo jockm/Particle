@@ -60,6 +60,19 @@
       "problemMatcher": []
     },
     {
+      "label": "ULX3S: Build Bitstream",
+      "type": "shell",
+      "command": "make ulx3s-bit",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "ULX3S: Load Bitstream into the Board",
+      "type": "shell",
+      "command": "make ulx3s-prog",
+      "problemMatcher": []
+    },
+    {
       "label": "Particle: Run ROHD Tests",
       "type": "shell",
       "command": "make test-particle",

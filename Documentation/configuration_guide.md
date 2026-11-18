@@ -19,12 +19,12 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | `enableDivider` | `true` | Include the multi-cycle divider |
 | `tcmSizeBytes` | `65536` | On-chip tightly coupled block RAM, in bytes (64 KiB) |
 | `mmioBaseAddr` | `0xF0000000` | Base address of the memory-mapped I/O and external memory window |
-| `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (fixed 3 Mbps) |
-| `ulx3sUartFifoChannel` | `0` | FIFO channel of the FTDI UART |
-| `systemClockHz` | `25000000` | Clock feeding the UART logic (25 MHz on the ULX3S) |
-| `enableAuxGpioUart` | `true` | Include the auxiliary UART on the GPIO / PMOD header pins |
-| `auxUartFifoChannel` | `1` | FIFO channel of the auxiliary UART |
-| `auxUartDefaultBaud` | `115200` | Starting baud rate of the auxiliary UART (changed at run time through its MMIO divisor register) |
+| `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleUlx3sTop`, which always has it) |
+| `ulx3sUartFifoChannel` | `0` | FIFO channel of the FTDI UART (not used: `ParticleUlx3sTop` puts it on channel 0) |
+| `systemClockHz` | `25000000` | System clock, for the UART baud divisors. `ParticleUlx3sTop` defaults to 50 MHz, from the PLL |
+| `enableAuxGpioUart` | `true` | Include the auxiliary UART on the GPIO header pins (not used by `ParticleUlx3sTop`, which always has it) |
+| `auxUartFifoChannel` | `1` | FIFO channel of the auxiliary UART (not used: `ParticleUlx3sTop` puts it on channel 1) |
+| `auxUartDefaultBaud` | `115200` | Baud rate of the auxiliary UART. The core has no MMIO bus yet, so it can't be changed at run time |
 
 See `hdl_architecture.md` for what the hardware implements today.
 
@@ -38,32 +38,56 @@ Each design has a `make` target, run from the repository root. Each fetches the 
 |---|---|---|
 | `make generate-particle` | `hdl/particle/particle_top.sv` | The bare Particle core (`particle_cpu_core`): no memory, peripherals or pins. For simulation and for building into other designs. |
 | `make generate-parcore` | `hdl/parcore/parcore_top.sv` | The Parcore RISC-V emulation cluster (see `parcore_architecture.md`). |
-| `make generate` | all of the above | |
+| `make generate-ulx3s` | `build/ulx3s/particle_ulx3s.sv`, `program_bank0.hex`, `program_bank1.hex` | The ULX3S board design (`ulx3s_board`), with a program in its block RAM. See *The ULX3S Board* below. |
+| `make generate` | `particle_top.sv` and `parcore_top.sv` | |
 
-The generators are Dart programs (`hdl/particle/bin/generate.dart`, `hdl/parcore/bin/generate_parcore.dart`) that build the design with Intel ROHD and write it with `generateSynth()`.
-
-The ULX3S board top level (`particle_ulx3s_top.dart`) has no generator yet: its memory and its UART streams are not connected (see `hdl_architecture.md`).
+The generators are Dart programs (`hdl/particle/bin/generate.dart`, `generate_ulx3s.dart`, and `hdl/parcore/bin/generate_parcore.dart`) that build the design with Intel ROHD and write it with `generateSynth()`.
 
 ---
 
-## Synthesis with Yosys and nextpnr (Lattice ECP5 / ULX3S)
+## The ULX3S Board
 
-Synthesis and place-and-route need the OSS CAD Suite (see *Prerequisites* in `GettingStarted.md`); the `make` targets stop at SystemVerilog. A bitstream needs a board-level design with memory and pins. For a design `<top>.sv` whose top module is `<top>`:
+`make ulx3s-bit` builds a bitstream for the ULX3S 85F: one Particle core at 50 MHz with 64 KiB of block RAM holding a program, the FTDI USB UART and a GPIO UART. It needs the OSS CAD Suite (Yosys, `nextpnr-ecp5`, `ecppack`; see *Prerequisites* in `GettingStarted.md`).
 
 ```bash
-# Synthesize for ECP5
+make ulx3s-bit                                    # apps/asm/ulx3s_echo.asm
+make ulx3s-bit ULX3S_PROGRAM=apps/asm/myprog.asm  # another program
+make ulx3s-prog                                   # load it into the board (openFPGALoader)
+```
+
+| Target | Does |
+|---|---|
+| `make generate-ulx3s` | Builds `ULX3S_PROGRAM` with `pbuild --format hex` into `build/ulx3s/program.hex`, then runs `hdl/particle/bin/generate_ulx3s.dart`. That splits the image into the two block RAM banks (`program_bank0.hex`, `program_bank1.hex`, placed at `0x100`) and writes `particle_ulx3s.sv`, whose top level is `ulx3s_board`. |
+| `make ulx3s-bit` | `generate-ulx3s`, then Yosys (`synth_ecp5`), nextpnr (`--85k --package CABGA381`, pins from `hdl/particle/boards/ulx3s/ulx3s_v20.lpf`) and `ecppack`, in `build/ulx3s`. Prints nextpnr's maximum frequency; the logs are `yosys.log` and `nextpnr.log`. The bitstream is `build/ulx3s/particle_ulx3s.bit`. |
+| `make ulx3s-prog` | Loads the bitstream into the board's FPGA with `openFPGALoader -b ulx3s` (until the next power cycle). |
+
+Variables: `ULX3S_PROGRAM` (default `apps/asm/ulx3s_echo.asm`), `ULX3S_CLOCK_HZ` (default `50000000`; the generator stops if the PLL can't make it exactly from 25 MHz), and `YOSYS`, `NEXTPNR_ECP5`, `ECPPACK`, `OPENFPGALOADER` for the tool commands.
+
+The program is part of the bitstream, so changing it means running `make ulx3s-bit` again. Only assembly programs that avoid the instructions the hardware doesn't implement yet will run (see `hdl_architecture.md`); compiled Action code won't, because its stack operations need pre-decrement and post-increment.
+
+| Board | Pins | Use |
+|---|---|---|
+| FTDI USB UART | `ftdi_txd`, `ftdi_rxd` | FIFO channel 0, 1 Mbps 8-N-1 |
+| GPIO UART | `gp[0]` (B11) transmit, `gp[1]` (A10) receive | FIFO channel 1, 115200 8-N-1 |
+| Power button | `btn[0]` | Reset (also held until the PLL locks) |
+| LEDs | `led[7:0]` | Low byte of the fetch address |
+
+`apps/asm/ulx3s_echo.asm` prints `Particle ULX3S` on both UARTs and then sends back each byte it receives. Open the board's serial port at 1000000 baud in a terminal program: for example `screen /dev/cu.usbserial-<id> 1000000` on a Mac, or PuTTY on the board's COM port on Windows.
+
+The pin file is the ULX3S project's `ulx3s_v20.lpf` (with its `LICENSE.md`), unchanged; it lists every pin on the board, and nextpnr warns about the ones the design doesn't use.
+
+### Other designs
+
+For another design `<top>.sv` whose top module is `<top>`:
+
+```bash
 yosys -p "read_verilog -sv <top>.sv; synth_ecp5 -top <top> -json <top>.json"
-
-# Place and route (85F device in the CABGA381 package, as on the ULX3S 85F;
-# use --25k or --45k for the smaller boards). A .lpf file maps the top level's
-# ports to the board's pins.
-nextpnr-ecp5 --85k --package CABGA381 --json <top>.json --lpf ulx3s.lpf --textcfg <top>.config
-
-# Bitstream
+nextpnr-ecp5 --85k --package CABGA381 --json <top>.json \
+    --lpf hdl/particle/boards/ulx3s/ulx3s_v20.lpf --textcfg <top>.config
 ecppack <top>.config <top>.bit
 ```
 
-The ULX3S `.lpf` pin file comes with the board's documentation; it is not part of this repository.
+Use `--25k` or `--45k` for the smaller boards. The top level's port names must match the pin file's (`clk_25mhz`, `led`, `btn`, `gp`, …).
 
 ---
 
@@ -81,6 +105,8 @@ The ULX3S `.lpf` pin file comes with the board's documentation; it is not part o
 | Action: Build and Run Current File on This Computer (LLVM) | `./llbuild <file> --run` |
 | Particle: Generate SystemVerilog (Core) | `make generate-particle` |
 | Parcore: Generate SystemVerilog | `make generate-parcore` |
+| ULX3S: Build Bitstream | `make ulx3s-bit` |
+| ULX3S: Load Bitstream into the Board | `make ulx3s-prog` |
 | Particle: Run ROHD Tests | `make test-particle` |
 | Parcore: Run ROHD Tests | `make test-parcore` |
 | Run Compiler and Language Server Tests | `make compiler-tests` |

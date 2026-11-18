@@ -14,3 +14,6 @@ export 'uart.dart';
 export 'shared_reg_fabric.dart';
 
 export 'particle_multi_core.dart';
+
+export 'particle_ulx3s_top.dart';
+export 'ulx3s_board.dart';

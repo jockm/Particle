@@ -68,7 +68,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
-        firmware apps clean help
+        generate-ulx3s ulx3s-bit ulx3s-prog firmware apps clean help
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -101,6 +101,9 @@ help:
 	@echo "  make vscode-install   - Build the language servers and extensions, and install the extensions in VS Code"
 	@echo "  make vscode-remove-old-pasm - Remove the old hand-installed pasm extension"
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
+	@echo "  make generate-ulx3s   - Generate the ULX3S design with a program (ULX3S_PROGRAM=...) in build/ulx3s"
+	@echo "  make ulx3s-bit        - Synthesize, place and route the ULX3S design (build/ulx3s/particle_ulx3s.bit)"
+	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
@@ -142,13 +145,57 @@ generate-parcore: setup
 	@cd $(PARCORE_DIR) && $(DART) run bin/generate_parcore.dart
 
 # ------------------------------------------------------------------------------
+# ULX3S board (ECP5 85F): one Particle core, 64 KiB block RAM, two UARTs
+# ------------------------------------------------------------------------------
+# ULX3S_PROGRAM is built with pbuild into a hex image and loaded into the block
+# RAM; the bitstream has to be rebuilt to change it. Only assembly programs
+# that avoid the instructions the hardware doesn't decode yet will run
+# (see Documentation/hdl_architecture.md); compiled Action code won't.
+ULX3S_BLD      := $(BUILD_DIR)/ulx3s
+ULX3S_PROGRAM  ?= apps/asm/ulx3s_echo.asm
+ULX3S_CLOCK_HZ ?= 50000000
+ULX3S_LPF      := $(ROHD_DIR)/boards/ulx3s/ulx3s_v20.lpf
+YOSYS          ?= yosys
+NEXTPNR_ECP5   ?= nextpnr-ecp5
+ECPPACK        ?= ecppack
+OPENFPGALOADER ?= openFPGALoader
+
+generate-ulx3s: setup $(PASM_BIN) $(PASM_LINT_BIN)
+	@echo "==> Building $(ULX3S_PROGRAM) for the ULX3S block RAM..."
+	@mkdir -p $(ULX3S_BLD)
+	@$(PBUILD) "$(ULX3S_PROGRAM)" -o "$(ULX3S_BLD)/program.hex" --format hex
+	@echo "==> Generating the ULX3S design (build/ulx3s/particle_ulx3s.sv)..."
+	@cd $(ROHD_DIR) && $(DART) run bin/generate_ulx3s.dart --hex ../../$(ULX3S_BLD)/program.hex \
+		--out ../../$(ULX3S_BLD) --clock-hz $(ULX3S_CLOCK_HZ)
+	@$(DOT_CLEAN_CMD)
+
+ulx3s-bit: generate-ulx3s
+	@echo "==> Synthesizing (Yosys; log in build/ulx3s/yosys.log)..."
+	@cd $(ULX3S_BLD) && $(YOSYS) -q -l yosys.log \
+		-p "read_verilog -sv particle_ulx3s.sv; synth_ecp5 -top ulx3s_board -json particle_ulx3s.json"
+	@echo "==> Placing and routing for the 85F (nextpnr; log in build/ulx3s/nextpnr.log)..."
+	@cd $(ULX3S_BLD) && $(NEXTPNR_ECP5) -q --85k --package CABGA381 --lpf ../../$(ULX3S_LPF) \
+		--json particle_ulx3s.json --textcfg particle_ulx3s.config \
+		--freq $$(( $(ULX3S_CLOCK_HZ) / 1000000 )) -l nextpnr.log
+	@cd $(ULX3S_BLD) && $(ECPPACK) --compress particle_ulx3s.config particle_ulx3s.bit
+	@grep "Max frequency for clock" $(ULX3S_BLD)/nextpnr.log | tail -1
+	@echo "==> Bitstream: $(ULX3S_BLD)/particle_ulx3s.bit"
+	@$(DOT_CLEAN_CMD)
+
+ulx3s-prog:
+	@if [ ! -f "$(ULX3S_BLD)/particle_ulx3s.bit" ]; then \
+		echo "[FAIL] $(ULX3S_BLD)/particle_ulx3s.bit not found: run make ulx3s-bit first."; exit 1; \
+	fi
+	$(OPENFPGALOADER) -b ulx3s "$(ULX3S_BLD)/particle_ulx3s.bit"
+
+# ------------------------------------------------------------------------------
 # Verification & Test Suites
 # ------------------------------------------------------------------------------
 
 test: test-particle test-parcore test-sim test-sim-cluster
 	@$(DOT_CLEAN_CMD)
 
-test-particle: setup
+test-particle: setup $(BUILD_DIR)/ulx3s_echo.bin
 	@echo "==> Running Particle single-core ROHD tests..."
 	@cd $(ROHD_DIR) && $(DART) test
 

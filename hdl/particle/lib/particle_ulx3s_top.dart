@@ -1,124 +1,208 @@
 // =============================================================================
 // File: hdl/particle/lib/particle_ulx3s_top.dart
 // Architecture: Particle 32-bit RISC on Lattice ECP5 (ULX3S)
-// Description: Top-level FPGA wrapper wiring ParticleCpuCore to the fixed 3 Mbps
-//              FTDI UART, arbitrary-baud GPIO UART, and onboard LEDs/buttons.
+// Description: Board-level design for the ULX3S: one ParticleCpuCore with
+//              64 KiB of block RAM, the FTDI USB UART on FIFO channel 0 and a
+//              GPIO UART on FIFO channel 1, and the PC shown on the LEDs.
 // =============================================================================
+//
+// The clock comes from the PLL in the board wrapper (lib/ulx3s_board.dart),
+// which also maps these ports to the ULX3S pin names. This module is plain
+// ROHD, so it can be simulated directly.
+//
+// FIFO channels, as the core sees them:
+//   channel 0: FTDI UART (default 1 Mbps)
+//   channel 1: GPIO UART (default 115200 baud, CpuConfig.auxUartDefaultBaud)
+//   channels 2, 3: none (FIFO.STAT reports empty and full)
+// FIFO.STAT bit 0 = no byte received, bit 1 = transmitter busy. Each UART
+// holds one received byte and sends one byte at a time: FIFO.W while the
+// transmitter is busy drops the byte, so check bit 1 first or use FIFO.TRYW.
 
 import 'package:rohd/rohd.dart';
+
+import 'block_ram_tdp.dart';
 import 'cpu_config.dart';
 import 'cpu_core.dart';
-import 'ftdi_uart.dart';
-import 'gpio_uart.dart';
+import 'uart.dart';
 
 class ParticleUlx3sTop extends Module {
-  Logic get clk25MHz => input('clk_25mhz');
-  Logic get btnReset => input('btn_reset');
+  Logic get clk => input('clk');
 
-  // Dedicated Onboard FTDI USB-UART Pins (3 Mbps)
-  Logic get ftdiRxd => input('ftdi_rxd');
-  Logic get ftdiTxd => output('ftdi_txd');
+  /// Active-low reset: low resets the core (button pressed or PLL unlocked).
+  Logic get resetN => input('reset_n');
 
-  // Configurable Board Header Pins (PMOD / GPIO)
-  Logic get gpioRx => input('gp_rx');
-  Logic get gpioTx => output('gp_tx');
-
-  // Debug onboard LEDs
+  Logic get ftdiRxPin => input('ftdi_rx_pin');
+  Logic get ftdiTxPin => output('ftdi_tx_pin');
+  Logic get gpioRxPin => input('gpio_rx_pin');
+  Logic get gpioTxPin => output('gpio_tx_pin');
   Logic get leds => output('leds');
 
+  final CpuConfig config;
+  final int ftdiBaud;
+
+  /// The memory, for tests that want to look inside it.
+  late final ParticleBlockRamTdp ram;
+
   ParticleUlx3sTop({
-    required Logic clk25MHz,
-    required Logic btnReset,
-    required Logic ftdiRxd,
-    required Logic gpioRx,
-    CpuConfig config = const CpuConfig(),
+    required Logic clk,
+    required Logic resetN,
+    required Logic ftdiRxPin,
+    required Logic gpioRxPin,
+    this.config = const CpuConfig(systemClockHz: 50000000),
+    this.ftdiBaud = 1000000,
+    List<int>? programBytes,
+    int programBase = 0x100,
+    String? initFileBank0,
+    String? initFileBank1,
     super.name = 'particle_ulx3s_top',
-  }) {
-    addInput('clk_25mhz', clk25MHz);
-    addInput('btn_reset', btnReset);
-    addInput('ftdi_rxd', ftdiRxd);
-    addInput('gp_rx', gpioRx);
-
-    addOutput('ftdi_txd');
-    addOutput('gp_tx');
+  }) : super(definitionName: 'particle_ulx3s_top') {
+    addInput('clk', clk);
+    addInput('reset_n', resetN);
+    addInput('ftdi_rx_pin', ftdiRxPin);
+    addInput('gpio_rx_pin', gpioRxPin);
+    addOutput('ftdi_tx_pin');
+    addOutput('gpio_tx_pin');
     addOutput('leds', width: 8);
-
-    _build(config);
+    _build(programBytes, programBase, initFileBank0, initFileBank1);
   }
 
-  void _build(CpuConfig config) {
-    final activeLowReset = ~btnReset;
+  void _build(List<int>? programBytes, int programBase, String? initFileBank0,
+      String? initFileBank1) {
+    // -------------------------------------------------------------------------
+    // Reset: synchronize reset_n, then hold the core in reset for 16 cycles
+    // -------------------------------------------------------------------------
+    final rstMeta = Logic(name: 'rstMeta');
+    final rstReq = Logic(name: 'rstReq');
+    Sequential(clk, [
+      rstMeta < ~resetN,
+      rstReq < rstMeta,
+    ]);
+    final rstCount = Logic(name: 'rstCount', width: 4);
+    Sequential(clk, reset: rstReq, resetValues: {
+      rstCount: Const(0, width: 4),
+    }, [
+      If(~rstCount.eq(Const(15, width: 4)), then: [
+        rstCount < rstCount + Const(1, width: 4),
+      ]),
+    ]);
+    final coreReset = Logic(name: 'coreReset');
+    coreReset <= ~rstCount.eq(Const(15, width: 4));
 
-    // FTDI 3 Mbps UART (Channel 0)
-    final ftdiTxData = Logic(name: 'ftdiTxData', width: 8);
-    final ftdiTxValid = Logic(name: 'ftdiTxValid');
-    final ftdiRxReady = Logic(name: 'ftdiRxReady');
+    // -------------------------------------------------------------------------
+    // Receive pins: two-flop synchronizers (the UART samples them directly)
+    // -------------------------------------------------------------------------
+    Logic syncPin(Logic pin, String name) {
+      final s1 = Logic(name: '${name}Sync1');
+      final s2 = Logic(name: '${name}Sync2');
+      Sequential(clk, reset: coreReset, resetValues: {
+        s1: Const(1),
+        s2: Const(1),
+      }, [
+        s1 < pin,
+        s2 < s1,
+      ]);
+      return s2;
+    }
 
-    final ftdiUart = ParticleFtdiUart(
-      clk: clk25MHz,
-      reset: activeLowReset,
-      ftdiRxd: ftdiRxd,
-      txData: ftdiTxData,
-      txValid: ftdiTxValid,
-      rxReady: ftdiRxReady,
-      clkFreqHz: config.systemClockHz,
-      baudRate: 3000000,
-    );
-    ftdiTxd <= ftdiUart.ftdiTxd;
+    final ftdiRx = syncPin(ftdiRxPin, 'ftdiRx');
+    final gpioRx = syncPin(gpioRxPin, 'gpioRx');
 
-    // GPIO Configurable UART (Channel 1)
-    final gpioTxData = Logic(name: 'gpioTxData', width: 8);
-    final gpioTxValid = Logic(name: 'gpioTxValid');
-    final gpioRxReady = Logic(name: 'gpioRxReady');
-    final mmioDivisor = Logic(name: 'mmioDivisor', width: 16);
-    final mmioDivisorWEn = Logic(name: 'mmioDivisorWEn');
-
-    final gpioUart = ParticleGpioUart(
-      clk: clk25MHz,
-      reset: activeLowReset,
-      gpioRxPin: gpioRx,
-      txData: gpioTxData,
-      txValid: gpioTxValid,
-      rxReady: gpioRxReady,
-      mmioDivisor: mmioDivisor,
-      mmioDivisorWriteEn: mmioDivisorWEn,
-      defaultDivisor: (config.systemClockHz / config.auxUartDefaultBaud).round(),
-    );
-    gpioTx <= gpioUart.gpioTxPin;
-
-    // Dummy Memory Signals (to be wired to TDP BRAM block)
+    // -------------------------------------------------------------------------
+    // Core
+    // -------------------------------------------------------------------------
     final memARData = Logic(name: 'memARData', width: 16);
     final memBRData = Logic(name: 'memBRData', width: 32);
-    final mboxStrobe = Logic(name: 'mboxStrobe');
-    final mboxVector = Logic(name: 'mboxVector', width: 4);
+    final fifoPopData = Logic(name: 'fifoPopData', width: 32);
+    final fifoStatus = Logic(name: 'fifoStatus', width: 32);
 
-    memARData <= Const(0, width: 16);
-    memBRData <= Const(0, width: 32);
-    mboxStrobe <= Const(0);
-    mboxVector <= Const(0, width: 4);
-
-    // Core Instantiation
     final core = ParticleCpuCore(
-      clk: clk25MHz,
-      reset: activeLowReset,
+      clk: clk,
+      reset: coreReset,
       memPortARData: memARData,
       memPortBRData: memBRData,
-      mboxStrobeIn: mboxStrobe,
-      mboxVectorIn: mboxVector,
+      mboxStrobeIn: Const(0),
+      mboxVectorIn: Const(0, width: 4),
+      fifoPopData: fifoPopData,
+      fifoStatus: fifoStatus,
       config: config,
     );
 
-    // Tie debug LEDs to PC lower bits or status
-    leds <= core.memPortAAddr.slice(7, 0);
+    // -------------------------------------------------------------------------
+    // Memory: 64 KiB block RAM (tcmSizeBytes), falling-edge registered
+    // -------------------------------------------------------------------------
+    final memBytes = config.tcmSizeBytes;
+    final addrBits = (memBytes - 1).bitLength; // 16 for 64 KiB
+    ram = ParticleBlockRamTdp(
+      clk: clk,
+      addrA: core.memPortAAddr.slice(addrBits - 1, 1),
+      addrB: core.memPortBAddr.slice(addrBits - 1, 2),
+      wDataB: core.memPortBWData,
+      bEnB: core.memPortBBEn,
+      wEnB: core.memPortBWEn,
+      rEnB: core.memPortBREn,
+      depthWords: memBytes ~/ 4,
+      initialBytes: programBytes,
+      loadOffset: programBase,
+      initFileBank0: initFileBank0,
+      initFileBank1: initFileBank1,
+      name: 'ram',
+    );
+    memARData <= ram.rDataA;
+    memBRData <= ram.rDataB;
 
-    // Default ties for UART stream wires in top wrapper
-    ftdiTxData <= Const(0, width: 8);
-    ftdiTxValid <= Const(0);
-    ftdiRxReady <= Const(1);
-    gpioTxData <= Const(0, width: 8);
-    gpioTxValid <= Const(0);
-    gpioRxReady <= Const(1);
-    mmioDivisor <= Const(217, width: 16);
-    mmioDivisorWEn <= Const(0);
+    // -------------------------------------------------------------------------
+    // UARTs on FIFO channels 0 and 1
+    // -------------------------------------------------------------------------
+    final chan = core.fifoChanSelect;
+    final isCh0 = chan.eq(Const(0, width: 2));
+    final isCh1 = chan.eq(Const(1, width: 2));
+    final txByte = core.fifoPushData.slice(7, 0);
+
+    final ftdiUart = ParticleUartTransceiver(
+      clk: clk,
+      reset: coreReset,
+      rxPin: ftdiRx,
+      txData: txByte,
+      txValid: core.fifoPushEn & isCh0,
+      rxReady: core.fifoPopEn & isCh0,
+      baudDivisor: Const((config.systemClockHz / ftdiBaud).round(), width: 16),
+      name: 'ftdi_uart',
+    );
+    final gpioUart = ParticleUartTransceiver(
+      clk: clk,
+      reset: coreReset,
+      rxPin: gpioRx,
+      txData: txByte,
+      txValid: core.fifoPushEn & isCh1,
+      rxReady: core.fifoPopEn & isCh1,
+      baudDivisor: Const(
+          (config.systemClockHz / config.auxUartDefaultBaud).round(),
+          width: 16),
+      name: 'gpio_uart',
+    );
+    ftdiTxPin <= ftdiUart.output('txPin');
+    gpioTxPin <= gpioUart.output('txPin');
+
+    Logic statusOf(ParticleUartTransceiver u) => [
+          Const(0, width: 30),
+          ~u.output('txReady'),
+          ~u.output('rxValid'),
+        ].swizzle();
+
+    fifoStatus <= mux(
+      isCh0,
+      statusOf(ftdiUart),
+      mux(isCh1, statusOf(gpioUart), Const(3, width: 32)),
+    );
+    fifoPopData <= mux(
+      isCh1,
+      gpioUart.output('rxData').zeroExtend(32),
+      ftdiUart.output('rxData').zeroExtend(32),
+    );
+
+    // -------------------------------------------------------------------------
+    // LEDs: low byte of the fetch address
+    // -------------------------------------------------------------------------
+    leds <= core.memPortAAddr.slice(7, 0);
   }
 }

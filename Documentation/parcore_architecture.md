@@ -31,7 +31,7 @@ This document describes the design as it is in `hdl/parcore` and `firmware/parco
 
 The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.conductorConfig`, `core0If`, `core1Id`, `core2Ex`, `core3Mem`). Every stage core has its trap table at `0x100`, so it starts at `0x100` after reset.
 
-`parcore_config.dart` also has `core4Wb` (4 KiB) and `core5Cache` (32 KiB), and `firmware/parcore/riscv` has `core4_wb.asm`, `core5_cache_mem.asm` and `core1_dispatch.asm`. `make firmware` assembles them, but `ParcoreTop` doesn't instantiate cores 4 and 5 and nothing loads those programs.
+`parcore_config.dart` also has `core4Wb` (4 KiB) and `core5Cache` (32 KiB), and `firmware/parcore/riscv` has `core4_wb.asm`, `core5_cache_mem.asm` and `core1_dispatch.asm`. `make firmware` assembles them, but `ParcoreTop` doesn't instantiate cores 4 and 5, so `core4_wb.asm` and `core5_cache_mem.asm` aren't loaded. `core1_dispatch.asm` is used only by a Particle test (`hdl/particle/test/multicore_firmware_test.dart`).
 
 ## Source Files
 

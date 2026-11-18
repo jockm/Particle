@@ -14,7 +14,7 @@ The core is a small state machine with four states:
 |---|---|
 | Fetch | Reads the instruction at the PC through memory port A. |
 | Exec | Decodes and executes it: ALU, multiplier, memory port B, FIFO, branches and traps. |
-| Wait | Holds while a FIFO read has no data. |
+| Wait | Defined but not entered. A FIFO read with no data stays in Exec until data arrives. |
 | FetchImm | For the 32-bit `LDI`/`LDIS`, reads the second word (the 16-bit immediate) at PC + 2. |
 
 Its ports connect it to the rest of a design:
@@ -33,14 +33,21 @@ The core decodes **108 of the 151 opcodes** in `particle_spec.md`. These are **n
 
 | Group | Opcodes not decoded |
 |---|---|
-| Memory addressing modes | Pre-increment, pre-decrement and post-decrement forms of every load and store (`(++Rr)`, `(--Rr)`, `(Rr--)`); plain `(Rr)` and post-increment `(Rr++)` work |
+| Memory addressing modes | Pre-increment, pre-decrement and post-decrement forms of every load and store (`(++Rr)`, `(--Rr)`, `(Rr--)`). Plain `(Rr)` works; post-increment `(Rr++)` is decoded but see below |
 | Division | `DIV`, `MOD`, `SDIV`, `SMOD`, and their immediate forms (the divider module exists but is not instantiated in the core) |
 | Signed arithmetic | `SADD`, `SSUB` (register forms) |
 | Other ALU | `NEG`, `SEXT8`, `SEXT16`, `SEQ`, `SNE`, `SLE`, `SSLE` (the ALU has `NEG`, `SEQ`, `SNE`, `SLE` and `SSLE` operations, but the decoder does not route these opcodes to them) |
 | Traps | `TRAP Rr`, `TRAP Imm4` |
 | Branches | The register-target conditional branches `FBRA.Z/N/P Rr, Rl` and `BBRA.Z/N/P Rr, Rl` |
 
-An opcode the core does not decode does nothing. Two more differ from the spec: `CLZ` counts the leading zeros of `Rr` rather than `Rl`, and `BEXTR` follows the spec's bit-field form.
+An opcode the core does not decode does nothing; it does not raise vector 15. Other differences from the spec:
+
+* **Post-increment** loads and stores (`(Rr++)`) do the access but don't update the pointer, so they behave like `(Rr)`. `POP32` therefore doesn't work, and neither does `PUSH32` (pre-decrement).
+* **Trap entry:** an incoming `MBOX` doesn't set `R14` to the return address, and a misalignment fault sets `R14` to the next instruction instead of the faulting one.
+* **`FIFO.TRYR` / `FIFO.TRYW`** report their status in `Rr` instead of `R14`: `TRYR` gives 0 when the channel is empty, and `TRYW` overwrites `Rr` with 1 or 0.
+* **Memory timing:** the core uses read data in the same cycle it sets the address, so memory must answer combinationally. The ULX3S design does this with block RAM clocked on the falling edge (see `ParticleBlockRamTdp`).
+
+Two more: `CLZ` counts the leading zeros of `Rr` rather than `Rl`, and `BEXTR` follows the spec's bit-field form.
 
 ---
 
@@ -53,7 +60,7 @@ An opcode the core does not decode does nothing. Two more differ from the spec: 
 | `ParticleMultiplier` | `multiplier.dart` | the core | Single-cycle 32×32 multiplier for the FPGA's DSP blocks: `MULL` (low 32 bits), `MULH` (high 32 bits, unsigned), `SMULH` (high, signed), `MULHSU` (high, signed × unsigned). |
 | `ParticleDivider` | `divider.dart` | not yet wired in | Multi-cycle divider (one bit per cycle, 32 steps): signed and unsigned quotient and remainder, with a `done` handshake and division-by-zero handling. |
 | `ParticleMemoryBus` | `memory_bus.dart` | its tests | Byte enables, write-data alignment, sub-word read formatting and alignment fault detection for 8-, 16- and 32-bit accesses. The core does the same work internally. |
-| `ParticleBlockRamTdp` | `block_ram_tdp.dart` | not yet wired in | True dual-port block RAM for the FPGA's embedded RAM: port A reads 16-bit instructions, port B reads and writes 32-bit data with byte enables (default 16,384 words, 64 KiB). |
+| `ParticleBlockRamTdp` | `block_ram_tdp.dart` | `ParticleUlx3sTop` | True dual-port block RAM for the FPGA's embedded RAM: port A reads 16-bit instructions (halfword address), port B reads and writes 32-bit data with byte enables (word address); default 16,384 words, 64 KiB. Two 16-bit banks (halfwords at byte addresses 4n and 4n+2), each with one port A read and one port B read/write port, as ECP5 block RAM provides. Both ports are registered on the **falling** clock edge, so the data is ready before the core's next rising edge. Simulation loads it from a byte list; the generated SystemVerilog loads each bank with `$readmemh`. |
 | `ParticleFifoSubsystem` | `fifo_subsystem.dart` | `ParticleMultiCore`, Parcore | Multi-channel streaming FIFOs (default 4 channels of 256 words): push, pop, `empty`/`full`, and the `FIFO.STAT` status word. |
 | `SharedRegFabric` | `shared_reg_fabric.dart` | `ParticleMultiCore` | The SARF: a 32 × 32-bit register block with read and write ports for two cores. |
 
@@ -66,8 +73,10 @@ An opcode the core does not decode does nothing. Two more differ from the spec: 
 | `ParticleMultiCore` | `particle_multi_core.dart` | Two cores with a FIFO in each direction, the SARF, and MBOX strobes between them. |
 | `CacheSubsystemTop` | `cache_subsystem_top.dart` | Two cores: core 0 runs the application, core 1 runs a cache and SDRAM worker. MBOX strobes between them, and an MMIO bridge to the SDRAM controller. |
 | `SdramController` | `sdram_controller.dart` | The ULX3S's 16-bit SDRAM: PHY and command state machine. |
-| `ParticleUlx3sTop` | `particle_ulx3s_top.dart` | The ULX3S board top level: one core, the 3 Mbps FTDI UART (`ftdi_uart.dart`), the configurable GPIO UART (`gpio_uart.dart`), the reset button and the LEDs (showing the low byte of the fetch address). Not yet functional: its memory is tied to zero and the UARTs' data streams are not connected to the core's FIFO channels. |
-| UART engine | `uart_engine.dart`, `uart.dart` | 8-N-1 transmitter and receiver with a configurable baud divisor and a streaming handshake. |
+| `ParticleUlx3sTop` | `particle_ulx3s_top.dart` | The ULX3S board design: one core, 64 KiB of `ParticleBlockRamTdp` loaded with a program, the FTDI UART on FIFO channel 0 (1 Mbps) and the GPIO UART on channel 1 (`auxUartDefaultBaud`, 115200), synchronized reset and receive pins, and the LEDs showing the low byte of the fetch address. `FIFO.STAT` gives bit 0 = nothing received, bit 1 = transmitter busy; channels 2 and 3 report both. Each UART holds one received byte and sends one at a time, so a `FIFO.W` while the transmitter is busy is dropped. |
+| `ulx3sBoardVerilog` | `ulx3s_board.dart` | The SystemVerilog top level `ulx3s_board` around `ParticleUlx3sTop`: the ECP5 PLL (25 MHz to the system clock, 50 MHz by default) and the board's pin names. `btn[0]` resets, `ftdi_txd`/`ftdi_rxd` are the FTDI UART, `gp[0]` transmits and `gp[1]` receives for the GPIO UART, and `wifi_gpio0` is held high. Written as text, because ROHD 0.5 has no vendor primitives or bidirectional ports. |
+| `ParticleUartTransceiver` | `uart.dart` | 8-N-1 transmitter and receiver with a configurable baud divisor; holds a received byte until `rxReady`, sampling in the middle of each bit. Used by `ParticleUlx3sTop` and Parcore. |
+| UART engine | `uart_engine.dart`, `ftdi_uart.dart`, `gpio_uart.dart` | An older UART and two wrappers (fixed 3 Mbps FTDI, GPIO with a run-time divisor). Not used by any design: its receive output is a one-cycle pulse with no buffer, and it samples on the free-running transmit tick. |
 
 `constants.dart` holds the opcodes, ALU operation codes and widths; `particle_rohd.dart` exports the package.
 
