@@ -742,6 +742,7 @@ class ParticleAssembler {
               'Immediate value $val out of range for LD', fname, lno, 'range');
         }
       }
+      throw AssemblerError('LD expects 2 operands', fname, lno);
     }
 
     if (mnem == 'PUSH4') {
