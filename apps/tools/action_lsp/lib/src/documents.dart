@@ -4,6 +4,8 @@
 
 import 'dart:io';
 
+import 'package:action/src/paths.dart' as p;
+
 /// A position in a document: [line] and [character] both count from 0, as
 /// in LSP. (The compiler counts lines from 1 and columns from 0.)
 class Pos {
@@ -28,22 +30,16 @@ class Pos {
 Map<String, Object?> rangeJson(Pos start, Pos end) =>
     {'start': start.toJson(), 'end': end.toJson()};
 
-/// A file path for a `file:` URI.
-String uriToPath(String uri) => Uri.parse(uri).toFilePath();
+/// A file path for a `file:` URI, with '/' between its parts (as the
+/// compiler's paths have, on Windows too).
+String uriToPath(String uri) => p.slashes(Uri.parse(uri).toFilePath(windows: p.windowsPaths));
 
 /// The `file:` URI of [path].
-String pathToUri(String path) => Uri.file(path).toString();
+String pathToUri(String path) => Uri.file(path, windows: p.windowsPaths).toString();
 
 /// [path] made absolute with symbolic links resolved when it exists, so it
 /// matches the paths the compiler records.
-String canonicalPath(String path) {
-  final abs = File(path).absolute.path;
-  try {
-    return File(abs).resolveSymbolicLinksSync();
-  } on FileSystemException {
-    return abs;
-  }
-}
+String canonicalPath(String path) => p.realPath(path);
 
 /// The text of a document the editor has open.
 class Document {

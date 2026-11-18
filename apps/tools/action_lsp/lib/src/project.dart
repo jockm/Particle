@@ -86,13 +86,13 @@ class Project {
 
   /// The defaults for [root].
   factory Project.defaults(String? root, {String? file, ProjectError? error}) => Project(
-      root, file, root == null ? const [] : [root, '$root${Platform.pathSeparator}lib'],
+      root, file, root == null ? const [] : [root, '$root/lib'],
       const [], const [], error);
 
   /// Reads [projectFileName] from [root], if it is there.
   factory Project.load(String? root) {
     if (root == null) return Project.defaults(null);
-    final path = '$root${Platform.pathSeparator}$projectFileName';
+    final path = '$root/$projectFileName';
     final f = File(path);
     if (!f.existsSync()) return Project.defaults(root);
     final text = f.readAsStringSync();
@@ -120,7 +120,7 @@ class Project {
       throw fail('action', '"action" must be an object');
     }
     String abs(String rel) => canonicalPath(
-        File(rel).isAbsolute ? rel : '$root${Platform.pathSeparator}$rel');
+        File(rel).isAbsolute ? rel : '$root/$rel');
 
     final includeDirs = <String>[];
     final inc = section['includeDirs'];
@@ -130,7 +130,7 @@ class Project {
       }
       includeDirs.addAll([for (final d in inc) abs(d as String)]);
     }
-    for (final d in [root, '$root${Platform.pathSeparator}lib']) {
+    for (final d in [root, canonicalPath('$root/lib')]) {
       if (!includeDirs.contains(d)) includeDirs.add(d);
     }
 

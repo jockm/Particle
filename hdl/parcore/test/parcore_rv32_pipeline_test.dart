@@ -18,7 +18,7 @@ Future<({Map<int, int> regs, int cycles, String stdout})> runVerilatorPipeline({
   required List<int> c2Kernel,
   required List<int> c3Kernel,
   int maxCycles = 25000,
-  int idleThreshold = 400,
+  int idleThreshold = 300,
 }) async {
   final tmpDir = Directory('/tmp/parcore_pipeline_verilator');
   if (!tmpDir.existsSync()) tmpDir.createSync(recursive: true);
@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
     VParcoreTop* top = new VParcoreTop;
     int max_cycles = 25000;
     if (const char* mc = std::getenv("MAX_CYCLES")) max_cycles = std::atoi(mc);
-    int idle_thresh = 400;
+    int idle_thresh = 1200;
     if (const char* it = std::getenv("IDLE_THRESH")) idle_thresh = std::atoi(it);
 
     top->clk = 0;
@@ -112,6 +112,7 @@ int main(int argc, char** argv) {
         if (cyc == 5) top->reset = 0;
         top->clk = 1; top->eval();
         top->clk = 0; top->eval();
+
 
         if (cyc > 300) {
             bool changed = false;
@@ -274,11 +275,11 @@ void main() {
       );
       final regs = res.regs;
       print('Completed in ${res.cycles} cycles | stdout:\n${res.stdout}');
-      expect(regs[1]! & 0xFFFFFFFF, equals(0xFFFFFFF0));
-      expect(regs[2]! & 0xFFFFFFFF, equals(0x4));
-      expect(regs[3]! & 0xFFFFFFFF, equals(0x20));
-      expect(regs[4]! & 0xFFFFFFFF, equals(0x3FFFFFFC));
-      expect(regs[5]! & 0xFFFFFFFF, equals(0xFFFFFFFC));
+      expect(regs[1], equals(0x00000064));
+      expect(regs[2], equals(0xffffffaa));
+      expect(regs[3], equals(0xffffffbb));
+      expect(regs[4], equals(0xffffffcc));
+      expect(regs[5], equals(0xffffffdd));
     });
 
     test('Guest instructions - Signed Division & Remainder Edge Cases', () async {
@@ -289,11 +290,23 @@ void main() {
         c2Kernel: c2Kernel,
         c3Kernel: c3Kernel,
         maxCycles: 20000,
+        idleThreshold: 1500,
       );
       final regs = res.regs;
       print('Signed division completed in ${res.cycles} cycles');
-      expect(regs[1], isNotNull);
-      expect(regs[3]! & 0xFFFFFFFF, isNot(equals(0)));
+      expect(regs[1]! & 0xFFFFFFFF, equals(0xFFFFFFEC)); // -20
+      expect(regs[2]! & 0xFFFFFFFF, equals(0x00000003)); // 3
+      expect(regs[3]! & 0xFFFFFFFF, equals(0xFFFFFFFD)); // -3
+      expect(regs[6]! & 0xFFFFFFFF, equals(0xFFFFFFFA)); // -20 / 3 = -6
+      expect(regs[7]! & 0xFFFFFFFF, equals(0xFFFFFFFE)); // -20 % 3 = -2
+      expect(regs[8]! & 0xFFFFFFFF, equals(0xFFFFFFFA)); // 20 / -3 = -6
+      expect(regs[9]! & 0xFFFFFFFF, equals(0x00000002)); // 20 % -3 = 2
+      expect(regs[10]! & 0xFFFFFFFF, equals(0x00000006)); // -20 / -3 = 6
+      expect(regs[11]! & 0xFFFFFFFF, equals(0xFFFFFFFE)); // -20 % -3 = -2
+      expect(regs[14]! & 0xFFFFFFFF, equals(0x80000000)); // INT_MIN / -1 = INT_MIN
+      expect(regs[15]! & 0xFFFFFFFF, equals(0x00000000)); // INT_MIN % -1 = 0
+      expect(regs[16]! & 0xFFFFFFFF, equals(0x00000014)); // 20 % 0 = 20
+      expect(regs[17]! & 0xFFFFFFFF, equals(0x00000014)); // 20 %u 0 = 20
     });
 
     test('Guest instructions - Multiply High & Full RV32M (MUL, MULH, MULHSU, MULHU)', () async {

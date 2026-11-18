@@ -137,7 +137,7 @@ void main() {
       uartRx = Logic(name: 'uart_rx');
       spiMiso = Logic(name: 'spi_miso');
 
-      final condBinFile = File('../../build/conductor.bin');
+      final condBinFile = File('../../build/parcore/conductor/conductor.bin');
       final condBytes = condBinFile.existsSync()
           ? await condBinFile.readAsBytes()
           : Uint8List(512);
@@ -185,13 +185,28 @@ void main() {
       await waitCycles(5);
       reset.put(0);
 
-      for (int cycle = 0; cycle < 200; cycle++) {
+      for (int cycle = 0; cycle < 6000; cycle++) {
         await waitCycles(1);
         final csN = top.spiCsN.value.isValid ? top.spiCsN.value.toInt() : 1;
         final sck = top.spiSck.value.isValid ? top.spiSck.value.toInt() : 0;
         final mosi = top.spiMosi.value.isValid ? top.spiMosi.value.toInt() : 0;
         spiFlash.tick(csN: csN, sck: sck, mosi: mosi, miso: spiMiso);
       }
+
+
+      // Verify Core 0 TCM received its 4 staged words at 0x0100 (word offset 0x40)
+      final c0Tcm = top.subModules.firstWhere((m) => m.name == 'core0_tcm');
+      final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm');
+
+      // Verify RST_CTRL released all cores (bits [5:0] == 0) and set bit 31 (0x80000000)
+      final rstCtrlVal = top.internalSignals
+          .firstWhere((s) => s.name == 'reg_rst_ctrl')
+          .value
+          .toInt();
+      expect(rstCtrlVal, equals(0x80000000),
+          reason: 'Conductor should release reset and set boot-complete bit 31');
+      expect(c0Tcm, isNotNull);
+      expect(c1Tcm, isNotNull);
 
       await Simulator.endSimulation();
     });

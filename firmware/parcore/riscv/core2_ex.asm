@@ -848,12 +848,16 @@ _udiv_step:
     SLT     R5, R8              ; R5 = (Remainder < D) ? 1 : 0 (SLT is unsigned)
     FBRA.NZ R5, _udiv_next
     SUB     R11, R8
-    OR      R9, 1
+    LD      R5, 1
+    OR      R9, R5
 
 _udiv_next:
     LD      R5, 1
     SUB     R4, R5
-    FBRA.Z  R4, _udiv_done
+    FBRA.NZ R4, _udiv_continue
+    LOAD16  R14, _udiv_done
+    JMP     R14, R0
+_udiv_continue:
     LOAD16  R14, _udiv_step
     JMP     R14, R0
 

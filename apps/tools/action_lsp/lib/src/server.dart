@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:action/action.dart';
+import 'package:action/src/paths.dart' as paths;
 
 import 'code_actions.dart';
 import 'connection.dart';
@@ -602,7 +603,7 @@ class ActionLanguageServer {
     final root = _root;
     final dirs = <String>{
       if (root != null) ...[root, '$root/lib'],
-      if (root != null) for (final d in _project.includeDirs) d.startsWith('/') ? d : '$root/$d',
+      if (root != null) for (final d in _project.includeDirs) paths.join(root, d),
     };
     return CodeActions(f, rf, dirs.toList(), unused)
         .actions(Pos.fromJson(range['start']), Pos.fromJson(range['end']), diags, only: only);
@@ -670,10 +671,9 @@ class ActionLanguageServer {
   }
 
   String? _resolveImport(String target, String fromFile) {
-    final sep = Platform.pathSeparator;
-    final dir = File(fromFile).parent.path;
+    final dir = paths.dirname(fromFile);
     for (final base in [dir, ..._project.includeDirs]) {
-      final cand = '$base$sep$target';
+      final cand = paths.join(base, target);
       if (File(cand).existsSync()) return canonicalPath(cand);
     }
     return null;

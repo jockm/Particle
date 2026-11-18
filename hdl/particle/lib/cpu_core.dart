@@ -117,6 +117,7 @@ class ParticleCpuCore extends Module {
     final pc = Logic(name: 'pc', width: ParticleWidths.word);
     final nextPc = Logic(name: 'nextPc', width: ParticleWidths.word);
     final state = Logic(name: 'state', width: 2);
+    final inFetchImm = state.eq(stateFetchImm);
     final immDestReg = Logic(name: 'immDestReg', width: 4);
     final immIsSigned = Logic(name: 'immIsSigned');
 
@@ -343,7 +344,7 @@ class ParticleCpuCore extends Module {
         opcode.eq(Const(ParticleOpcodes.ssltR14NegImm8, width: 8));
 
     rfWAddr <=
-        mux(
+        mux(inFetchImm, immDestReg, mux(
           state.eq(stateFetchImm),
           immDestReg,
           mux(
@@ -351,7 +352,7 @@ class ParticleCpuCore extends Module {
             Const(14, width: 4),
             mux(opcode.eq(Const(ParticleOpcodes.tas, width: 8)), rl, rr),
           ),
-        );
+        ));
     rfXchgRegIdx <= rr;
 
     // Out-of-Band SARF default port connections
@@ -381,7 +382,6 @@ class ParticleCpuCore extends Module {
     fifoPopEn <= outFifoPopEn;
     sarfRdWe <= outSarfRdWe;
 
-    final inFetchImm = state.eq(stateFetchImm);
     final isLoadImm16 = opcode.eq(Const(ParticleOpcodes.ldi, width: 8)) |
         opcode.eq(Const(ParticleOpcodes.ldis, width: 8));
     final imm16Extended =
@@ -661,6 +661,10 @@ class ParticleCpuCore extends Module {
           outMboxStrobe < inExec,
         ]),
       ]),
+      If(inFetchImm, then: [
+        rfWEn < Const(1),
+        rfWData < imm16Extended,
+      ]),
     ]);
 
     // Next PC & Branch / Table Jump Calculation
@@ -820,9 +824,6 @@ class ParticleCpuCore extends Module {
             ]),
           ]),
           CaseItem(Const(stateFetchImm, width: 2), [
-            rfWData < imm16Extended,
-            rfWEn < Const(1),
-            rfWAddr < immDestReg,
             pc < pc + 4,
             state < Const(stateFetch, width: 2),
           ]),
