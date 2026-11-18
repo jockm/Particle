@@ -37,6 +37,10 @@ class ParticleAlu extends Module {
     final aluRes = Logic(name: 'alu_res', width: ParticleWidths.word);
 
     final shiftAmt5 = operandB.slice(4, 0);
+    final bextrLen5 = operandB.slice(9, 5);
+    final bextrMask =
+        ((Const(1, width: 33) << bextrLen5.zeroExtend(33)) - Const(1, width: 33))
+            .slice(31, 0);
 
     // Unsigned and Signed Less-Than Primitives
     final sltVal = mux(
@@ -134,8 +138,8 @@ class ParticleAlu extends Module {
         ]),
         // 10: CLZ
         CaseItem(Const(10, width: 5), [aluRes < clzVal]),
-        // 11: BEXTR
-        CaseItem(Const(11, width: 5), [aluRes < ((operandA >>> shiftAmt5) & Const(1, width: ParticleWidths.word))]),
+        // 11: BEXTR (bit-field extract: pos = operandB[4:0], len = operandB[9:5])
+        CaseItem(Const(11, width: 5), [aluRes < ((operandA >>> shiftAmt5) & bextrMask)]),
         // 12: BSET
         CaseItem(Const(12, width: 5), [aluRes < (operandA | (Const(1, width: ParticleWidths.word) << shiftAmt5))]),
         // 13: BCLR

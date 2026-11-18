@@ -545,7 +545,7 @@ class ParticleAssembler {
     'SADD': 2, 'SSUB': 2, 'SDIV': 2, 'SMOD': 2,
     'AND': 2, 'OR': 2, 'XOR': 2,
     'SHIFTL': 2, 'SHIFTR': 2, 'ASHIFTR': 2, 'ROTL': 2, 'ROTR': 2,
-    'MULL': 2, 'MULH': 2, 'SMULH': 2, 'MULHSU': 2,
+    'MULL': 2, 'MULH': 2, 'SMULH': 2, 'MULHU': 2, 'MULHSU': 2,
     'BEXTR': 2, 'CLZ': 2, 'BSET': 2, 'BCLR': 2, 'BINV': 2, 'BGET': 2,
     'TAS': 2, 'SLT': 2, 'SSLT': 2, 'SEQ': 2, 'SNE': 2, 'SLE': 2, 'SSLE': 2,
     'JMP': 2, 'RJUMP': 2,
@@ -852,12 +852,13 @@ class ParticleAssembler {
     // -------------------------------------------------------------------------
     // Multipliers (MULL, MULH, SMULH, MULHSU)
     // -------------------------------------------------------------------------
-    if (['MULL', 'MULH', 'SMULH', 'MULHSU'].contains(mnem)) {
+    if (['MULL', 'MULH', 'SMULH', 'MULHU', 'MULHSU'].contains(mnem)) {
       final rr = getR(0);
       final baseLut = {
         'MULL': 0x78,
         'MULH': 0x79,
         'SMULH': 0x7A,
+        'MULHU': 0x79,
         'MULHSU': 0x7B
       };
       try {

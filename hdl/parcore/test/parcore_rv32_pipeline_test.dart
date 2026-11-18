@@ -290,7 +290,7 @@ void main() {
         c2Kernel: c2Kernel,
         c3Kernel: c3Kernel,
         maxCycles: 20000,
-        idleThreshold: 1500,
+        idleThreshold: 2500,
       );
       final regs = res.regs;
       print('Signed division completed in ${res.cycles} cycles');
@@ -317,9 +317,10 @@ void main() {
         c2Kernel: c2Kernel,
         c3Kernel: c3Kernel,
         maxCycles: 15000,
+        idleThreshold: 1000,
       );
       final regs = res.regs;
-      print('Multiply test completed in ${res.cycles} cycles');
+      print('Multiply test completed in ${res.cycles} cycles | stdout:\n${res.stdout}');
       expect(regs[7]! & 0xFFFFFFFF, equals(0xFFFFFFC4));
     });
 

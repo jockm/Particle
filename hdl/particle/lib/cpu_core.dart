@@ -335,6 +335,7 @@ class ParticleCpuCore extends Module {
     memPortBREn <= outMemBREn & ~trap14Strobe;
 
     final isR14Dest = opcode.eq(Const(ParticleOpcodes.ldImm8, width: 8)) |
+        opcode.eq(Const(ParticleOpcodes.fifoTryW, width: 8)) |
         opcode.eq(Const(ParticleOpcodes.ldNegImm8, width: 8)) |
         opcode.eq(Const(ParticleOpcodes.push4, width: 8)) |
         opcode.eq(Const(ParticleOpcodes.push8, width: 8)) |
@@ -374,6 +375,7 @@ class ParticleCpuCore extends Module {
     final outSarfRdWe = Logic(name: 'outSarfRdWe');
 
     final fifoEmpty = fifoStatus.slice(0, 0);
+    final fifoFull = fifoStatus.slice(1, 1);
     final isFifoRead = opcode.eq(Const(ParticleOpcodes.fifoR, width: 8));
     final fifoReadStall = inExec & isFifoRead & fifoEmpty;
 
@@ -652,6 +654,11 @@ class ParticleCpuCore extends Module {
         ]),
         CaseItem(Const(ParticleOpcodes.fifoW, width: 8), [
           outFifoPushEn < inExec,
+        ]),
+        CaseItem(Const(ParticleOpcodes.fifoTryW, width: 8), [
+          outFifoPushEn < inExec & ~fifoFull,
+          rfWData < mux(fifoFull, Const(0, width: ParticleWidths.word), Const(1, width: ParticleWidths.word)),
+          rfWEn < inExec,
         ]),
         CaseItem(Const(ParticleOpcodes.fifoStat, width: 8), [
           rfWData < fifoStatus,

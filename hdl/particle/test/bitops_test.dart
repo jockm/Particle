@@ -54,7 +54,7 @@ void main() {
     Simulator.registerAction(30, () => clk.put(0));
 
     // 2. Fetch BEXTR R1, R1 (0x8011: bextr, rr=1, rl=1)
-    // R1 = 5 (binary 0101). Offset = 5 & 0x1F = 5. (5 >> 5) & 1 = 0
+    // R1 = 5 (pos = 5, length = 0) -> bit-field extract yields 0
     Simulator.registerAction(32, () {
       memARData.put((ParticleOpcodes.bextr << 8) | 0x11);
     });

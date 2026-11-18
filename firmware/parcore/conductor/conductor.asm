@@ -67,12 +67,10 @@ _reset_vector:
     LDI     R1, 0x0010
     SHIFTL  R1, 15
     SHIFTL  R1, 1                   ; R1 = 0x0010_0000
-    LDI     R14, _spi_begin_read
-    RCALL   R14
+    RCALL   _spi_begin_read
 
     ; Word 0: Magic ("PARC" = 0x50415243)
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
     LDI     R2, IMAGE_MAGIC_HI
     SHIFTL  R2, 15
     SHIFTL  R2, 1
@@ -84,8 +82,7 @@ _reset_vector:
 ._magic_ok:
 
     ; Word 1: Section Count (must be 1..6)
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
     LD      R7, R1                  ; R7 = sectionCount
     FBRA.NZ R7, ._sec_nonzero       ; Skip 1 JUMP
     JUMP    _fault_halt
@@ -97,16 +94,13 @@ _reset_vector:
 ._sec_in_range:
 
     ; Word 2: Expected Checksum
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
     LD      R8, R1                  ; R8 = expectedSum
 
     ; Word 3: Reserved (discard)
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
 
-    LDI     R14, _spi_end_read
-    RCALL   R14
+    RCALL   _spi_end_read
 
     ; 3. Initialize Section Directory & Payload Flash Pointers
     LD      R9, 0                   ; R9 = runningSum = 0
@@ -137,23 +131,18 @@ _section_loop:
 
     ; Read 12-byte section entry at R11
     LD      R1, R11
-    LDI     R14, _spi_begin_read
-    RCALL   R14
+    RCALL   _spi_begin_read
 
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
     LD      R12, R1                 ; R12 = targetCore (0..5)
 
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
     LD      R13, R1                 ; R13 = tcmOffset
 
-    LDI     R14, _spi_read_word_le
-    RCALL   R14
+    RCALL   _spi_read_word_le
     ST32    (--SP), R1              ; Push byteLength onto stack
 
-    LDI     R14, _spi_end_read
-    RCALL   R14
+    RCALL   _spi_end_read
 
     LD32    R3, (SP++)              ; Pop R3 = byteLength
 
@@ -188,8 +177,7 @@ _section_loop:
     ADD     R10, R3                 ; Advance R10 by byteLength for next section
     ST32    (--SP), R12             ; Save dstAddr across call
     ST32    (--SP), R13             ; Save wordCount across call
-    LDI     R14, _spi_begin_read
-    RCALL   R14
+    RCALL   _spi_begin_read
     LD32    R13, (SP++)             ; Restore wordCount
     LD32    R12, (SP++)             ; Restore dstAddr
 
@@ -199,8 +187,7 @@ _word_stream_loop:
 ._has_words:
     ST32    (--SP), R12             ; Save dstAddr
     ST32    (--SP), R13             ; Save wordCount
-    LDI     R14, _spi_read_word_le
-    RCALL   R14                     ; R1 = next 32-bit little-endian word
+    RCALL   _spi_read_word_le       ; R1 = next 32-bit little-endian word
     LD32    R13, (SP++)             ; Restore wordCount
     LD32    R12, (SP++)             ; Restore dstAddr
 
@@ -210,8 +197,7 @@ _word_stream_loop:
     JUMP    _word_stream_loop
 
 _section_done:
-    LDI     R14, _spi_end_read
-    RCALL   R14
+    RCALL   _spi_end_read
 
     ADD     R11, 12                 ; Advance directory pointer by 12 bytes
     SUB     R7, 1                   ; sectionCount--
@@ -261,8 +247,7 @@ _spi_begin_read:
 
     ; Send 0x03 (Standard SPI Read Command)
     LD      R1, 0x03
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
 
     ; Send Addr[23:16]
     LD      R1, R4
@@ -270,23 +255,20 @@ _spi_begin_read:
     SHIFTR  R1, 1
     LD      R14, 0xFF
     AND     R1, R14
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
 
     ; Send Addr[15:8]
     LD      R1, R4
     SHIFTR  R1, 8
     LD      R14, 0xFF
     AND     R1, R14
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
 
     ; Send Addr[7:0]
     LD      R1, R4
     LD      R14, 0xFF
     AND     R1, R14
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
 
     LD32    R4, (SP++)
     LD32    R14, (SP++)
@@ -330,29 +312,25 @@ _spi_read_word_le:
 
     ; Byte 0 (LSB)
     LD      R1, 0
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
     LD      R4, R1                  ; R4 = b0
 
     ; Byte 1
     LD      R1, 0
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
     SHIFTL  R1, 8
     OR      R4, R1                  ; R4 |= (b1 << 8)
 
     ; Byte 2
     LD      R1, 0
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
     SHIFTL  R1, 15
     SHIFTL  R1, 1
     OR      R4, R1                  ; R4 |= (b2 << 16)
 
     ; Byte 3 (MSB)
     LD      R1, 0
-    LDI     R14, _spi_xfer_byte
-    RCALL   R14
+    RCALL   _spi_xfer_byte
     SHIFTL  R1, 15
     SHIFTL  R1, 9
     OR      R1, R4                  ; R1 = b0 | (b1<<8) | (b2<<16) | (b3<<24)
