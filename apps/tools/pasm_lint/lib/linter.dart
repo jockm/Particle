@@ -406,10 +406,14 @@ void scanIncludedSymbols(
 // Main Linting Engine
 // -----------------------------------------------------------------------------
 
+/// One diagnostic: its line (counted from 1), its code (one of
+/// [diagnosticCodes]) and its message.
+typedef LintMessage = (int, String, String);
+
 /// Structured output returned by [lintLines] for both CLI and LSP diagnostics.
 class LintResult {
-  final List<(int, String)> errors;
-  final List<(int, String)> warnings;
+  final List<LintMessage> errors;
+  final List<LintMessage> warnings;
 
   const LintResult(this.errors, this.warnings);
 }
@@ -419,8 +423,8 @@ class LintResult {
 /// inside pasm_lsp while still resolving relative .include directives from [filepath]'s parent.
 LintResult lintLines(String filepath, List<String> lines, List<String> includeDirs) {
   final file = File(filepath);
-  final errors = <(int, String)>[];
-  final warnings = <(int, String)>[];
+  final errors = <LintMessage>[];
+  final warnings = <LintMessage>[];
 
   // Build standard search paths for includes
   final fileParent = file.parent.path;
@@ -493,7 +497,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
           }
         }
         if (unescapedQuotes < 2 || unescapedQuotes % 2 != 0) {
-          errors.add((lno, "Unterminated or malformed string literal in directive."));
+          errors.add((lno, "syntax", "Unterminated or malformed string literal in directive."));
         }
       }
 
@@ -505,9 +509,9 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
           final val = parseNumeric(dirTokens[d]);
           if (val != null) {
             if (dirName == ".byte" && (val < -128 || val > 255)) {
-              errors.add((lno, "Directive .byte value $val out of 8-bit range (-128..255)."));
+              errors.add((lno, "range", "Directive .byte value $val out of 8-bit range (-128..255)."));
             } else if (dirName == ".half" && (val < -32768 || val > 65535)) {
-              errors.add((lno, "Directive .half value $val out of 16-bit range (-32768..65535)."));
+              errors.add((lno, "range", "Directive .half value $val out of 16-bit range (-32768..65535)."));
             }
           }
         }
@@ -532,7 +536,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
 
     // 1. Verify mnemonic or user macro existence
     if (!allValidMnemonics.contains(mnem) && !userMacros.contains(mnem)) {
-      errors.add((lno, "Unrecognized mnemonic '$mnem'."));
+      errors.add((lno, "syntax", "Unrecognized mnemonic '$mnem'."));
       continue;
     }
 
@@ -544,7 +548,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     // 2. Validate Zero-Operand Instructions
     if (zeroOperandOps.contains(mnem)) {
       if (ops.isNotEmpty) {
-        errors.add((lno, "$mnem takes 0 operands, but got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem takes 0 operands, but got ${ops.length}."));
       }
       continue;
     }
@@ -552,11 +556,11 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     // 3. Validate Single-Register ALU / Unary Operations
     if (unaryRegisterOps.contains(mnem)) {
       if (ops.length != 1) {
-        errors.add((lno, "$mnem requires exactly 1 operand, but got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem requires exactly 1 operand, but got ${ops.length}."));
       } else {
         final regUpper = ops[0].toUpperCase();
         if (!validRegisters.contains(regUpper)) {
-          errors.add((lno, "Invalid register operand '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
+          errors.add((lno, "register", "Invalid register operand '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
         }
       }
       continue;
@@ -565,19 +569,19 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     // 4. Validate Memory Stores: ST* (Rd), Rs
     if (storeOps.contains(mnem)) {
       if (ops.length != 2) {
-        errors.add((lno, "$mnem expects 2 operands (e.g. $mnem (Rd), Rs), got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem expects 2 operands (e.g. $mnem (Rd), Rs), got ${ops.length}."));
       } else {
         if (!ops[0].startsWith("(") || !ops[0].endsWith(")")) {
-          errors.add((lno, "$mnem destination must use parenthesized memory indirect syntax: $mnem (Rd), Rs."));
+          errors.add((lno, "syntax", "$mnem destination must use parenthesized memory indirect syntax: $mnem (Rd), Rs."));
         } else {
           final baseReg = extractIndirectBaseReg(ops[0]);
           if (!validRegisters.contains(baseReg)) {
-            errors.add((lno, "Invalid register '$baseReg' in indirect operand '${ops[0]}'."));
+            errors.add((lno, "register", "Invalid register '$baseReg' in indirect operand '${ops[0]}'."));
           }
         }
         final srcReg = ops[1].toUpperCase();
         if (!validRegisters.contains(srcReg)) {
-          errors.add((lno, "Invalid source register '${ops[1]}' for $mnem."));
+          errors.add((lno, "register", "Invalid source register '${ops[1]}' for $mnem."));
         }
       }
       continue;
@@ -587,34 +591,34 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     //    pasm supports both LD* Rd, (Rs) (load) and LD* (Rd), Rs (store / PUSH32 / POP32)
     if (loadWidthOps.contains(mnem)) {
       if (ops.length != 2) {
-        errors.add((lno, "$mnem expects 2 operands (e.g. $mnem Rd, (Rs) or $mnem (Rd), Rs), got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem expects 2 operands (e.g. $mnem Rd, (Rs) or $mnem (Rd), Rs), got ${ops.length}."));
       } else {
         final leftIsMem = ops[0].startsWith("(") && ops[0].endsWith(")");
         final rightIsMem = ops[1].startsWith("(") && ops[1].endsWith(")");
 
         if (!leftIsMem && !rightIsMem) {
-          errors.add((lno, "$mnem requires a parenthesized memory indirect operand: $mnem Rd, (Rs) or $mnem (Rd), Rs."));
+          errors.add((lno, "syntax", "$mnem requires a parenthesized memory indirect operand: $mnem Rd, (Rs) or $mnem (Rd), Rs."));
         } else if (leftIsMem && rightIsMem) {
-          errors.add((lno, "$mnem cannot have two memory operands: ${ops[0]}, ${ops[1]}."));
+          errors.add((lno, "syntax", "$mnem cannot have two memory operands: ${ops[0]}, ${ops[1]}."));
         } else if (rightIsMem) {
           // Standard Load: LD* Rd, (Rs)
           final destReg = ops[0].toUpperCase();
           if (!validRegisters.contains(destReg)) {
-            errors.add((lno, "Invalid destination register '${ops[0]}' for $mnem."));
+            errors.add((lno, "register", "Invalid destination register '${ops[0]}' for $mnem."));
           }
           final baseReg = extractIndirectBaseReg(ops[1]);
           if (!validRegisters.contains(baseReg)) {
-            errors.add((lno, "Invalid register '$baseReg' in indirect operand '${ops[1]}'."));
+            errors.add((lno, "register", "Invalid register '$baseReg' in indirect operand '${ops[1]}'."));
           }
         } else {
           // Store Form via LD*: LD* (Rd), Rs (e.g. PUSH32 / POP32)
           final baseReg = extractIndirectBaseReg(ops[0]);
           if (!validRegisters.contains(baseReg)) {
-            errors.add((lno, "Invalid register '$baseReg' in indirect operand '${ops[0]}'."));
+            errors.add((lno, "register", "Invalid register '$baseReg' in indirect operand '${ops[0]}'."));
           }
           final srcReg = ops[1].toUpperCase();
           if (!validRegisters.contains(srcReg)) {
-            errors.add((lno, "Invalid source register '${ops[1]}' for $mnem."));
+            errors.add((lno, "register", "Invalid source register '${ops[1]}' for $mnem."));
           }
         }
       }
@@ -625,7 +629,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     if (mnem == "TRAP" && ops.length == 1) {
       final n = parseNumeric(ops[0]);
       if (n != null && (n < 0 || n > 15)) {
-        errors.add((lno, "TRAP $n is out of range: trap numbers are 0..15."));
+        errors.add((lno, "range", "TRAP $n is out of range: trap numbers are 0..15."));
       }
     }
 
@@ -633,7 +637,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     if (ops.isNotEmpty &&
         ops[0].toUpperCase() == "R0" &&
         (writesFirstOperand.contains(mnem) || (mnem == "LD" && ops.length == 2))) {
-      errors.add((lno, "$mnem writes R0, which is hardwired to zero; the result is lost."));
+      errors.add((lno, "r0-write", "$mnem writes R0, which is hardwired to zero; the result is lost."));
     }
 
     // 5c. The stack pointer must stay a multiple of 4
@@ -642,7 +646,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
         const {"R15", "SP"}.contains(ops[0].toUpperCase())) {
       final n = parseNumeric(ops[1]);
       if (n != null && n % 4 != 0) {
-        errors.add((lno, "$mnem ${ops[0]}, $n leaves the stack pointer misaligned; adjust it by a multiple of 4."));
+        errors.add((lno, "stack-misaligned", "$mnem ${ops[0]}, $n leaves the stack pointer misaligned; adjust it by a multiple of 4."));
       }
     }
 
@@ -650,7 +654,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     for (final op in ops) {
       if (op.startsWith("(") && op.endsWith(")")) {
         if (memIndirectDisallowed.contains(mnem)) {
-          errors.add((lno, "Instruction '$mnem' does not accept indirect memory operand '$op'."));
+          errors.add((lno, "syntax", "Instruction '$mnem' does not accept indirect memory operand '$op'."));
         }
       }
     }
@@ -663,7 +667,7 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
         if (cleanReg.startsWith("R") && cleanReg != "RBASE") {
           final regNum = int.tryParse(cleanReg.substring(1));
           if (regNum != null && (regNum < 0 || regNum > 15)) {
-            errors.add((lno, "Register identifier '$cleanReg' is out of range (allowed: r0..r15, sp)."));
+            errors.add((lno, "register", "Register identifier '$cleanReg' is out of range (allowed: r0..r15, sp)."));
           }
         }
       }
@@ -674,12 +678,12 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
       if (ops.length == 2) {
         final imm = parseNumeric(ops[1]);
         if (imm != null && (imm < 0 || imm > 15)) {
-          errors.add((lno, "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for $mnem ${ops[0]}."));
+          errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for $mnem ${ops[0]}."));
         }
       } else if (ops.length > 2) {
-        errors.add((lno, "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
+        errors.add((lno, "syntax", "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
       } else if (ops.length < 2) {
-        errors.add((lno, "$mnem requires 2 operands, but got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem requires 2 operands, but got ${ops.length}."));
       }
     }
 
@@ -688,12 +692,12 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
       if (ops.length == 2) {
         final imm = parseNumeric(ops[1]);
         if (imm != null && (imm < 0 || imm > 15)) {
-          errors.add((lno, "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for $mnem ${ops[0]}."));
+          errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for $mnem ${ops[0]}."));
         }
       } else if (ops.length > 2) {
-        errors.add((lno, "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
+        errors.add((lno, "syntax", "$mnem is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
       } else if (ops.length < 2) {
-        errors.add((lno, "$mnem requires 2 operands, but got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem requires 2 operands, but got ${ops.length}."));
       }
     }
 
@@ -706,40 +710,40 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
         final imm = parseNumeric(ops[1]);
         if (destReg == "R14") {
           if (imm != null && (imm < -255 || imm > 255)) {
-            errors.add((lno, "Immediate $imm (${ops[1]}) out of 8-bit unsigned range (0..255) for LD R14. Use LOAD16/LOAD32."));
+            errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 8-bit unsigned range (0..255) for LD R14. Use LOAD16/LOAD32."));
           }
         } else {
           if (imm != null && (imm < -15 || imm > 15)) {
-            errors.add((lno, "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for LD ${ops[0]}. Use LOAD16/LOAD32 or load via R14."));
+            errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 4-bit unsigned range (0..15) for LD ${ops[0]}. Use LOAD16/LOAD32 or load via R14."));
           }
         }
       } else if (ops.length > 2) {
-        errors.add((lno, "LD is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
+        errors.add((lno, "syntax", "LD is strictly a 2-operand instruction in Particle RISC, but got ${ops.length} operands."));
       } else if (ops.length < 2) {
-        errors.add((lno, "LD requires 2 operands, but got ${ops.length}."));
+        errors.add((lno, "syntax", "LD requires 2 operands, but got ${ops.length}."));
       }
     }
 
     // 10a. Validate LDI / LDIS operand arity and 16-bit immediate bounds
     if (mnem == "LDI" || mnem == "LDIS") {
       if (ops.length != 2) {
-        errors.add((lno, "$mnem expects 2 operands ($mnem Rl, <imm16>), but got ${ops.length}."));
+        errors.add((lno, "syntax", "$mnem expects 2 operands ($mnem Rl, <imm16>), but got ${ops.length}."));
       } else {
         final destReg = ops[0].toUpperCase();
         if (!validRegisters.contains(destReg)) {
-          errors.add((lno, "Invalid destination register '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
+          errors.add((lno, "register", "Invalid destination register '${ops[0]}' for $mnem. Expected r0..r15 or sp."));
         }
         if (validRegisters.contains(ops[1].toUpperCase())) {
-          errors.add((lno, "$mnem immediate operand cannot be a register ('${ops[1]}')."));
+          errors.add((lno, "syntax", "$mnem immediate operand cannot be a register ('${ops[1]}')."));
         } else {
           final imm = parseNumeric(ops[1]);
           if (mnem == "LDI") {
             if (imm != null && (imm < 0 || imm > 0xFFFF)) {
-              errors.add((lno, "Immediate $imm (${ops[1]}) out of 16-bit unsigned range (0..65535) for LDI."));
+              errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 16-bit unsigned range (0..65535) for LDI."));
             }
           } else {
             if (imm != null && (imm < -32768 || imm > 0xFFFF)) {
-              errors.add((lno, "Immediate $imm (${ops[1]}) out of 16-bit signed range (-32768..32767) for LDIS."));
+              errors.add((lno, "range", "Immediate $imm (${ops[1]}) out of 16-bit signed range (-32768..32767) for LDIS."));
             }
           }
         }
@@ -763,12 +767,12 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
         if (labels.containsKey(targetLabel)) {
           final tgtLno = labels[targetLabel]!;
           if (branchForward.contains(mnem) && tgtLno < lno) {
-            errors.add((lno, "Forward branch '$mnem $targetLabel' branches backward (target on line $tgtLno). Use BBRA/BBRA.* instead."));
+            errors.add((lno, "branch-direction", "Forward branch '$mnem $targetLabel' branches backward (target on line $tgtLno). Use BBRA/BBRA.* instead."));
           } else if (branchBackward.contains(mnem) && tgtLno > lno) {
-            errors.add((lno, "Backward branch '$mnem $targetLabel' branches forward (target on line $tgtLno). Use FBRA/FBRA.* instead."));
+            errors.add((lno, "branch-direction", "Backward branch '$mnem $targetLabel' branches forward (target on line $tgtLno). Use FBRA/FBRA.* instead."));
           }
         } else if (!defines.contains(targetLabel)) {
-          errors.add((lno, "Branch target label '$targetLabel' is undefined in this module."));
+          errors.add((lno, "undefined-symbol", "Branch target label '$targetLabel' is undefined in this module."));
         }
       }
     }
@@ -788,64 +792,105 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
     if (labels.containsKey(target) || defines.contains(target) || includedSymbols.contains(target)) {
       continue;
     }
-    warnings.add((pl.lno,
+    warnings.add((pl.lno, "external-call",
         "RCALL target '$target' is not defined in this file or its includes; it must come from another file in the build."));
   }
   errors.sort((a, b) => a.$1.compareTo(b.$1));
   warnings.sort((a, b) => a.$1.compareTo(b.$1));
 
   final hidden = findSuppressions(lines);
-  errors.removeWhere((d) => hidden.hides(d.$1));
-  warnings.removeWhere((d) => hidden.hides(d.$1));
+  errors.removeWhere((d) => hidden.hides(d.$1, d.$2));
+  warnings.removeWhere((d) => hidden.hides(d.$1, d.$2));
 
   return LintResult(errors, warnings);
 }
 
-/// The lines whose errors and warnings are hidden by comments:
+/// The codes of the assembler's and the linter's diagnostics.
+const diagnosticCodes = {
+  // Errors
+  "syntax", "register", "range", "undefined-symbol", "expression",
+  "branch-range", "branch-direction", "jump", "include", "reserved-name",
+  "r0-write", "stack-misaligned",
+  // Warnings
+  "external-call", "r14-clobbered", "misaligned", "stack-balance",
+};
+
+/// The diagnostics hidden by comments:
 ///   `; pasm-disable-line`       this line
 ///   `; pasm-disable-next-line`  the next line
 ///   `; pasm-disable` ... `; pasm-enable`  the lines between
 ///   `; pasm-disable-file`       the whole file
+/// Each may name codes (`; pasm-disable-line undefined-symbol, range`);
+/// without codes it hides every diagnostic.
 class Suppressions {
-  final bool wholeFile;
-  final Set<int> lines;
+  /// For each line (counted from 1), the codes hidden there; an empty set
+  /// hides every code.
+  final Map<int, Set<String>> lines;
 
-  const Suppressions(this.wholeFile, this.lines);
+  /// The codes hidden in the whole file (empty: every code), or null.
+  final Set<String>? file;
 
-  /// Whether diagnostics on line [lno] (counted from 1) are hidden.
-  bool hides(int lno) => wholeFile || lines.contains(lno);
+  const Suppressions(this.file, this.lines);
+
+  /// Whether a diagnostic with [code] on line [lno] is hidden.
+  bool hides(int lno, [String? code]) => _covers(file, code) || _covers(lines[lno], code);
+
+  static bool _covers(Set<String>? codes, String? code) =>
+      codes != null && (codes.isEmpty || (code != null && codes.contains(code)));
 }
 
 final _suppressRe = RegExp(r"(?<![\w-])pasm-(disable-next-line|disable-line|disable-file|disable|enable)(?![\w-])");
 
+/// The codes named right after a directive: the words from [rest] up to
+/// the first that is not a code. Other text (a reason) may follow.
+Set<String> _codesAfter(String rest) {
+  final codes = <String>{};
+  for (final w in rest.split(RegExp(r"[\s,]+"))) {
+    if (w.isEmpty) continue;
+    if (!diagnosticCodes.contains(w)) break;
+    codes.add(w);
+  }
+  return codes;
+}
+
+/// [a] and [b] together, where an empty set means every code.
+Set<String>? _merge(Set<String>? a, Set<String>? b) {
+  if (a == null) return b;
+  if (b == null) return a;
+  if (a.isEmpty || b.isEmpty) return <String>{};
+  return {...a, ...b};
+}
+
 /// Finds the `; pasm-disable...` comments in [lines].
 Suppressions findSuppressions(List<String> lines) {
-  var wholeFile = false;
-  final hidden = <int>{};
-  var inBlock = false;
+  Set<String>? file;
+  final hidden = <int, Set<String>>{};
+  void hide(int lno, Set<String> codes) => hidden[lno] = _merge(hidden[lno], codes)!;
+  Set<String>? block;
   for (var i = 0; i < lines.length; i++) {
     final lno = i + 1;
     final code = _stripComment(lines[i]);
     final comment = lines[i].substring(code.length);
     var enabled = false;
     for (final m in _suppressRe.allMatches(comment)) {
+      final codes = _codesAfter(comment.substring(m.end));
       switch (m.group(1)) {
         case "disable-line":
-          hidden.add(lno);
+          hide(lno, codes);
         case "disable-next-line":
-          hidden.add(lno + 1);
+          hide(lno + 1, codes);
         case "disable-file":
-          wholeFile = true;
+          file = _merge(file, codes);
         case "disable":
-          inBlock = true;
+          block = _merge(block, codes);
         case "enable":
           enabled = true;
       }
     }
-    if (inBlock && !enabled) hidden.add(lno);
-    if (enabled) inBlock = false;
+    if (block != null && !enabled) hide(lno, block);
+    if (enabled) block = null;
   }
-  return Suppressions(wholeFile, hidden);
+  return Suppressions(file, hidden);
 }
 
 /// CLI wrapper around [lintLines] that reads [filepath] from disk and prints
@@ -870,10 +915,10 @@ int lintFile(String filepath, List<String> includeDirs) {
   // Display human-readable error diagnostics
   stderr.writeln("=== Particle Assembly Lint: $filepath ===");
   for (final err in errors) {
-    stderr.writeln("[ERROR] Line ${err.$1.toString().padLeft(4)}: ${err.$2}");
+    stderr.writeln("[ERROR] Line ${err.$1.toString().padLeft(4)}: ${err.$3} [${err.$2}]");
   }
   for (final warn in warnings) {
-    stderr.writeln("[WARN]  Line ${warn.$1.toString().padLeft(4)}: ${warn.$2}");
+    stderr.writeln("[WARN]  Line ${warn.$1.toString().padLeft(4)}: ${warn.$3} [${warn.$2}]");
   }
   stderr.writeln("\nResult: ${errors.length} error(s), ${warnings.length} warning(s).");
 
@@ -1003,7 +1048,7 @@ bool _isMem(String op) => op.startsWith("(") && op.endsWith(")");
 
 /// 47: R14 is read after a macro overwrote it, with no new value in
 /// between. Followed in straight-line code; a label starts afresh.
-void checkR14Clobbers(List<ParsedLine> lines, Set<String> userMacros, List<(int, String)> warnings) {
+void checkR14Clobbers(List<ParsedLine> lines, Set<String> userMacros, List<LintMessage> warnings) {
   int? clobberLine;
   String? clobberBy;
   for (final pl in lines) {
@@ -1018,7 +1063,7 @@ void checkR14Clobbers(List<ParsedLine> lines, Set<String> userMacros, List<(int,
     final (reads, writes) = _r14Use(pl);
     final destIsR14 = pl.ops.isNotEmpty && _isR14(pl.ops[0]);
     if (reads && clobberLine != null) {
-      warnings.add((pl.lno,
+      warnings.add((pl.lno, "r14-clobbered",
           "R14 is read here, but $clobberBy on line $clobberLine overwrote it (LOAD16/24/32 and RCALL use R14)."));
       clobberLine = null;
     }
@@ -1061,7 +1106,7 @@ int? _stringBytes(String args) {
 
 /// 48: .half or .word data, or code, placed after byte-sized data that
 /// leaves it misaligned, with no .align in between.
-void checkAlignment(List<ParsedLine> lines, List<(int, String)> warnings) {
+void checkAlignment(List<ParsedLine> lines, List<LintMessage> warnings) {
   // Bytes of byte-sized data since the last .align or .org, modulo 4; -1
   // when unknown (a string or .space whose size could not be worked out)
   int? pending; // null: no byte-sized data since the last alignment
@@ -1091,7 +1136,7 @@ void checkAlignment(List<ParsedLine> lines, List<(int, String)> warnings) {
         final p = pending;
         if (p != null && (p < 0 || p % need != 0)) {
           final what = p < 0 ? "an unknown number of bytes" : "$p byte(s) past an aligned address";
-          warnings.add((pl.lno,
+          warnings.add((pl.lno, "misaligned",
               "$d data follows byte-sized data from line $since ($what) with no .align; it will be misaligned. Add '.align $need'."));
           pending = null;
           continue;
@@ -1115,7 +1160,7 @@ void checkAlignment(List<ParsedLine> lines, List<(int, String)> warnings) {
       final p = pending;
       if (p != null && (p < 0 || p.isOdd)) {
         final what = p < 0 ? "an unknown number of bytes" : "$p byte(s) past an aligned address";
-        warnings.add((pl.lno,
+        warnings.add((pl.lno, "misaligned",
             "Code follows byte-sized data from line $since ($what) with no .align; instructions must be on even addresses. Add '.align 2'."));
       }
       pending = null;
@@ -1127,7 +1172,7 @@ void checkAlignment(List<ParsedLine> lines, List<(int, String)> warnings) {
 /// its returns. A routine starts at a label not beginning with '.'; local
 /// labels ('.' first) are reached by branches with the depth at the branch.
 /// Routines that change R15 any other way are skipped.
-void checkStackBalance(List<ParsedLine> lines, List<(int, String)> warnings) {
+void checkStackBalance(List<ParsedLine> lines, List<LintMessage> warnings) {
   int? depth = 0; // null: unknown (skip until the next routine)
   var inRoutine = false;
   String routine = "";
@@ -1149,7 +1194,7 @@ void checkStackBalance(List<ParsedLine> lines, List<(int, String)> warnings) {
           reachable = recorded != null;
           if (!reachable) depth = null;
         } else if (recorded != null && depth != null && recorded != depth) {
-          warnings.add((pl.lno,
+          warnings.add((pl.lno, "stack-balance",
               "In '$routine': the stack depth at '$l' differs between paths ($recorded and $depth pushes)."));
           depth = null;
         }
@@ -1171,7 +1216,7 @@ void checkStackBalance(List<ParsedLine> lines, List<(int, String)> warnings) {
         (mnem == "LD32" && ops.length == 2 && ops[1].replaceAll(" ", "").toUpperCase() == "(R15++)")) {
       depth = depth - 1;
       if (depth < 0) {
-        warnings.add((pl.lno, "In '$routine': more pops than pushes."));
+        warnings.add((pl.lno, "stack-balance", "In '$routine': more pops than pushes."));
         depth = null;
         continue;
       }
@@ -1185,7 +1230,7 @@ void checkStackBalance(List<ParsedLine> lines, List<(int, String)> warnings) {
       if (target != null && target.startsWith(".")) {
         final prev = atLabel[target];
         if (prev != null && prev != depth) {
-          warnings.add((pl.lno,
+          warnings.add((pl.lno, "stack-balance",
               "In '$routine': branch to '$target' with $depth push(es) outstanding; it is reached elsewhere with $prev."));
         }
         atLabel[target] = depth;
@@ -1197,7 +1242,7 @@ void checkStackBalance(List<ParsedLine> lines, List<(int, String)> warnings) {
         mnem == "FAST_EXIT_TRAP" ||
         (mnem == "JMP" && ops.length == 2 && _isR14(ops[0]) && ops[1].toUpperCase() == "R0");
     if (isReturn && depth != 0) {
-      warnings.add((pl.lno,
+      warnings.add((pl.lno, "stack-balance",
           "In '$routine': returns with $depth push(es) not popped."));
     }
     if (unconditionalTransfers.contains(mnem)) reachable = false;

@@ -66,6 +66,12 @@ class LspDiagnostic {
   final String message;
   final String source;
 
+  /// The diagnostic's code (as `pasm-disable` comments name it), or null.
+  final String? code;
+
+  /// Other places to show with it: (file path, 0-based line, message).
+  final List<(String, int, String)> related;
+
   const LspDiagnostic({
     required this.line,
     required this.startCol,
@@ -73,6 +79,8 @@ class LspDiagnostic {
     required this.severity,
     required this.message,
     this.source = "pasm",
+    this.code,
+    this.related = const [],
   });
 
   JsonMap toJson() => {
@@ -83,6 +91,21 @@ class LspDiagnostic {
         "severity": severity,
         "source": source,
         "message": message,
+        if (code != null) "code": code,
+        if (related.isNotEmpty)
+          "relatedInformation": [
+            for (final (path, l, msg) in related)
+              {
+                "location": {
+                  "uri": Uri.file(path).toString(),
+                  "range": {
+                    "start": {"line": l, "character": 0},
+                    "end": {"line": l, "character": 0},
+                  },
+                },
+                "message": msg,
+              }
+          ],
       };
 }
 
@@ -257,7 +280,7 @@ class ParticleAnalyzer {
 
     // 1. Run pasm_lint static & flow checks (errors + warnings)
     final lintRes = lintLines(canonPath, lines, incDirs);
-    for (final (lno, msg) in lintRes.errors) {
+    for (final (lno, code, msg) in lintRes.errors) {
       final (startCol, endCol) = _lineSpan(lines, lno - 1);
       diagnostics.add(LspDiagnostic(
         line: (lno - 1).clamp(0, lines.isEmpty ? 0 : lines.length - 1),
@@ -266,9 +289,10 @@ class ParticleAnalyzer {
         severity: 1,
         message: msg,
         source: "pasm_lint",
+        code: code,
       ));
     }
-    for (final (lno, msg) in lintRes.warnings) {
+    for (final (lno, code, msg) in lintRes.warnings) {
       final (startCol, endCol) = _lineSpan(lines, lno - 1);
       diagnostics.add(LspDiagnostic(
         line: (lno - 1).clamp(0, lines.isEmpty ? 0 : lines.length - 1),
@@ -277,6 +301,7 @@ class ParticleAnalyzer {
         severity: 2,
         message: msg,
         source: "pasm_lint",
+        code: code,
       ));
     }
 
@@ -291,26 +316,40 @@ class ParticleAnalyzer {
     );
     final asm = ParticleAssembler(prep);
 
+    // The assembler's errors in this file: the first only, when the
+    // preprocessor or pass 1 stopped; every one pass 2 found
+    var asmErrors = const <AssemblerError>[];
     try {
       asm.assemble(canonPath);
     } on AssemblerError catch (e) {
-      final errFile = e.filename != null ? canonicalize(e.filename!) : canonPath;
-      if (errFile == canonPath) {
-        final lno0 = ((e.lineno ?? 1) - 1).clamp(0, lines.isEmpty ? 0 : lines.length - 1);
-        final alreadyReported = diagnostics.any((d) => d.line == lno0 && d.severity == 1);
-        if (!alreadyReported && !findSuppressions(lines).hides(lno0 + 1)) {
-          final (startCol, endCol) = _lineSpan(lines, lno0);
-          diagnostics.add(LspDiagnostic(
-            line: lno0,
-            startCol: startCol,
-            endCol: endCol,
-            severity: 1,
-            message: e.message,
-            source: "pasm",
-          ));
-        }
-      }
+      asmErrors = [e];
+    } on AssemblerErrors catch (e) {
+      asmErrors = e.errors;
     } catch (_) {}
+    final hidden = findSuppressions(lines);
+    final lintLines0 = {for (final d in diagnostics) if (d.severity == 1) d.line};
+    for (final e in asmErrors) {
+      final errFile = e.filename != null ? canonicalize(e.filename!) : canonPath;
+      if (errFile != canonPath) continue;
+      final lno0 = ((e.lineno ?? 1) - 1).clamp(0, lines.isEmpty ? 0 : lines.length - 1);
+      if (lintLines0.contains(lno0) || hidden.hides(lno0 + 1, e.code)) continue;
+      final (startCol, endCol) = e.symbol != null
+          ? _wordSpan(lines, lno0, e.symbol!) ?? _lineSpan(lines, lno0)
+          : _lineSpan(lines, lno0);
+      diagnostics.add(LspDiagnostic(
+        line: lno0,
+        startCol: startCol,
+        endCol: endCol,
+        severity: 1,
+        message: "${e.message}${e.traceText}",
+        source: "pasm",
+        code: e.code,
+        related: [
+          for (var i = 0; i < e.trace.length; i++)
+            (e.trace[i].$2, e.trace[i].$3 - 1, "${i == 0 ? "in" : "from"} macro ${e.trace[i].$1}")
+        ],
+      ));
+    }
 
     // 3. Index labels, defines, macros, and .include links
     final labels = <String, SymbolInfo>{};
@@ -501,6 +540,16 @@ class ParticleAnalyzer {
       }
     }
     return commentLines.isEmpty ? null : commentLines.join("\n");
+  }
+
+  /// The columns of [word] in line [lineIndex] (outside its comment), or
+  /// null when it is not there.
+  (int, int)? _wordSpan(StringList lines, int lineIndex, String word) {
+    if (lineIndex < 0 || lineIndex >= lines.length) return null;
+    final text = lines[lineIndex];
+    final code = text.contains(";") ? text.substring(0, text.indexOf(";")) : text;
+    final m = RegExp("(?<![A-Za-z0-9_.])${RegExp.escape(word)}(?![A-Za-z0-9_.])").firstMatch(code);
+    return m == null ? null : (m.start, m.end);
   }
 
   (int, int) _lineSpan(StringList lines, int lineIndex) {

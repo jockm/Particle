@@ -12,8 +12,10 @@ elif command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then
   PREFIX="riscv64-unknown-elf-"
 elif command -v riscv32-unknown-elf-gcc >/dev/null 2>&1; then
   PREFIX="riscv32-unknown-elf-"
+elif command -v riscv-none-elf-gcc >/dev/null 2>&1; then
+  PREFIX="riscv-none-elf-"
 else
-  echo "Error: RISC-V GCC toolchain not found (expected riscv64-elf-gcc or riscv64-unknown-elf-gcc)." >&2
+  echo "Error: RISC-V GCC toolchain not found (expected riscv64-elf-gcc, riscv64-unknown-elf-gcc or riscv-none-elf-gcc)." >&2
   exit 1
 fi
 

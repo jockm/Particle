@@ -36,7 +36,7 @@ class ParticleAssembler {
     if (regMap.containsKey(t)) {
       return regMap[t]!;
     }
-    throw AssemblerError("Unknown register '$token'", fname, lno);
+    throw AssemblerError("Unknown register '$token'", fname, lno, 'register');
   }
 
   /// Parses memory operands enclosed in parentheses: `(Rr)`
@@ -85,20 +85,58 @@ class ParticleAssembler {
   ///   - Formatted `.lst` listing lines
   (Map<int, int>, int, List<String>) assemble(dynamic srcFiles) {
     _at = null;
+    _errors.clear();
+    _truncated = false;
+    final (Map<int, int>, int, List<String>) result;
     try {
-      return _assemble(srcFiles);
+      result = _assemble(srcFiles);
     } on AssemblerError catch (e) {
       final at = _at;
-      if (e.lineno == null && at != null) {
-        throw AssemblerError(e.message, at.$1, at.$2);
-      }
-      rethrow;
+      throw at == null ? e : _place(e, at);
     }
+    if (_errors.isNotEmpty) throw AssemblerErrors(List.of(_errors), _truncated);
+    return result;
   }
 
-  /// The file and line being assembled, given to an error raised without
-  /// a place of its own.
-  (String, int)? _at;
+  /// The line being assembled, whose place an error raised without one
+  /// takes.
+  SourceLine? _at;
+
+  /// The errors pass 2 found, and whether it stopped at [maxErrors].
+  final List<AssemblerError> _errors = [];
+  bool _truncated = false;
+
+  /// Pass 2 stops after this many errors. A symbol already reported as
+  /// undefined does not count again.
+  static const maxErrors = 20;
+
+  /// [e] placed at [line], with the macros [line] came from, when it has no
+  /// place of its own or is at that line.
+  AssemblerError _place(AssemblerError e, SourceLine line) {
+    if (e.lineno == null || (e.filename == line.$1 && e.lineno == line.$2 && e.trace.isEmpty)) {
+      return e.at(line.$1, line.$2, line.$4);
+    }
+    return e;
+  }
+
+  /// Records a pass 2 error; false once there are too many.
+  bool _record(AssemblerError e) {
+    final repeat = e.code == 'undefined-symbol' &&
+        e.symbol != null &&
+        _errors.any((o) => o.code == 'undefined-symbol' && o.symbol == e.symbol);
+    _errors.add(e);
+    final counted = <String>{};
+    var n = 0;
+    for (final o in _errors) {
+      if (o.code == 'undefined-symbol' && o.symbol != null && !counted.add(o.symbol!)) continue;
+      n++;
+    }
+    if (!repeat && n >= maxErrors) {
+      _truncated = true;
+      return false;
+    }
+    return true;
+  }
 
   (Map<int, int>, int, List<String>) _assemble(dynamic srcFiles) {
     final List<String> fileList = (srcFiles is List<String>)
@@ -107,7 +145,7 @@ class ParticleAssembler {
             ? srcFiles.map((e) => e.toString()).toList()
             : [srcFiles.toString()];
 
-    final processedLines = <(String, int, String)>[];
+    final processedLines = <SourceLine>[];
     for (final f in fileList) {
       processedLines.addAll(prep.process(f));
     }
@@ -135,7 +173,7 @@ class ParticleAssembler {
       }
       if (!grew) break;
       if (round > 1000) {
-        throw AssemblerError('JUMP sizes did not settle');
+        throw AssemblerError('JUMP sizes did not settle', null, null, 'jump');
       }
     }
 
@@ -156,7 +194,7 @@ class ParticleAssembler {
       final lno = entry.$2;
       final origLine = entry.$3;
       var line = origLine;
-      _at = (fname, lno);
+      _at = entry;
 
       // Emit standalone label entries in listing output
       while (true) {
@@ -173,76 +211,83 @@ class ParticleAssembler {
       final startPc = pc;
       final emittedBytes = <int>[];
 
-      if (line.startsWith('.')) {
-        final parts = line.split(RegExp(r'\s+'));
-        final d = parts[0].toLowerCase();
-        final arg =
-            parts.length > 1 ? line.substring(parts[0].length).trim() : '';
+      // An error is recorded and the line takes the room pass 1 gave it,
+      // so the lines after it keep their addresses
+      try {
+        if (line.startsWith('.')) {
+          final parts = line.split(RegExp(r'\s+'));
+          final d = parts[0].toLowerCase();
+          final arg =
+              parts.length > 1 ? line.substring(parts[0].length).trim() : '';
 
-        if (d == '.org') {
-          pc = prep.parseExpr(arg, symbols);
-        } else if (d == '.align') {
-          final boundary = prep.parseExpr(arg, symbols);
-          final rem = pc % boundary;
-          if (rem != 0) {
-            final pad = boundary - rem;
-            for (int i = 0; i < pad; i++) {
-              binaryData[pc] = 0;
-              emittedBytes.add(0);
+          if (d == '.org') {
+            pc = prep.parseExpr(arg, symbols);
+          } else if (d == '.align') {
+            final boundary = prep.parseExpr(arg, symbols);
+            final rem = pc % boundary;
+            if (rem != 0) {
+              final pad = boundary - rem;
+              for (int i = 0; i < pad; i++) {
+                binaryData[pc] = 0;
+                emittedBytes.add(0);
+                pc += 1;
+              }
+            }
+          } else if (d == '.byte') {
+            for (final b in arg.split(',')) {
+              final v = prep.parseExpr(b, symbols) & 0xFF;
+              binaryData[pc] = v;
+              emittedBytes.add(v);
               pc += 1;
             }
-          }
-        } else if (d == '.byte') {
-          for (final b in arg.split(',')) {
-            final v = prep.parseExpr(b, symbols) & 0xFF;
-            binaryData[pc] = v;
-            emittedBytes.add(v);
+          } else if (d == '.half') {
+            for (final h in arg.split(',')) {
+              final v = prep.parseExpr(h, symbols) & 0xFFFF;
+              binaryData[pc] = v & 0xFF;
+              binaryData[pc + 1] = (v >> 8) & 0xFF;
+              emittedBytes.addAll([v & 0xFF, (v >> 8) & 0xFF]);
+              pc += 2;
+            }
+          } else if (d == '.word') {
+            for (final w in arg.split(',')) {
+              final v = prep.parseExpr(w, symbols) & 0xFFFFFFFF;
+              for (int i = 0; i < 4; i++) {
+                final b = (v >> (i * 8)) & 0xFF;
+                binaryData[pc + i] = b;
+                emittedBytes.add(b);
+              }
+              pc += 4;
+            }
+          } else if (d == '.asciz' || d == '.string') {
+            final m = RegExp(r'"(.*)"').firstMatch(arg);
+            final rawStr = m != null ? m.group(1)! : '';
+            final s = _unescapeAsciz(rawStr);
+            for (final ch in s) {
+              binaryData[pc] = ch;
+              emittedBytes.add(ch);
+              pc += 1;
+            }
+            binaryData[pc] = 0;
+            emittedBytes.add(0);
             pc += 1;
           }
-        } else if (d == '.half') {
-          for (final h in arg.split(',')) {
-            final v = prep.parseExpr(h, symbols) & 0xFFFF;
-            binaryData[pc] = v & 0xFF;
-            binaryData[pc + 1] = (v >> 8) & 0xFF;
-            emittedBytes.addAll([v & 0xFF, (v >> 8) & 0xFF]);
+        } else {
+          final isJump = line.split(RegExp(r'\s+'))[0].toUpperCase() == 'JUMP';
+          final words = isJump
+              ? _encodeJump(line, pc, _jumpSizes[index] ?? 2, fname, lno)
+              : encodeInstructionWords(line, pc, fname, lno);
+          for (final w in words) {
+            final b0 = w & 0xFF;
+            final b1 = (w >> 8) & 0xFF;
+            binaryData[pc] = b0;
+            binaryData[pc + 1] = b1;
+            emittedBytes.addAll([b0, b1]);
             pc += 2;
           }
-        } else if (d == '.word') {
-          for (final w in arg.split(',')) {
-            final v = prep.parseExpr(w, symbols) & 0xFFFFFFFF;
-            for (int i = 0; i < 4; i++) {
-              final b = (v >> (i * 8)) & 0xFF;
-              binaryData[pc + i] = b;
-              emittedBytes.add(b);
-            }
-            pc += 4;
-          }
-        } else if (d == '.asciz' || d == '.string') {
-          final m = RegExp(r'"(.*)"').firstMatch(arg);
-          final rawStr = m != null ? m.group(1)! : '';
-          final s = _unescapeAsciz(rawStr);
-          for (final ch in s) {
-            binaryData[pc] = ch;
-            emittedBytes.add(ch);
-            pc += 1;
-          }
-          binaryData[pc] = 0;
-          emittedBytes.add(0);
-          pc += 1;
         }
-      } else {
-        final isJump = line.split(RegExp(r'\s+'))[0].toUpperCase() == 'JUMP';
-        final words = isJump
-            ? _encodeJump(line, pc, _jumpSizes[index] ?? 2, fname, lno)
-            : encodeInstructionWords(line, pc, fname, lno);
-        for (final w in words) {
-          final b0 = w & 0xFF;
-          final b1 = (w >> 8) & 0xFF;
-          binaryData[pc] = b0;
-          binaryData[pc + 1] = b1;
-          emittedBytes.addAll([b0, b1]);
-          pc += 2;
-        }
+      } on AssemblerError catch (e) {
+        pc = startPc + _sizeOf(line, index);
+        if (!_record(_place(e, entry))) break;
       }
 
       if (pc > maxAddr) maxAddr = pc;
@@ -264,19 +309,40 @@ class ParticleAssembler {
     return (binaryData, maxAddr, listingLines);
   }
 
+  /// The bytes pass 1 gives [line] (without its labels), at [index] in the
+  /// processed lines; not for .org and .align.
+  int _sizeOf(String line, int index) {
+    if (line.startsWith('.')) {
+      final parts = line.split(RegExp(r'\s+'));
+      final d = parts[0].toLowerCase();
+      final arg = parts.length > 1 ? line.substring(parts[0].length).trim() : '';
+      if (d == '.byte') return arg.split(',').length;
+      if (d == '.half') return arg.split(',').length * 2;
+      if (d == '.word') return arg.split(',').length * 4;
+      if (d == '.asciz' || d == '.string') {
+        final m = RegExp(r'"(.*)"').firstMatch(arg);
+        return _unescapeAsciz(m != null ? m.group(1)! : '').length + 1;
+      }
+      return 0;
+    }
+    final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
+    if (mnem == 'JUMP') return _jumpSizes[index] ?? 2;
+    return (mnem == 'LDI' || mnem == 'LDIS') ? 4 : 2;
+  }
+
   /// Bytes chosen for each JUMP, by its index in the processed lines.
   final Map<int, int> _jumpSizes = {};
 
   /// One run of pass 1: lays out every line, defining the labels, and
   /// records the address of each JUMP in [jumpAddrs]. Returns the end of
   /// the image.
-  int _pass1(List<(String, int, String)> processedLines, Map<int, int> jumpAddrs) {
+  int _pass1(List<SourceLine> processedLines, Map<int, int> jumpAddrs) {
     pc = 0x00000100;
     var imageEnd = pc;
     for (var index = 0; index < processedLines.length; index++) {
       final entry = processedLines[index];
       var line = entry.$3;
-      _at = (entry.$1, entry.$2);
+      _at = entry;
 
       // Extract all labels preceding the instruction or directive
       while (true) {
@@ -287,7 +353,7 @@ class ParticleAssembler {
             throw AssemblerError(
                 "'$imageEndSymbol' is defined by the assembler and cannot be used as a label",
                 entry.$1,
-                entry.$2);
+                entry.$2, 'reserved-name');
           }
           symbols[labelPart] = pc;
         }
@@ -376,7 +442,7 @@ class ParticleAssembler {
     }
     final to = prep.parseExpr(opStr, symbols) & 0xFFFFFFFF;
     if (to.isOdd) {
-      throw AssemblerError('JUMP target 0x${to.toRadixString(16)} is not even', fname, lno);
+      throw AssemblerError('JUMP target 0x${to.toRadixString(16)} is not even', fname, lno, 'jump');
     }
     const jmpR14 = (0xA0 << 8) | (14 << 4); // JMP R14, R0
     switch (size) {
@@ -459,7 +525,7 @@ class ParticleAssembler {
           throw AssemblerError(
               'Immediate value $val out of 16-bit unsigned range (0..65535) for LDI',
               fname,
-              lno);
+              lno, 'range');
         }
         return [(0x07 << 8) | rl, val & 0xFFFF];
       } else {
@@ -467,7 +533,7 @@ class ParticleAssembler {
           throw AssemblerError(
               'Immediate value $val out of 16-bit signed range (-32768..32767) for LDIS',
               fname,
-              lno);
+              lno, 'range');
         }
         return [(0x08 << 8) | rl, val & 0xFFFF];
       }
@@ -536,7 +602,7 @@ class ParticleAssembler {
           final offset = diff ~/ 2;
           if (offset < 0 || offset > 255) {
             throw AssemblerError(
-                'Branch out of 8-bit unsigned range ($offset)', fname, lno);
+                'Branch out of 8-bit unsigned range ($offset)', fname, lno, 'branch-range');
           }
           final baseOp = isBackward ? 0xC0 : 0xB0;
           return (baseOp << 8) | (offset & 0xFF);
@@ -560,7 +626,7 @@ class ParticleAssembler {
         if (r == 14 && (offset > 15)) {
           if (offset < 0 || offset > 255) {
             throw AssemblerError(
-                'Branch out of 8-bit immediate range ($offset)', fname, lno);
+                'Branch out of 8-bit immediate range ($offset)', fname, lno, 'branch-range');
           }
           final op = isBackward
               ? (cond == '.NZ' ? 0xCB : (0xC6 + condIdx))
@@ -571,7 +637,7 @@ class ParticleAssembler {
         // Standard conditional branch: 4-bit immediate field (0..15 halfwords)
         if (offset < 0 || offset > 15) {
           throw AssemblerError(
-              'Branch out of 4-bit immediate range ($offset)', fname, lno);
+              'Branch out of 4-bit immediate range ($offset)', fname, lno, 'branch-range');
         }
 
         final op = isBackward
@@ -602,7 +668,7 @@ class ParticleAssembler {
         if (val >= -15 && val < 0)
           return ((baseOp + 2) << 8) | (rr << 4) | ((-val) & 0x0F);
         throw AssemblerError(
-            'Immediate value $val out of range for $mnem', fname, lno);
+            'Immediate value $val out of range for $mnem', fname, lno, 'range');
       }
     }
 
@@ -673,7 +739,7 @@ class ParticleAssembler {
             return (0x03 << 8) | (rr << 4) | ((-val) & 0x0F);
           }
           throw AssemblerError(
-              'Immediate value $val out of range for LD', fname, lno);
+              'Immediate value $val out of range for LD', fname, lno, 'range');
         }
       }
     }
@@ -710,7 +776,7 @@ class ParticleAssembler {
           throw AssemblerError(
               'Immediate multiplier $v out of 4-bit unsigned range (0-15)',
               fname,
-              lno);
+              lno, 'range');
         }
         return ((baseLut[mnem]! + 4) << 8) | (rr << 4) | (v & 0x0F);
       }
@@ -736,7 +802,7 @@ class ParticleAssembler {
         final v = getV(1);
         if (v < 0 || v > 15) {
           throw AssemblerError(
-              'Bit index $v out of 4-bit immediate range (0-15)', fname, lno);
+              'Bit index $v out of 4-bit immediate range (0-15)', fname, lno, 'range');
         }
         return (immLut[mnem]! << 8) | (rr << 4) | (v & 0x0F);
       }

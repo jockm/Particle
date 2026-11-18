@@ -79,7 +79,8 @@ For OSS CAD Suite, download the Windows build from the releases page above
 and extract it to `%USERPROFILE%\oss-cad-suite`, so that its tools are in
 `%USERPROFILE%\oss-cad-suite\bin`.
 
-The RISC-V toolchain is not covered on Windows yet.
+For the RISC-V toolchain, see
+[RISC-V development tools](#risc-v-development-tools).
 
 #### The development shell: `pdev.cmd`
 
@@ -103,10 +104,65 @@ above put them:
 | Dart | The WinGet Dart SDK package, then `PATH` (required) |
 | Node.js and npm | `%LOCALAPPDATA%\Programs\nodejs`, the WinGet Node.js package, then `C:\Program Files\nodejs` (required) |
 | OSS CAD Suite | `%USERPROFILE%\oss-cad-suite\bin` (used if present) |
+| RISC-V toolchain | `%USERPROFILE%\xpack-riscv-none-elf-gcc\bin` (used if present) |
 
 If a required tool is missing, `pdev.cmd` says which one and how to install
 it. Python, VS Code's `code` command, and Git itself come from your normal
 `PATH`.
+
+### Linux
+
+These steps are for Debian 12 or later and Ubuntu 24.04 or later, with apt.
+
+Install Git, make, clang, Python, and what the next steps use:
+
+```sh
+sudo apt update
+sudo apt install git make clang python3 curl gpg apt-transport-https
+```
+
+The LLVM compiler needs clang 15 or later. Ubuntu 24.04's `clang` is new
+enough. Debian 12's `clang` is version 14, so on Debian 12 install a newer
+one and tell the build to use it:
+
+```sh
+sudo apt install clang-16
+export CLANG=clang-16    # add this to your ~/.bashrc as well
+```
+
+Install Dart from Google's apt repository:
+
+```sh
+wget -qO- https://dl-ssl.google.com/linux/linux_signing_key.pub \
+  | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
+echo 'deb [signed-by=/usr/share/keyrings/dart.gpg arch=amd64] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main' \
+  | sudo tee /etc/apt/sources.list.d/dart_stable.list
+sudo apt update
+sudo apt install dart
+```
+
+(On an ARM computer, use `arch=arm64` instead of `arch=amd64`.)
+
+The Node.js in Debian 12 and Ubuntu 24.04 is version 18, which is too old.
+Install a current long-term-support version from NodeSource:
+
+```sh
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt install nodejs
+```
+
+NodeSource's `nodejs` package includes npm.
+
+For VS Code, download the `.deb` package from the
+[VS Code download page](https://code.visualstudio.com/download) and install
+it, which also adds Microsoft's apt repository for updates:
+
+```sh
+sudo apt install ./code_*.deb
+```
+
+For OSS CAD Suite, download the Linux build from the releases page above and
+follow its instructions.
 
 ### Checking the tools
 
@@ -123,7 +179,7 @@ code --version
 clang --version      # only for the LLVM compiler
 ```
 
-On macOS, if `code` is not found, open VS Code's Command Palette and run
+On Linux, `dart` may need a new terminal before it is found. On macOS, if `code` is not found, open VS Code's Command Palette and run
 **Shell Command: Install 'code' command in PATH**. The Makefile also checks
 the standard macOS VS Code application location.
 
@@ -306,7 +362,16 @@ program for both Particle and LLVM.
 Parcore guest software targets RV32IM_Zbb. The bare-metal RISC-V compiler,
 binutils, and debugger are needed for the official RISC-V ISA tests and for
 building or inspecting your own guest RISC-V programs. They are not needed
-for `make test`. These steps are for macOS; Windows is not covered yet.
+for `make test`.
+
+The toolchain's commands have a prefix that depends on where it comes from:
+`riscv64-elf-` on macOS, `riscv64-unknown-elf-` on Linux, and
+`riscv-none-elf-` on Windows. `make test-parcore-isa` finds any of them. Below,
+`PREFIX-` stands for yours. Although some names contain `riscv64`, the
+compiler targets the Parcore 32-bit ISA when given
+`-march=rv32im_zbb -mabi=ilp32`. GCC 12 or later is needed for Zbb.
+
+### macOS
 
 With Homebrew, run:
 
@@ -314,19 +379,39 @@ With Homebrew, run:
 brew install riscv64-elf-gcc riscv64-elf-binutils riscv64-elf-gdb
 ```
 
-These packages provide the `riscv64-elf-` commands. Although the tool names
-contain `riscv64`, the compiler can target the Parcore 32-bit ISA when given
-`-march=rv32im_zbb -mabi=ilp32`. Check that the tools are installed:
+### Linux
 
 ```sh
-riscv64-elf-gcc --version
-riscv64-elf-as --version
-riscv64-elf-objdump --version
-riscv64-elf-gdb --version
+sudo apt install gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf gdb-multiarch
+```
+
+Ubuntu 24.04 has GCC 13. Ubuntu 22.04's is GCC 10, which is too old for Zbb.
+The debugger is `gdb-multiarch`, which debugs RISC-V programs as well as
+others.
+
+### Windows
+
+There is no winget package. Download the Windows zip
+(`xpack-riscv-none-elf-gcc-<version>-win32-x64.zip`) of the latest
+[xPack GNU RISC-V Embedded GCC release](https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases).
+Extract it, then rename the folder it contains to `xpack-riscv-none-elf-gcc`
+and move it to your user folder, so that the tools are in
+`%USERPROFILE%\xpack-riscv-none-elf-gcc\bin`. `pdev.cmd` adds that folder to
+`PATH` when it is there.
+
+### Checking the toolchain
+
+Check that the tools are installed, with your prefix:
+
+```sh
+PREFIX-gcc --version
+PREFIX-as --version
+PREFIX-objdump --version
+PREFIX-gdb --version     # on Linux: gdb-multiarch --version
 ```
 
 Verify that GCC accepts Parcore's target by compiling a small freestanding
-object and disassembling it:
+object and disassembling it (on macOS, for example):
 
 ```sh
 printf 'int add(int a, int b) { return a + b; }\n' | \
@@ -336,8 +421,8 @@ riscv64-elf-objdump -d -M no-aliases,numeric /tmp/parcore-rv32-check.o
 ```
 
 Use the same `-march` and `-mabi` options when compiling Parcore guest
-programs. `riscv64-elf-objdump -d -M no-aliases,numeric program.elf` is useful
-for checking the generated instructions. `riscv64-elf-gdb program.elf` opens
+programs. `PREFIX-objdump -d -M no-aliases,numeric program.elf` is useful
+for checking the generated instructions. `PREFIX-gdb program.elf` opens
 the program with its symbols; stepping through execution additionally
 requires a compatible RISC-V emulator or debug target.
 

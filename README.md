@@ -79,7 +79,7 @@ section of [Getting Started](GettingStarted.md#windows).
 ### Prerequisites
 See [Prerequisites](GettingStarted.md#prerequisites) and
 [Installing dependencies](GettingStarted.md#installing-dependencies) in Getting
-Started for what to install on macOS and Windows.
+Started for what to install on macOS, Windows and Linux.
 
 ### 0. Clone this project
 ```bash

@@ -56,7 +56,50 @@ Macros support parameter substitution via `%parameter` syntax and unique local l
 .endmacro
 ```
 
-An error in a line a macro expands to is reported at the line that calls the macro.
+An error in a line a macro expands to is reported at the line that calls the macro, and names the macro and the line of its definition. For a macro called from another macro, it names each, innermost first:
+
+```text
+main.asm:11: error: Unknown register 'R99' (in macro INNER, defs.inc:2, from macro OUTER, defs.inc:7) [register]
+```
+
+In the editor the error is on the calling line, with links to the macro lines.
+
+---
+
+## Errors
+
+The preprocessor (includes, conditionals and macros) and pass 1 (laying out addresses, including `.org` and `.align`) stop at the first error, because an error there changes everything after it. Pass 2 (encoding each line) reports every error it finds, up to 20; a line with an error keeps the room pass 1 gave it, so the lines after it keep their addresses. Nothing is written when there are errors.
+
+A symbol that is not defined is reported once, naming the other lines that use it:
+
+```text
+main.asm:12: error: undefined symbol '_main' (also used on lines 14, 18) [undefined-symbol]
+```
+
+The editor marks every use.
+
+### Codes
+
+Every error and warning, from `pasm` and from `pasm_lint`, ends with a code in brackets. The editor shows it with the message.
+
+| Code | Kind | What it covers |
+|------|------|----------------|
+| `syntax` | error | Unknown mnemonic, wrong number of operands, a malformed operand, branch condition or string |
+| `register` | error | An unknown or out-of-range register |
+| `range` | error | An immediate or data value out of range (`.byte`, `.half`, LDI, LDIS, LD, 4-bit immediates, trap numbers, bit indexes) |
+| `undefined-symbol` | error | A symbol or branch target that is not defined |
+| `expression` | error | A malformed expression |
+| `branch-range` | error | A branch target too far away |
+| `branch-direction` | error | A forward branch that goes backward, or a backward branch that goes forward |
+| `jump` | error | A `JUMP` to an odd address, or `JUMP` sizes that do not settle |
+| `include` | error | An include file that is not found |
+| `reserved-name` | error | A label with the name the assembler defines for the end of the image |
+| `r0-write` | error | An instruction that writes `R0` |
+| `stack-misaligned` | error | `SP` adjusted by something other than a multiple of 4 |
+| `external-call` | warning | An `RCALL` target not defined in the file or its includes |
+| `r14-clobbered` | warning | `R14` read after something overwrote it |
+| `misaligned` | warning | Data or code after byte-sized data with no `.align` |
+| `stack-balance` | warning | Pushes and pops that do not match |
 
 ---
 
@@ -69,11 +112,13 @@ An error in a line a macro expands to is reported at the line that calls the mac
 * `; pasm-disable` ... `; pasm-enable`: every line between them.
 * `; pasm-disable-file` anywhere in the file: the whole file.
 
+Without codes they hide every diagnostic on those lines. With codes after them, separated by commas or spaces, they hide only those; text after the codes, such as a reason, is ignored:
+
 ```assembly
-    LOAD32  R14, _main  ; pasm-disable-line
+    LOAD32  R14, _main  ; pasm-disable-line undefined-symbol: _main is in the program
 ```
 
-They hide every diagnostic on those lines. The assembler itself does not read them: an error still stops the build. The language server checks the assembler's errors only up to the first one, so once that error is hidden, nothing after it is checked by the assembler; the lint checks still cover the whole file.
+The assembler itself does not read them: an error still stops the build. In the editor, once a preprocessor or pass 1 error is hidden, nothing after it is checked by the assembler; the lint checks still cover the whole file.
 
 ---
 

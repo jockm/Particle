@@ -25,13 +25,56 @@ class AssemblerError implements Exception {
   final String? filename;
   final int? lineno;
 
-  AssemblerError(this.message, [this.filename, this.lineno]);
+  /// The diagnostic's code (as `pasm-disable` comments name it).
+  final String code;
+
+  /// The macros the line came from, innermost first: each macro's name and
+  /// the file and line of the line in its definition. Empty when the line
+  /// is not from a macro.
+  final List<MacroFrame> trace;
+
+  /// The symbol an `undefined-symbol` error is about.
+  final String? symbol;
+
+  AssemblerError(this.message,
+      [this.filename, this.lineno, this.code = "syntax", this.trace = const [], this.symbol]);
+
+  /// This error at [file]:[line], from the macros in [trace].
+  AssemblerError at(String file, int line, [List<MacroFrame>? trace]) =>
+      AssemblerError(message, file, line, code, trace ?? this.trace, symbol);
+
+  /// ` (in macro A, a.inc:3, from macro B, b.inc:7)`, or '' outside a macro.
+  String get traceText {
+    if (trace.isEmpty) return "";
+    final parts = [
+      for (var i = 0; i < trace.length; i++)
+        "${i == 0 ? "in" : "from"} macro ${trace[i].$1}, ${_shortName(trace[i].$2)}:${trace[i].$3}"
+    ];
+    return " (${parts.join(", ")})";
+  }
+
+  static String _shortName(String path) => path.split(RegExp(r"[/\\]")).last;
 
   @override
   String toString() {
     final loc = "${filename ?? "input"}:${lineno ?? "?"}: error: ";
-    return "$loc$message";
+    return "$loc$message$traceText [$code]";
   }
+}
+
+/// One macro a line came from: the macro's name, and the file and line of
+/// the line in the macro's definition.
+typedef MacroFrame = (String, String, int);
+
+/// The errors pass 2 found, in order. [truncated] when it stopped early.
+class AssemblerErrors implements Exception {
+  final List<AssemblerError> errors;
+  final bool truncated;
+
+  AssemblerErrors(this.errors, this.truncated);
+
+  @override
+  String toString() => errors.join("\n");
 }
 
 /// Splits a source line into (label, rest) at the first unquoted colon (:).

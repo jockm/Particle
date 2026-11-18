@@ -95,6 +95,13 @@ void main(List<String> args) {
   } on AssemblerError catch (e) {
     stderr.writeln("\n[ERROR] $e\n");
     exit(1);
+  } on AssemblerErrors catch (e) {
+    stderr.writeln("");
+    for (final line in reportLines(e)) {
+      stderr.writeln(line);
+    }
+    stderr.writeln("");
+    exit(1);
   } on FileSystemException catch (e) {
     stderr.writeln("\n[ERROR] File not found: ${e.message}\n");
     exit(1);
@@ -160,3 +167,32 @@ void main(List<String> args) {
 
   stdout.writeln("Assembly succeeded: ${outBytes.length} bytes emitted [${startAddr.toRadixString(16).padLeft(8, "0").toUpperCase()}..${maxAddr.toRadixString(16).padLeft(8, "0").toUpperCase()}]. Listing emitted to: $lstPath");
 }
+
+/// The lines reporting [e]: each error, with an undefined symbol reported
+/// once (naming the other lines that use it), then the count.
+List<String> reportLines(AssemblerErrors e) {
+  final out = <String>[];
+  final shown = <String>{};
+  var count = 0;
+  for (final err in e.errors) {
+    final sym = err.code == "undefined-symbol" ? err.symbol : null;
+    if (sym != null) {
+      if (!shown.add(sym)) continue;
+      final others = [
+        for (final o in e.errors)
+          if (!identical(o, err) && o.code == "undefined-symbol" && o.symbol == sym)
+            o.filename == err.filename ? "${o.lineno}" : "${o.filename}:${o.lineno}"
+      ];
+      final also = others.isEmpty ? "" : " (also used on ${others.length == 1 ? "line" : "lines"} ${others.join(", ")})";
+      out.add("[ERROR] ${err.filename ?? "input"}:${err.lineno ?? "?"}: error: ${err.message}$also${err.traceText} [${err.code}]");
+    } else {
+      out.add("[ERROR] $err");
+    }
+    count++;
+  }
+  out.add(e.truncated
+      ? "$count errors; too many errors, stopped"
+      : "$count ${count == 1 ? "error" : "errors"}");
+  return out;
+}
+

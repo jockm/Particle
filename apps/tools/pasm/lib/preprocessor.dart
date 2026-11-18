@@ -22,8 +22,16 @@ class Macro {
   final String filename;
   final int lineno;
 
-  Macro(this.name, this.params, this.lines, this.filename, this.lineno);
+  /// The line in [filename] of each of [lines].
+  final List<int> lineNumbers;
+
+  Macro(this.name, this.params, this.lines, this.filename, this.lineno, [this.lineNumbers = const []]);
 }
+
+/// A line ready for assembly: its file, its line there (for a line a macro
+/// expands to, the line of the call), its text, and the macros it came from
+/// (innermost first; empty outside a macro).
+typedef SourceLine = (String, int, String, List<MacroFrame>);
 
 /// Preprocessor engine handling source transformation before assembly passes.
 class Preprocessor {
@@ -87,30 +95,35 @@ class Preprocessor {
         return absCand;
       }
     }
-    throw AssemblerError("Include file not found: $incPath");
+    throw AssemblerError("Include file not found: $incPath", null, null, "include");
   }
 
   /// Parses and evaluates an arithmetic expression supporting symbols, defines,
   /// register aliases, bitwise operations, shifts, and standard precedence.
   int parseExpr(String exprStr, Map<String, int> symbols) {
     var expr = exprStr.trim();
-    if (expr.isEmpty) throw AssemblerError("Empty expression");
+    if (expr.isEmpty) throw AssemblerError("Empty expression", null, null, "expression");
 
     // Replace symbol and register tokens with literal decimal strings
     final tokenPattern = RegExp(r"([A-Za-z0-9_\.]+)");
+    String? undefined;
     expr = expr.replaceAllMapped(tokenPattern, (match) {
       final tok = match.group(1)!;
       if (symbols.containsKey(tok)) return "${symbols[tok]}";
       if (defines.containsKey(tok)) return "${defines[tok]}";
       final lower = tok.toLowerCase();
       if (regMap.containsKey(lower)) return "${regMap[lower]}";
+      if (_parseLiteral(tok) == null) undefined ??= tok;
       return tok;
     });
+    if (undefined != null) {
+      throw AssemblerError("undefined symbol '$undefined'", null, null, "undefined-symbol", const [], undefined);
+    }
 
     try {
       return _evaluateExpression(expr);
     } catch (e) {
-      throw AssemblerError("Invalid expression '$exprStr': $e");
+      throw AssemblerError("Invalid expression '$exprStr'", null, null, "expression");
     }
   }
 
@@ -231,14 +244,14 @@ class Preprocessor {
     try {
       return f();
     } on AssemblerError catch (e) {
-      if (e.lineno == null) throw AssemblerError(e.message, file, lno);
+      if (e.lineno == null) throw e.at(file, lno);
       rethrow;
     }
   }
 
   /// Processes source lines recursively, expanding macros and resolving includes.
   /// Matches exact recursion semantics of tools/pasm.py:Preprocessor.process.
-  List<(String, int, String)> process(String filename, [List<String>? lines, Set<String>? visited]) {
+  List<SourceLine> process(String filename, [List<String>? lines, Set<String>? visited]) {
     visited ??= <String>{};
     final absPath = canonicalPath(filename);
 
@@ -257,12 +270,13 @@ class Preprocessor {
       rawLines = lines;
     }
 
-    final expanded = <(String, int, String)>[];
+    final expanded = <SourceLine>[];
     final condStack = <bool>[];
     bool inMacro = false;
     String macroName = "";
     List<String> macroParams = [];
     final macroBody = <String>[];
+    final macroLines = <int>[];
     int macroStartLine = 0;
 
     for (int lno = 1; lno <= rawLines.length; lno++) {
@@ -312,10 +326,11 @@ class Preprocessor {
               : [];
           inMacro = true;
           macroBody.clear();
+          macroLines.clear();
           macroStartLine = lno;
           continue;
         } else if (directive == ".endmacro") {
-          macros[macroName] = Macro(macroName, macroParams, List.from(macroBody), absPath, macroStartLine);
+          macros[macroName] = Macro(macroName, macroParams, List.from(macroBody), absPath, macroStartLine, List.from(macroLines));
           inMacro = false;
           continue;
         } else if (directive == ".include") {
@@ -340,6 +355,7 @@ class Preprocessor {
       // Collect macro body lines verbatim
       if (inMacro) {
         macroBody.add(raw);
+        macroLines.add(lno);
         continue;
       }
 
@@ -368,23 +384,29 @@ class Preprocessor {
         }
         // Recurse into expanded macro lines. Every line the macro expands
         // to takes the line number of the call, so errors point at it.
-        final List<(String, int, String)> inner;
+        // Each also records the macro and the line of its definition.
+        MacroFrame frame(int bodyLine) => (
+              m.name,
+              m.filename,
+              bodyLine >= 1 && bodyLine <= m.lineNumbers.length ? m.lineNumbers[bodyLine - 1] : m.lineno
+            );
+        final List<SourceLine> inner;
         try {
           inner = process(absPath, mLines, visited);
         } on AssemblerError catch (e) {
           if (e.filename == null || e.filename == absPath) {
-            throw AssemblerError(e.message, absPath, lno);
+            throw e.at(absPath, lno, [...e.trace, frame(e.lineno ?? 0)]);
           }
           rethrow;
         }
         for (final x in inner) {
-          expanded.add(x.$1 == absPath ? (absPath, lno, x.$3) : x);
+          expanded.add(x.$1 == absPath ? (absPath, lno, x.$3, [...x.$4, frame(x.$2)]) : x);
         }
         continue;
       }
 
       // Standard preprocessed source line
-      expanded.add((absPath, lno, line));
+      expanded.add((absPath, lno, line, const <MacroFrame>[]));
     }
 
     return expanded;
