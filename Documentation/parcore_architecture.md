@@ -65,34 +65,38 @@ The constructor takes `clkFreqMhz` (default 25) and optional binaries for each c
 
 | FIFO | Writer (channel) | Reader (channel) | Contents |
 |---|---|---|---|
-| `ifToId` | core 0 (ch 1) | core 1 (ch 0) | 2 words per instruction: PC, instruction |
-| `idToEx` | core 1 (ch 1) | core 2 (any) | 4 words: control word, operand A, operand B, PC |
-| `exToMem` | core 2 (ch 1) | core 3 (any) | results and memory requests |
-| `memToWb` | core 3 (ch 1) | core 1 (ch 2) | 2 words: destination register, value |
+| `ifToId` | core 0 (ch 1) | core 1 (ch 0) | 2 words per instruction: PC (bit 0 is the epoch), instruction |
+| `idToEx` | core 1 (ch 1) | core 2 (any) | 4 words: control word (bit 0 valid, bit 1 epoch), operand A, operand B, PC |
+| `exToMem` | core 2 (ch 1) | core 3 (any) | results and memory requests; a cancel has control-word bit 2 set |
+| `memToWb` | core 3 (ch 1) | core 1 (ch 2) | 2 words: destination register (plus `0x20` for a cancel), value |
 
 Because each FIFO has one channel, the FIFO's own channel number is always 0 (`chanSelect: Const(0)`); `ParcoreTop` decodes each core's `fifoChanSelect` to decide which FIFO a push or pop goes to. Core 2 and core 3 have a single input FIFO, so their pops aren't decoded by channel.
 
-Core 0's channel 0 is the FTDI UART, not a FIFO: `FIFO.W` on channel 0 sends the low byte, `FIFO.TRYR`/`FIFO.R` on channel 0 receive a byte, and `FIFO.STAT` on channel 0 gives the empty flag in bit 0. The UART runs at a fixed divisor of 8.
+A `FIFO.W` to a full FIFO is dropped, so the writers that can get ahead check for room first with `FIFO.STAT`: core 0 pushes a packet only while `ifToId` holds fewer than 128 words, and core 1 decodes an instruction only while `idToEx` does (it keeps retiring writebacks while it waits). `FIFO.STAT` on core 0's channel 1 reads `ifToId`'s status, and on core 1's channels 0, 1 and 2 reads `ifToId`, `idToEx` and `memToWb`.
+
+Core 0's channel 0 is the FTDI UART, not a FIFO: `FIFO.W` on channel 0 sends the low byte, `FIFO.TRYR`/`FIFO.R` on channel 0 receive a byte, and `FIFO.STAT` on channel 0 gives the empty flag in bit 0. The UART divisor is the clock divided by the baud rate (`ParcoreTop(clkFreqMhz:, ftdiBaud:)`, 25 MHz and 1 Mbps by default, giving 25 cycles per bit; `ParcoreTop.ftdiDivisor`).
 
 ### Flush
 
-`pipelineFlush` empties `ifToId` and `idToEx`, the FIFOs holding instructions that haven't executed yet; `exToMem` and `memToWb` are only cleared by `reset`, so results of instructions before the branch still retire. The flush is driven by core 2's MBOX strobe (a taken branch or jump) or by the conductor's RST_CTRL bit 6.
+`pipelineFlush` empties `ifToId`, the instructions core 0 fetched that core 1 hasn't decoded. It is driven by core 2's MBOX strobe (a taken branch or jump) or by the conductor's RST_CTRL bit 6. `idToEx`, `exToMem` and `memToWb` are only cleared by `reset`: core 1 has already counted the destination of every packet in `idToEx` as in flight, so core 2 drops the stale ones itself (see [Branches](#branches)).
 
 ## Stage Firmware
 
 Each stage runs a loop that reads its input FIFO, does its part of the RISC-V instruction, and writes the result to the next FIFO.
 
-**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`). Each pass it echoes any byte waiting on the UART (`FIFO.TRYR`, which reports in R14 whether a byte was read), checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC, instruction]` on channel 1. A zero word is not pushed. Its trap vector 1 (`0x110`) branches to the branch-redirect handler, which loads the new PC from `MBOX_VALUE` (`0xFC`) and goes back to the loop.
+**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`), and the epoch in R9. Each pass it echoes any byte waiting on the UART (`FIFO.TRYR`, which reports in R14 whether a byte was read), checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC | epoch, instruction]` on channel 1. A zero word is not pushed. Its trap vector 1 (`0x110`) branches to the branch-redirect handler, which loads the new PC from `MBOX_VALUE` (`0xFC`), flips the epoch, and goes back to the loop.
 
-**Core 1 (ID)** keeps the 32 RISC-V registers in its zero page (`x0`–`x31` at `0x00`–`0x7F`), a scoreboard of registers with results in flight at `0x80`, and a copy of the scoreboard taken at the last branch at `0x84`. It first drains any writeback on channel 2 into the register file and clears that register's scoreboard bit, then decodes the next instruction from channel 0, waits while its source registers are in flight, and sends a 4-word packet to core 2 on channel 1. Its trap vector 1 restores the scoreboard from the branch copy.
+**Core 1 (ID)** keeps the 32 RISC-V registers in its zero page (`x0`–`x31` at `0x00`–`0x7F`), a count of writes in flight for each register (bytes at `0x90`–`0xAF`), and a mask at `0x80` with a bit set for each register whose count isn't zero. It first retires any writeback on channel 2: it writes the value to the register and takes one from its count (a cancel, destination plus `0x20`, only takes one from the count). Then, if `idToEx` has room, it decodes the next instruction from channel 0, waits while its source registers are in flight (retiring writebacks meanwhile), adds one to its destination's count, and sends a 4-word packet to core 2 on channel 1 with the instruction's epoch (PC bit 0) in control-word bit 1. Every RV32 instruction word has bits [1:0] = `11` and a PC has bit 1 = 0, so if the word core 1 pops as an instruction is a PC (the flush emptied `ifToId` between a packet's two words), it starts again with that PC. Core 1 receives no `MBOX`.
 
-**Core 2 (EX)** does the ALU work, RV32M multiply, divide and remainder, the Zbb instructions, CSRs, and branches. Division is done in software (`_udiv_calc`); the firmware was written before the Particle core had `DIV`, which it now has. For a taken branch or jump it executes `MBOX R14, 1` (see [Branches](#branches)) and, if the instruction has a destination register (JAL/JALR), forwards the link value to core 3.
+**Core 2 (EX)** does the ALU work, RV32M multiply, divide and remainder, the Zbb instructions, CSRs, and branches. Division is done in software (`_udiv_calc`); the firmware was written before the Particle core had `DIV`, which it now has. For a taken branch or jump it executes `MBOX R14, 1` and flips its epoch (see [Branches](#branches)) and, if the instruction has a destination register (JAL/JALR), forwards the link value to core 3.
 
 **Core 3 (MEM)** reads a control word whose bits [19:16] give the memory operation (1–5 loads LB, LH, LW, LBU, LHU; 8–10 stores SB, SH, SW; anything else is an ALU result), performs the access with sign or zero extension, and sends `[rd, value]` back to core 1 on channel 1.
 
 ### Branches
 
-On a taken branch core 2 executes `MBOX R14, 1`. In `ParcoreTop` core 2's MBOX strobe goes to core 0's MBOX input and to `pipelineFlush`, so core 0 takes trap vector 1 and `ifToId` and `idToEx` are emptied. `MBOX` sends `R14`, the target PC, which core 0 stores at `MBOX_VALUE` (`0xFC`) in its own TCM as it takes the trap; its handler loads the new PC from there.
+On a taken branch, a jump, `MRET` or a trap, core 2 executes `MBOX R14, 1` with the target PC in R14, and flips its epoch (`0x48` in its zero page). In `ParcoreTop` core 2's MBOX strobe goes to core 0's MBOX input and to `pipelineFlush`. Core 0 stores the target at `MBOX_VALUE` (`0xFC`) as it takes trap vector 1, the cycle after the strobe; its handler loads the new PC from there and flips its own epoch, so everything it sends from then on carries the new epoch. The flush empties `ifToId` in the same cycle as the strobe, including a push in that cycle, so core 0 never leaves half a packet behind.
+
+Instructions core 1 decoded after the branch, before the redirect, carry the old epoch. Core 2 drops every packet whose epoch isn't its own; for one with a destination register it sends a cancel to core 3 (control-word bit 2), which passes it on to core 1 as a writeback of destination plus `0x20`. Core 1 then takes one from that register's in-flight count without writing it. Every destination core 1 counts gets exactly one writeback or cancel, in order, so the counts are always right, and a wrong-path instruction waiting for a wrong-path result is released when the cancel arrives.
 
 ## Conductor
 
@@ -181,7 +185,6 @@ Each guest program runs for exactly its test's cycle count, with no early exit, 
 
 | Test | Skipped until |
 |---|---|
-| Architectural registers, Control transfer (`parcore_rv32_pipeline_test.dart`) | Branch redirect: taken branches don't yet reach core 0, and wrong-path instructions aren't dropped |
-| Official ISA tests except `rv32ui/simple` (`parcore_riscv_isa_test.dart`, `make test-parcore-isa`) | Branch redirect: every other test takes a branch (a loop, or a jump to its first case) |
+| `rv32ui/fence_i` (`parcore_riscv_isa_test.dart`, `make test-parcore-isa`) | FENCE.I coherence: guest stores go to core 3's TCM and never reach the instructions core 0 fetches (`guest_text_end` is declared but unused) |
 
 Skipped tests are listed in the test output with their reason.

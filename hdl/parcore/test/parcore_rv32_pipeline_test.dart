@@ -366,7 +366,7 @@ void main() {
       // The program's later parts reuse x1..x31, so only the final values
       // (from the reference model) are meaningful
       expectMatchesReference(res, guestProg, c3Kernel);
-    }, skip: 'needs branch redirect (Phase 2)');
+    });
 
     test('Guest instructions - Signed Division & Remainder Edge Cases', () async {
       final guestProg = loadBinary('../../build/guest_rv32_signed_div.bin');
@@ -454,7 +454,7 @@ void main() {
       expect(regs[12]! & 0xFFFFFFFF, equals(0x560), reason: 'JALR link');
       expect(regs[13]! & 0xFFFFFFFF, equals(0xAA), reason: 'JALR target');
       expectMatchesReference(res, guestProg, c3Kernel);
-    }, skip: 'needs branch redirect (Phase 2)');
+    });
 
     test('Guest instructions - System & CSR Architecture (CSRRW, CSRRS, CSRRC, CSRRWI)', () async {
       // Guest RV32 CSR test sequence (mscratch = 0x340):

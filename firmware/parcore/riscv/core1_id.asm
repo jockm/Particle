@@ -7,11 +7,73 @@
 
 ; Zero Page Layout (0x0000..0x00FF) - Single-instruction access via LD R14, addr8
 .define REG_BASE          0x0000  ; Local TCM base for x0..x31 (32 words = 128 bytes: 0x00..0x7F)
-.define SCOREBOARD_MASK   0x0080  ; Local TCM address for 32-bit in-flight bitmask
-.define BRANCH_SAVED_MASK 0x0084  ; Scoreboard snapshot before latest branch/jump
+.define SCOREBOARD_MASK   0x0080  ; Bit r set while x(r) has a write in flight
+.define EPOCH_FLAGS       0x0084  ; Control-word flags for the instruction being
+                                  ; decoded: valid (bit 0) | epoch << 1
+.define INFLIGHT_COUNT    0x0090  ; 32 bytes (0x90..0xAF): writes in flight per register
+
+; Scoreboard: each register has a count of writes in flight. Dispatching an
+; instruction with Rd adds one; its writeback (or its cancel, when core 2
+; drops it as being on a path a taken branch left) takes one away. The mask
+; bit is set while the count isn't zero, and is what the hazard check reads.
+.macro MARK_IN_FLIGHT
+    ; x(R13) has one more write in flight (R13 != 0). Uses R6, R8, R14.
+    LOAD16  R8, INFLIGHT_COUNT
+    ADD     R8, R13
+    LD8     R6, (R8)
+    ADD     R6, 1
+    ST8     (R8), R6
+    LD      R14, SCOREBOARD_MASK
+    LD32    R8, (R14)
+    LD      R6, 1
+    SHIFTL  R6, R13
+    OR      R8, R6
+    ST32    (R14), R8
+.endmacro
+
+.macro VALID_FLAGS reg
+    ; Valid bit and the epoch of the instruction. Uses R14.
+    LD      R14, EPOCH_FLAGS
+    LD32    R14, (R14)
+    OR      %reg, R14
+.endmacro
+
+; A writeback [Rd, data] in R4, R5. Rd + 0x20 is a cancel: nothing is
+; committed. Either way x(Rd) has one write fewer in flight. Uses R6, R8, R9,
+; R14.
+.macro RETIRE_WB
+    LD      R14, R4
+    SHIFTR  R14, 5
+    FBRA.NZ R14, .%_cancel
+    LD      R14, R4
+    FBRA.Z  R14, .%_done
+    LD      R8, R4
+    SHIFTL  R8, 2
+    ST32    (R8), R5            ; Commit: REG_BASE + (Rd << 2)
+    FBRA    .%_count
+.%_cancel:
+    LOAD16  R8, 0x1F
+    AND     R4, R8
+.%_count:
+    LOAD16  R8, INFLIGHT_COUNT
+    ADD     R8, R4
+    LD8     R9, (R8)
+    SUB     R9, 1
+    ST8     (R8), R9
+    LD      R14, R9
+    FBRA.NZ R14, .%_done
+    LD      R6, 1
+    SHIFTL  R6, R4
+    NOT     R6
+    LD      R14, SCOREBOARD_MASK
+    LD32    R9, (R14)
+    AND     R9, R6
+    ST32    (R14), R9
+.%_done:
+.endmacro
 
     RESET_SLOT _reset_vector
-    TRAP_SLOT_BRANCH 1, _branch_flush_handler
+    TRAP_SLOT_UNEXPECTED 1
     TRAP_SLOT_UNEXPECTED 2
     TRAP_SLOT_UNEXPECTED 3
     TRAP_SLOT_UNEXPECTED 4
@@ -45,27 +107,20 @@ _init_rf_loop:
     SUB     R6, 1
     BBRA.NZ R6, _init_rf_loop
 
-    ; Clear Scoreboard mask & branch snapshot (no registers in flight)
+    ; Nothing in flight: clear the mask and the 32 counts (0x90..0xAF)
     LD      R14, SCOREBOARD_MASK
     ST32    (R14), R5
-    LD      R14, BRANCH_SAVED_MASK
+    LOAD16  R4, INFLIGHT_COUNT
+    LD      R6, 8
+._clear_counts:
+    ST32    (R4), R5
+    ADD     R4, 4
+    SUB     R6, 1
+    BBRA.NZ R6, ._clear_counts
+    LD      R14, EPOCH_FLAGS
+    LD      R5, 1
     ST32    (R14), R5
 
-    LOAD16  R14, _id_main_loop
-    JMP     R14, R0
-
-; ==============================================================================
-; Trap Vector 1: Pipeline Flush on Branch / Jump (Core 2 Strobe)
-; Vector 1's slot branches here
-; ==============================================================================
-_branch_flush_handler:
-    ; Restore Scoreboard mask to pre-branch snapshot (preserves older in-flight instructions)
-    LD      R14, BRANCH_SAVED_MASK
-    LD32    R5, (R14)
-    LD      R14, SCOREBOARD_MASK
-    ST32    (R14), R5
-
-    ; Jump back to main decode loop
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -85,58 +140,52 @@ _id_main_loop:
 _do_wb_read:
     FIFO.R    R4, R3            ; Read Rd index
     FIFO.R    R5, R3            ; Read committed 32-bit data
-
-    ; Check if Rd == 0 (x0 is hardwired zero; skip write to register file)
-    FBRA.Z    R4, _clear_wb_scoreboard
-
-    ; Commit to local architectural register: REG_BASE (0x0000) + (Rd << 2)
-    LD        R7, R4
-    SHIFTL    R7, 2
-    ST32      (R7), R5          ; Store committed value directly in Page Zero
-
-_clear_wb_scoreboard:
-    ; Clear bit in scoreboard & branch snapshot: mask &= ~(1 << Rd)
-    LD      R7, 1
-    SHIFTL  R7, R4              ; R7 = 1 << Rd
-    NOT     R7                  ; R7 = ~(1 << Rd)
-    LD      R14, SCOREBOARD_MASK
-    LD32    R8, (R14)
-    AND     R8, R7
-    ST32    (R14), R8
-    LD      R14, BRANCH_SAVED_MASK
-    LD32    R8, (R14)
-    AND     R8, R7
-    ST32    (R14), R8
+    RETIRE_WB
 
 _poll_fetch_queue:
     ; --------------------------------------------------------------------------
     ; 2. Check if Instruction Packet Available from Core 0
     ; --------------------------------------------------------------------------
-    FIFO.STAT R4, R1            ; Poll Fetch channel status
-    AND       R4, 1             ; Bit 0: empty
-    FBRA.NZ   R4, _fetch_empty  ; If empty, loop back to check writebacks
+    FIFO.STAT R14, R1           ; Poll Fetch channel status
+    AND       R14, 1            ; Bit 0: empty
+    FBRA.NZ   R14, _fetch_empty ; If empty, loop back to check writebacks
+    ; Decode only when idToEx has room for the packet (a FIFO.W to a full
+    ; channel is dropped): fewer than 128 words in it (status bit 15 clear).
+    ; Until then, keep servicing writebacks.
+    FIFO.STAT R14, R2
+    SHIFTR    R14, 15
+    FBRA.NZ   R14, _fetch_empty
     FIFO.R    R10, R1           ; Pop PC
-    LOAD32  R6, 0xFFFFFFFF      ; Check for pipeline flush sentinel (-1)
+
+._have_pc:
+    ; PC bit 0 is the epoch (core 0 flips it on every redirect): keep it in
+    ; EPOCH_FLAGS for the control word, and decode with the real PC
     LD      R7, R10
-    SUB     R7, R6
-    FBRA.Z  R7, _drain_flush_token
+    AND     R7, 1
+    SHIFTL  R7, 1
+    OR      R7, 1               ; valid
+    LD      R14, EPOCH_FLAGS
+    ST32    (R14), R7
+    LD      R7, 1
+    NOT     R7
+    AND     R10, R7
 
     FIFO.R  R11, R1             ; Pop Instruction Word
+    ; Every RV32 instruction has bits [1:0] = 11, and a PC has bit 1 = 0. A
+    ; word with bit 1 clear is the next packet's PC: the flush emptied ifToId
+    ; after this packet's PC was popped. Start again with it.
+    LD      R7, R11
+    AND     R7, 2
+    FBRA.NZ R7, ._is_instruction
+    LD      R10, R11
+    BBRA    ._have_pc
+._is_instruction:
     LOAD16  R14, _decode_fields
     JMP     R14, R0
 
 _fetch_empty:
     LOAD16    R14, _id_main_loop
     JMP       R14, R0
-
-_drain_flush_token:
-    FIFO.R  R11, R1             ; Discard instruction word
-    ; Pipeline bubble: clear scoreboard mask on flush
-    LD      R14, SCOREBOARD_MASK
-    LD      R7, 0
-    ST32    (R14), R7
-    LOAD16  R14, _id_main_loop
-    JMP     R14, R0
 
 _decode_fields:
     ; --------------------------------------------------------------------------
@@ -248,25 +297,7 @@ _do_stall_wait:
     BBRA.NZ   R4, _do_stall_wait
     FIFO.R    R4, R3            ; Pop Rd from WB
     FIFO.R    R5, R3            ; Pop committed data
-
-    FBRA.Z  R4, _clear_stalled_bit
-    ; Commit to Page Zero register table: REG_BASE (0x0000) + (Rd << 2)
-    LD      R8, R4
-    SHIFTL  R8, 2
-    ST32    (R8), R5            ; Update register table
-
-_clear_stalled_bit:
-    LD      R8, 1
-    SHIFTL  R8, R4
-    NOT     R8
-    LD      R14, SCOREBOARD_MASK
-    LD32    R9, (R14)
-    AND     R9, R8
-    ST32    (R14), R9
-    LD      R14, BRANCH_SAVED_MASK
-    LD32    R9, (R14)
-    AND     R9, R8
-    ST32    (R14), R9
+    RETIRE_WB
     LOAD16  R14, _check_hazard  ; Re-evaluate hazard state (R7/Rs2 preserved)
     JMP     R14, R0
 
@@ -512,16 +543,11 @@ _pack_imm_ctrl:
     LD      R8, R13             ; R8 = Rd
     SHIFTL  R8, 8               ; R8 = Rd << 8
     OR      R4, R8              ; Pack Rd
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
 _dispatch_packet:
-    ; If Rd != 0, set destination reservation in scoreboard
+    ; If Rd != 0, x(Rd) has one more write in flight
     FBRA.Z  R13, _push_to_ex
-    LD      R14, SCOREBOARD_MASK
-    LD32    R8, (R14)
-    LD      R6, 1
-    SHIFTL  R6, R13
-    OR      R8, R6
-    ST32    (R14), R8
+    MARK_IN_FLIGHT
 
 _push_to_ex:
     FIFO.W  R4, R2              ; Word 0: Control Word [uop:8 | funct:8 | Rd:8 | flags:8]
@@ -652,7 +678,7 @@ _pack_reg_ctrl:
     LD      R8, R13             ; R8 = Rd
     SHIFTL  R8, 8               ; R8 = Rd << 8
     OR      R4, R8              ; Pack Rd into bits [15:8]
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
     LD      R9, R6              ; OpB = Rs2 value
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
@@ -676,7 +702,7 @@ _emit_load:
     LD      R8, R13             ; R8 = Rd
     SHIFTL  R8, 8               ; R8 = Rd << 8
     OR      R4, R8              ; Pack Rd into bits [15:8]
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
 
@@ -699,7 +725,7 @@ _emit_store:
     ADD     R4, 8               ; mem_op = funct3 + 8
     SHIFTL  R4, 8
     SHIFTL  R4, 8               ; R4 = mem_op << 16
-    OR      R4, 1               ; Valid bit (Rd = 0)
+    VALID_FLAGS R4
 
     ; Send 4-word token packet to Core 2 (idToEx)
     FIFO.W  R4, R2              ; Word 0: Control Word (mem_op in [19:16], Rd=0)
@@ -754,13 +780,8 @@ _emit_branch:
     LD      R8, 10
     SHIFTL  R8, 1               ; R8 = 20
     SHIFTL  R7, R8              ; R7 = uop << 20
-    OR      R7, 1               ; Valid bit
+    VALID_FLAGS R7
 
-    ; Snapshot scoreboard before branch
-    LD      R14, SCOREBOARD_MASK
-    LD32    R8, (R14)
-    LD      R14, BRANCH_SAVED_MASK
-    ST32    (R14), R8
     ; 4. Push 4-word token packet to Core 2 via Channel 1 (R2)
     FIFO.W  R7, R2              ; Word 0: Control Word
     FIFO.W  R5, R2              ; Word 1: Rs1 Value
@@ -781,7 +802,7 @@ _emit_lui:
     LD      R7, R13
     SHIFTL  R7, 8               ; R7 = Rd << 8
     OR      R4, R7
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
     LD      R5, 0               ; OpA = 0
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
@@ -799,7 +820,7 @@ _emit_fence_i:
     LD      R8, 12
     SHIFTL  R8, 1
     SHIFTL  R4, R8
-    OR      R4, 1               ; Valid bit (Rd = 0)
+    VALID_FLAGS R4
     LD      R5, R10
     LD      R9, 0
     LOAD16  R14, _push_to_ex
@@ -817,7 +838,7 @@ _emit_auipc:
     LD      R7, R13
     SHIFTL  R7, 8               ; R7 = Rd << 8
     OR      R4, R7
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
     LD      R5, R10             ; OpA = Current PC
     LOAD16  R14, _dispatch_packet
     JMP     R14, R0
@@ -867,7 +888,7 @@ _emit_system:
     LD      R8, R13             ; Rd
     SHIFTL  R8, 8               ; Rd << 8
     OR      R4, R8
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
 
     FIFO.W  R4, R2              ; Word 0: Control Word
     FIFO.W  R5, R2              ; Word 1: Rs1 Value
@@ -903,7 +924,7 @@ _emit_csr_rw:
     LD      R8, R13             ; Rd
     SHIFTL  R8, 8               ; Rd << 8
     OR      R4, R8
-    OR      R4, 1               ; Valid bit
+    VALID_FLAGS R4
 
     LD      R9, R7              ; OpB = CSR Address
     LOAD16  R14, _dispatch_packet
@@ -936,23 +957,16 @@ _emit_jal:
     SHIFTL  R7, 1
     OR      R4, R7              ; R4 = J-Immediate jump offset
 
-    LD      R14, SCOREBOARD_MASK
-    LD32    R8, (R14)
     FBRA.Z  R13, ._jal_no_sb
-    LD      R7, 1
-    SHIFTL  R7, R13
-    OR      R8, R7
-    ST32    (R14), R8
+    MARK_IN_FLIGHT
 ._jal_no_sb:
-    LD      R14, BRANCH_SAVED_MASK
-    ST32    (R14), R8
     LOAD16  R7, 0x09            ; JAL uop
     SHIFTL  R7, 12
     SHIFTL  R7, 8               ; uop << 20
     LD      R8, R13             ; Rd
     SHIFTL  R8, 8               ; Rd << 8
     OR      R7, R8
-    OR      R7, 1               ; Valid bit
+    VALID_FLAGS R7
     FIFO.W  R7, R2              ; Control Word
     FIFO.W  R10, R2             ; Link PC
     FIFO.W  R4, R2              ; Jump Offset
@@ -961,23 +975,16 @@ _emit_jal:
     JMP     R14, R0
 
 _emit_jalr:
-    LD      R14, SCOREBOARD_MASK
-    LD32    R8, (R14)
     FBRA.Z  R13, ._jalr_no_sb
-    LD      R7, 1
-    SHIFTL  R7, R13
-    OR      R8, R7
-    ST32    (R14), R8
+    MARK_IN_FLIGHT
 ._jalr_no_sb:
-    LD      R14, BRANCH_SAVED_MASK
-    ST32    (R14), R8
     LOAD16  R7, 0x0A            ; JALR uop
     SHIFTL  R7, 12
     SHIFTL  R7, 8               ; uop << 20
     LD      R8, R13             ; Rd
     SHIFTL  R8, 8               ; Rd << 8
     OR      R7, R8
-    OR      R7, 1
+    VALID_FLAGS R7
     FIFO.W  R7, R2              ; Control Word
     FIFO.W  R5, R2              ; Base Register (Rs1)
     FIFO.W  R9, R2              ; I-Immediate Offset

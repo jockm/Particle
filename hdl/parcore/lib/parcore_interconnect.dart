@@ -104,9 +104,11 @@ class ParcoreInterconnect extends Module {
     ifToIdOut <= fifo0to1.popData;
     ifToIdStatus <= fifo0to1.statusWord;
 
+    // idToEx isn't flushed: core 1 has counted each packet's destination as
+    // in flight, so core 2 drops stale ones itself (by epoch) and cancels them
     final fifo1to2 = ParticleFifoSubsystem(
       clk: clk,
-      reset: ifIdReset,
+      reset: reset,
       chanSelect: Const(0, width: 2),
       pushData: idToExData,
       pushEn: idToExPush,

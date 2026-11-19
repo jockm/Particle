@@ -27,6 +27,7 @@ _reset_vector:
     LOAD16  R10, 0x0500         ; Guest RV32 PC (Base at 0x00000500)
     ; LD      R0, 0               ; R0 = 0 (Channel 0: FTDI Console UART)
     LD      R1, 1               ; R1 = 1 (Channel 1: Core 1 ID Stage Queue)
+    LD      R9, 0               ; R9 = epoch, sent in PC bit 0; flips on every redirect
 
 ; ==============================================================================
 ; Main Fetch & Console Loop
@@ -58,6 +59,7 @@ _if_main_loop:
 
     ; 3. Push Fetch Packet to ID Core via FIFO Channel 1 [PC, Instruction]
     LD      R6, R10             ; Original instruction PC
+    OR      R6, R9              ; with the epoch in bit 0
     ADD     R10, 4              ; Advance PC pointer
     FIFO.W  R6, R1              ; Word 0: PC
     FIFO.W  R5, R1              ; Word 1: Instruction Word
@@ -72,4 +74,6 @@ _if_main_loop:
 _branch_redirect_handler:
     LOAD16  R14, MBOX_VALUE
     LD32    R10, (R14)          ; Set primary PC pointer to redirect target
+    LD      R7, 1
+    XOR     R9, R7              ; New epoch: core 2 drops what was sent before
     BBRA    _if_main_loop

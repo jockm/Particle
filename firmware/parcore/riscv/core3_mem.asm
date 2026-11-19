@@ -33,6 +33,17 @@ _process_mem_packet:
     LOAD16  R5, 0x1F
     AND     R4, R5              ; R4 = Rd index
 
+    ; A cancel from core 2 (flags bit 2): core 1 gets Rd + 0x20, which takes
+    ; the register off its in-flight count without writing it
+    LD      R14, R10
+    AND     R14, 4
+    FBRA.Z  R14, ._not_cancel
+    LOAD16  R5, 0x20
+    OR      R4, R5
+    LOAD16  R14, _send_wb_tokens
+    JMP     R14, R0
+._not_cancel:
+
     ; Inspect Memory Operation Type: Control Word [19:16]
     LD      R3, R10
     SHIFTR  R3, 12

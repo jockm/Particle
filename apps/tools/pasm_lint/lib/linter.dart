@@ -612,10 +612,24 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
   // Safe label match that ignores colons inside string literals
   final inlineLabelRegex = RegExp(r"^\s*([A-Za-z0-9_\.]+):\s*(.*)");
 
+  var inMacroBody = false;
   for (var i = 0; i < lines.length; i++) {
     final lno = i + 1;
     var cleaned = lines[i].replaceAll(RegExp(r";.*"), "").trim();
     if (cleaned.isEmpty) continue;
+
+    // A macro body's operands are its parameters (%name): the assembler
+    // checks the lines each call expands to
+    final lowerCleaned = cleaned.toLowerCase();
+    if (lowerCleaned.startsWith(".macro")) {
+      inMacroBody = true;
+      continue;
+    }
+    if (lowerCleaned.startsWith(".endmacro") || lowerCleaned.startsWith(".endm")) {
+      inMacroBody = false;
+      continue;
+    }
+    if (inMacroBody) continue;
 
     // Directives: check for bounds or quote errors, then skip instruction checks
     if (cleaned.startsWith(".") && !cleaned.startsWith("._")) {

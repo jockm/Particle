@@ -205,7 +205,7 @@ The longer forms overwrite `R14`. A `JUMP`'s size depends on where its target en
 
 ## Standard Macros (`lib/common.inc`)
 
-`lib/common.inc` defines the trap constants (`TRAP_TABLE_BASE` = `0x100`, `TRAP_STRIDE_BYTES` = 64, and the vector numbers `TRAP_RESET` 0, `TRAP_MBOX` 1, `TRAP_ALIGN` 14, `TRAP_ILLEGAL` 15) and these macros. Most of them use `R14` as scratch, so they overwrite it.
+`lib/common.inc` defines the trap constants (`TRAP_TABLE_BASE` = `0x100`, `TRAP_STRIDE_BYTES` = 16, and the vector numbers `TRAP_RESET` 0, `TRAP_MBOX` 1, `TRAP_ALIGN` 14, `TRAP_ILLEGAL` 15) and these macros. Most of them use `R14` as scratch, so they overwrite it.
 
 | Macro | Expands to | Effect |
 |---|---|---|
@@ -229,3 +229,29 @@ The longer forms overwrite `R14`. A `JUMP`'s size depends on where its target en
 | `FAST_EXIT_TRAP` | `XCHGMOST` + `JMP R14, R0` | ends a trap handler and returns |
 
 `JUMP` (above) reaches any address; `LJMP` and `RCALL` reach targets below `0x10000`.
+
+## Vector Tables (`lib/vectors.inc`)
+
+Every program fills all 16 vector slots (16 bytes each, `0x100`–`0x1FF`), so a trap never lands in code that isn't meant for it. `lib/vectors.inc` includes `lib/common.inc` and provides:
+
+| Macro | Slot contents | Use |
+|---|---|---|
+| `VECTOR_TABLE reset` | the whole table | reset jumps to `reset`, vectors 1–15 are unexpected, and `_unexpected_trap` follows at `0x200`. For programs that handle no traps |
+| `RESET_SLOT handler` | `LOAD_R14_32` + `JMP` | slot 0 |
+| `TRAP_SLOT n, handler` | `XCHGMOST` + `LOAD_R14_32` + `JMP` | a handler that returns with `FAST_EXIT_TRAP`; the return PC waits in the shadow `R14`, so the handler may use `R1`–`R14` |
+| `TRAP_SLOT_BRANCH n, handler` | `FBRA handler` | changes no register (`R14` is still the return PC). `handler` must start within 510 bytes after the slot |
+| `TRAP_SLOT_UNEXPECTED n` | `XCHGMOST`, `LD R1, n`, jump to `_unexpected_trap` | a vector the program doesn't use |
+| `UNEXPECTED_TRAP_ROUTINE` | `_unexpected_trap`, at `0x200` | stores the return PC at `UNEXPECTED_TRAP_PC` (`0xF4`) and the vector at `UNEXPECTED_TRAP_VECTOR` (`0xF8`), then spins |
+
+Each slot macro starts with `.org` at its slot, so slots are written in order and a slot that overflows is an assembler error. A program with handlers writes the 16 slots out, then `UNEXPECTED_TRAP_ROUTINE`:
+
+```assembly
+.include "lib/vectors.inc"
+    RESET_SLOT _start
+    TRAP_SLOT 1, _on_mbox
+    TRAP_SLOT_UNEXPECTED 2
+    ; ... 3 to 15
+    UNEXPECTED_TRAP_ROUTINE
+```
+
+`MBOX_VALUE` (`0xFC`) is the word where a core stores the value of the last `MBOX` it received.

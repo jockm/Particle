@@ -163,11 +163,10 @@ int main(int argc, char** argv) {
   );
 }
 
-/// The tests that take no branch, so they can pass before taken branches
-/// reach core 0 (Phase 2). Every other test takes one: a loop, or a jump to
-/// its first case.
-const _runsWithoutBranchRedirect = {
-  'rv32ui/simple',
+/// Tests that can't pass yet, with the reason.
+const _knownGaps = {
+  'rv32ui/fence_i': 'needs FENCE.I coherence: guest stores (core 3) do not '
+      'reach the instructions core 0 fetches',
 };
 
 void main() {
@@ -421,10 +420,7 @@ void main() {
               equals(0),
               reason: '$fullId non-zero a0 = 0x${a0.toRadixString(16)}',
             );
-          }, timeout: Timeout.none,
-              skip: _runsWithoutBranchRedirect.contains(fullId)
-                  ? null
-                  : 'needs branch redirect (Phase 2)');
+          }, timeout: Timeout.none, skip: _knownGaps[fullId]);
         }
       });
     }

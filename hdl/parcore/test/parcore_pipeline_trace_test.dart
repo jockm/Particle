@@ -68,7 +68,7 @@ void main() {
       await clk.waitCycles(10);
 
       const testChar = 75; // ASCII 'K' (0x4B)
-      const baudDivisor = 8;
+      final baudDivisor = top.ftdiDivisor; // 25 at 25 MHz, 1 Mbps
 
       // Send Start bit (Low)
       uartRx.put(0);

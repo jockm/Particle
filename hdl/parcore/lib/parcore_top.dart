@@ -21,6 +21,9 @@ class ParcoreTop extends Module {
   /// rebuilding its Verilator model. Simulation always uses the binaries.
   final String? tcmInitDir;
 
+  /// FTDI UART divisor: clock cycles per bit (clkFreqMhz MHz / ftdiBaud).
+  final int ftdiDivisor;
+
   Logic get clk => input('clk');
   Logic get reset => input('reset');
 
@@ -48,6 +51,7 @@ class ParcoreTop extends Module {
     Logic? spiMiso,
     Logic? guestTextEnd,
     int clkFreqMhz = 25,
+    int ftdiBaud = 1000000,
     List<int>? conductorBinary,
     List<int>? core0Binary,
     List<int>? core1Binary,
@@ -55,7 +59,11 @@ class ParcoreTop extends Module {
     List<int>? core3Binary,
     this.tcmInitDir,
     super.name = 'parcore_top',
-  }) {
+  }) : ftdiDivisor = (clkFreqMhz * 1000000 / ftdiBaud).round() {
+    if (ftdiDivisor < 2 || ftdiDivisor > 0xFFFF) {
+      throw ArgumentError('ftdiBaud $ftdiBaud gives divisor $ftdiDivisor '
+          'at $clkFreqMhz MHz; it must be 2 to 65535');
+    }
     addInput('clk', clk);
     addInput('reset', reset);
     addInput('uart_rx', uartRx);
@@ -330,15 +338,18 @@ class ParcoreTop extends Module {
       txData: core0.fifoPushData.slice(7, 0),
       txValid: uartTxValid,
       rxReady: c0FifoPopEn,
-      baudDivisor: Const(8, width: 16),
+      baudDivisor: Const(ftdiDivisor, width: 16),
       name: 'parcore_ftdi_uart',
     );
     uartTx <= ftdiUart.output('txPin');
 
+    // FIFO.STAT: channel 0 the UART (bit 0: nothing received), channel 1
+    // ifToId (core 0 checks for room before pushing a packet)
     c0FifoStatus <= mux(
       core0.fifoChanSelect.eq(Const(0, width: 2)),
       [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
-      Const(0, width: ParticleWidths.word),
+      mux(core0.fifoChanSelect.eq(Const(1, width: 2)),
+          interconnect.ifToIdStatus, Const(0, width: ParticleWidths.word)),
     );
 
     c0FifoPopData <= [
@@ -365,10 +376,13 @@ class ParcoreTop extends Module {
       interconnect.memToWbOut,
       interconnect.ifToIdOut,
     );
+    // FIFO.STAT: channel 0 ifToId, 1 idToEx (what core 1 sends: it checks
+    // for room before decoding), 2 memToWb
     c1FifoStatus <= mux(
       c1ChanSelect.eq(Const(2, width: 2)),
       interconnect.memToWbStatus,
-      interconnect.ifToIdStatus,
+      mux(c1ChanSelect.eq(Const(1, width: 2)), interconnect.idToExStatus,
+          interconnect.ifToIdStatus),
     );
 
     final core1 = ParticleCpuCore(

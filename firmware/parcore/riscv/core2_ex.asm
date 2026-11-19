@@ -7,6 +7,19 @@
 
     VECTOR_TABLE _reset_vector
 .define CSR_BASE         0x0004  ; Zero Page CSR block (0x0004..0x0043)
+.define EX_EPOCH         0x0048  ; Current epoch (0 or 1): flips on every redirect
+
+; Redirect core 0 to the PC in R14 (MBOX vector 1 sends it), and flip the
+; epoch: from now on packets of the old epoch are on the path the redirect
+; left. Uses R6, R7, R14.
+.macro SEND_REDIRECT
+    MBOX    R14, 1
+    LD      R14, EX_EPOCH
+    LD32    R6, (R14)
+    LD      R7, 1
+    XOR     R6, R7
+    ST32    (R14), R6
+.endmacro
 .define CSR_OFS_CYCLE    0x00    ; 0xC00 (cycle), 0xC01 (time)
 .define CSR_OFS_CYCLEH   0x04    ; 0xC80 (cycleh), 0xC81 (timeh)
 .define CSR_OFS_INSTRET  0x08    ; 0xC02 (instret)
@@ -30,6 +43,9 @@ _reset_vector:
     SUB     R5, 1
     BBRA.NZ R5, ._zero_csr_loop
 
+    LD      R14, EX_EPOCH
+    ST32    (R14), R6           ; Epoch 0 (R6 = 0)
+
     ; Set default trap vector address mtvec = 0x00000480
     LOAD32  R5, 0x00000480
     LD      R14, CSR_BASE+CSR_OFS_MTVEC
@@ -52,6 +68,36 @@ _ex_main_loop:
     JMP     R14, R0
 
 _have_valid_packet:
+    ; Epoch: flags bit 1 must match this core's. A packet of the old epoch was
+    ; decoded on the path a taken branch left: it doesn't run, and if it has
+    ; a destination its cancel goes to core 1 (through core 3), which takes
+    ; the register off its in-flight count
+    LD      R3, R10
+    SHIFTR  R3, 1
+    AND     R3, 1
+    LD      R14, EX_EPOCH
+    LD32    R4, (R14)
+    SUB     R3, R4
+    LD      R14, R3
+    FBRA.Z  R14, ._epoch_ok
+    LD      R4, R10
+    SHIFTR  R4, 8
+    LOAD16  R5, 0x1F
+    AND     R4, R5              ; R4 = Rd
+    FBRA.Z  R4, ._stale_no_rd
+    SHIFTL  R4, 8
+    OR      R4, 5               ; valid (bit 0) + cancel (bit 2), Rd in [15:8]
+    LD      R10, R4
+    LD      R15, 0
+    LD      R13, 0
+    LOAD16  R5, _forward_to_mem
+    LD      R14, 0
+    JMP     R5, R0
+._stale_no_rd:
+    LOAD16  R14, _ex_main_loop
+    JMP     R14, R0
+
+._epoch_ok:
     LD      R15, 0              ; Result register
     LD      R14, 0              ; Target / Effective Memory Address
 
@@ -225,8 +271,8 @@ _do_jalr:
     JMP     R5, R0
 
 _taken_branch:
-    ; Fire inter-core MBOX strobe (Vector 1) to Core 0 with redirect target in R14
-    MBOX    R14, 1
+    ; Redirect core 0 to the target in R14 (MBOX vector 1), new epoch
+    SEND_REDIRECT
 
     ; Check if destination register Rd != 0 (e.g. for JAL/JALR link writeback)
     LD      R4, R10
@@ -1166,7 +1212,7 @@ _dispatch_system:
 ._do_mret:
     LD      R14, CSR_BASE+CSR_OFS_MEPC
     LD32    R14, (R14)
-    MBOX    R14, 1
+    SEND_REDIRECT
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0
 
@@ -1181,7 +1227,7 @@ _dispatch_system:
     LOAD32  R14, 0x00000480
 
 ._do_trap_strobe:
-    MBOX    R14, 1
+    SEND_REDIRECT
     LOAD16  R14, _ex_main_loop
     JMP     R14, R0
 
