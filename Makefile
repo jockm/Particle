@@ -75,7 +75,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
-        generate-ulx3s ulx3s-bit ulx3s-prog ulx3s-term firmware apps clean help
+        generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-term firmware apps clean help
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -111,6 +111,7 @@ help:
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make generate-ulx3s   - Generate the ULX3S design with a program (ULX3S_PROGRAM=...) in build/ulx3s"
 	@echo "  make ulx3s-bit        - Synthesize, place and route the ULX3S design (build/ulx3s/particle_ulx3s.bit)"
+	@echo "  make ulx3s-timing     - Show the last ULX3S build's Fmax and critical path (from nextpnr.log)"
 	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
 	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000) with screen"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
@@ -188,6 +189,18 @@ ulx3s-bit: generate-ulx3s
 	@grep "Max frequency for clock" $(ULX3S_BLD)/nextpnr.log | tail -1
 	@echo "==> Bitstream: $(ULX3S_BLD)/particle_ulx3s.bit"
 	@$(DOT_CLEAN_CMD)
+
+# The critical path from the last ulx3s-bit: one line per step (type, delay,
+# running total, where), long cell names cut short
+ulx3s-timing:
+	@if [ ! -f "$(ULX3S_BLD)/nextpnr.log" ]; then \
+		echo "[FAIL] $(ULX3S_BLD)/nextpnr.log not found: run make ulx3s-bit first."; exit 1; \
+	fi
+	@grep "Max frequency for clock" $(ULX3S_BLD)/nextpnr.log | tail -1
+	@sed -n '/Critical path report for clock/,/^Info: *$$/p' $(ULX3S_BLD)/nextpnr.log | \
+		awk '$$2=="clk-to-q" || $$2=="logic" || $$2=="routing" || $$2=="setup" { \
+			n = $$6; if (length(n) > 90) n = substr(n, 1, 90) "..."; \
+			printf "%-9s %6s %7s  %s\n", $$2, $$3, $$4, n }'
 
 ulx3s-prog:
 	@if [ ! -f "$(ULX3S_BLD)/particle_ulx3s.bit" ]; then \
