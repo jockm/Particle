@@ -75,7 +75,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
-        generate-ulx3s ulx3s-bit ulx3s-prog firmware apps clean help
+        generate-ulx3s ulx3s-bit ulx3s-prog ulx3s-term firmware apps clean help
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -112,6 +112,7 @@ help:
 	@echo "  make generate-ulx3s   - Generate the ULX3S design with a program (ULX3S_PROGRAM=...) in build/ulx3s"
 	@echo "  make ulx3s-bit        - Synthesize, place and route the ULX3S design (build/ulx3s/particle_ulx3s.bit)"
 	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
+	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000) with screen"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
@@ -156,9 +157,7 @@ generate-parcore: setup
 # ULX3S board (ECP5 85F): one Particle core, 64 KiB block RAM, two UARTs
 # ------------------------------------------------------------------------------
 # ULX3S_PROGRAM is built with pbuild into a hex image and loaded into the block
-# RAM; the bitstream has to be rebuilt to change it. Only assembly programs
-# that avoid the instructions the hardware doesn't decode yet will run
-# (see Documentation/hdl_architecture.md); compiled Action code won't.
+# RAM; the bitstream has to be rebuilt to change it.
 ULX3S_BLD      := $(BUILD_DIR)/ulx3s
 ULX3S_PROGRAM  ?= apps/asm/ulx3s_echo.asm
 ULX3S_CLOCK_HZ ?= 50000000
@@ -195,6 +194,18 @@ ulx3s-prog:
 		echo "[FAIL] $(ULX3S_BLD)/particle_ulx3s.bit not found: run make ulx3s-bit first."; exit 1; \
 	fi
 	$(OPENFPGALOADER) -b ulx3s "$(ULX3S_BLD)/particle_ulx3s.bit"
+
+# The FTDI UART: the first USB serial port found, unless ULX3S_PORT is given.
+# In screen, Ctrl-A then K (and y) leaves.
+ULX3S_PORT ?= $(firstword $(wildcard /dev/tty.usbserial-* /dev/ttyUSB*))
+ULX3S_BAUD ?= 1000000
+
+ulx3s-term:
+	@if [ -z "$(ULX3S_PORT)" ]; then \
+		echo "[FAIL] No USB serial port found: connect the ULX3S, or give ULX3S_PORT=/dev/..."; exit 1; \
+	fi
+	@echo "==> $(ULX3S_PORT) at $(ULX3S_BAUD) baud (Ctrl-A K to leave)"
+	@screen $(ULX3S_PORT) $(ULX3S_BAUD)
 
 # ------------------------------------------------------------------------------
 # Verification & Test Suites

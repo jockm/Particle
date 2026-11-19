@@ -6,10 +6,9 @@
 ;   FIFO channel 0: FTDI USB UART (1 Mbps)
 ;   FIFO channel 1: GPIO UART on gp[0] (transmit) / gp[1] (receive), 115200
 ;
-; FIFO.STAT bit 0 = nothing received, bit 1 = transmitter busy. It uses only
-; instructions the current hardware decodes (see hdl_architecture.md). In
-; psim, channels 0 and 1 of a single core loop back to the core itself, so
-; there it echoes its own banner over and over.
+; FIFO.STAT bit 0 = nothing received, bit 1 = transmitter busy. In psim,
+; channels 0 and 1 of a single core loop back to the core itself, so there it
+; echoes its own banner over and over.
 ; ==============================================================================
 
 .include "lib/vectors.inc"
@@ -27,8 +26,7 @@ _main:
 ._banner_chan:
     LDI     R3, _banner
 ._banner_next:
-    LD8     R5, (R3)        ; (R3++) would do, but the hardware doesn't
-    ADD     R3, 1           ; update the pointer for post-increment yet
+    LD8     R5, (R3++)
     FBRA.Z  R5, ._banner_done
 ._banner_wait:
     FIFO.STAT R6, R4

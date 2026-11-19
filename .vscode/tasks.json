@@ -73,6 +73,12 @@
       "problemMatcher": []
     },
     {
+      "label": "ULX3S: Open the FTDI UART",
+      "type": "shell",
+      "command": "make ulx3s-term",
+      "problemMatcher": []
+    },
+    {
       "label": "Particle: Run ROHD Tests",
       "type": "shell",
       "command": "make test-particle",

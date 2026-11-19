@@ -53,6 +53,7 @@ The generators are Dart programs (`hdl/particle/bin/generate.dart`, `generate_ul
 make ulx3s-bit                                    # apps/asm/ulx3s_echo.asm
 make ulx3s-bit ULX3S_PROGRAM=apps/asm/myprog.asm  # another program
 make ulx3s-prog                                   # load it into the board (openFPGALoader)
+make ulx3s-term                                   # talk to it over the FTDI UART
 ```
 
 | Target | Does |
@@ -60,10 +61,11 @@ make ulx3s-prog                                   # load it into the board (open
 | `make generate-ulx3s` | Builds `ULX3S_PROGRAM` with `pbuild --format hex` into `build/ulx3s/program.hex`, then runs `hdl/particle/bin/generate_ulx3s.dart`. That splits the image into the two block RAM banks (`program_bank0.hex`, `program_bank1.hex`, placed at `0x100`) and writes `particle_ulx3s.sv`, whose top level is `ulx3s_board`. |
 | `make ulx3s-bit` | `generate-ulx3s`, then Yosys (`synth_ecp5`), nextpnr (`--85k --package CABGA381`, pins from `hdl/particle/boards/ulx3s/ulx3s_v20.lpf`) and `ecppack`, in `build/ulx3s`. Prints nextpnr's maximum frequency; the logs are `yosys.log` and `nextpnr.log`. The bitstream is `build/ulx3s/particle_ulx3s.bit`. |
 | `make ulx3s-prog` | Loads the bitstream into the board's FPGA with `openFPGALoader -b ulx3s` (until the next power cycle). |
+| `make ulx3s-term` | Opens the FTDI UART with `screen`: the first `/dev/tty.usbserial-*` or `/dev/ttyUSB*` port, at 1 Mbps (`ULX3S_PORT`, `ULX3S_BAUD`). Ctrl-A then K leaves. |
 
 Variables: `ULX3S_PROGRAM` (default `apps/asm/ulx3s_echo.asm`), `ULX3S_CLOCK_HZ` (default `50000000`; the generator stops if the PLL can't make it exactly from 25 MHz), and `YOSYS`, `NEXTPNR_ECP5`, `ECPPACK`, `OPENFPGALOADER` for the tool commands.
 
-The program is part of the bitstream, so changing it means running `make ulx3s-bit` again. Only assembly programs that avoid the instructions the hardware doesn't implement yet will run (see `hdl_architecture.md`); compiled Action code won't, because its stack operations need pre-decrement and post-increment.
+The program is part of the bitstream, so changing it means running `make ulx3s-bit` again. The hardware implements every instruction in the spec (see `hdl_architecture.md`), so an Action program built with `pbuild` should run too; so far only `ulx3s_echo.asm` has been run on the ULX3S design (in simulation).
 
 | Board | Pins | Use |
 |---|---|---|
@@ -107,6 +109,7 @@ Use `--25k` or `--45k` for the smaller boards. The top level's port names must m
 | Parcore: Generate SystemVerilog | `make generate-parcore` |
 | ULX3S: Build Bitstream | `make ulx3s-bit` |
 | ULX3S: Load Bitstream into the Board | `make ulx3s-prog` |
+| ULX3S: Open the FTDI UART | `make ulx3s-term` |
 | Particle: Run ROHD Tests | `make test-particle` |
 | Parcore: Run ROHD Tests | `make test-parcore` |
 | Run Compiler and Language Server Tests | `make compiler-tests` |
