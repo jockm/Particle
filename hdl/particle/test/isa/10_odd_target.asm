@@ -1,9 +1,24 @@
 ; A jump to an odd address: the JMP still links, then vector 14 is taken with
 ; R14 = the odd target
-.org 0x100
-    LDI     R14, _main
-    JMP     R14, R0
-.org 0x480                  ; vector 14
+.include "lib/vectors.inc"
+    RESET_SLOT _main
+    TRAP_SLOT_UNEXPECTED 1
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_BRANCH 14, _vec14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
+_vec14:
     ADD     R5, 1
     LD      R6, R14
     LDI     R14, _back

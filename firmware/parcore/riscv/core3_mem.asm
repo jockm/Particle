@@ -3,9 +3,9 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core3_mem.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _reset_vector
 _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 2 (EX)
     LD      R2, 1               ; FIFO Ch1: Outbound WB to Core 1 (memToWb)

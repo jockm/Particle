@@ -3,14 +3,31 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core1_id.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
 ; Zero Page Layout (0x0000..0x00FF) - Single-instruction access via LD R14, addr8
 .define REG_BASE          0x0000  ; Local TCM base for x0..x31 (32 words = 128 bytes: 0x00..0x7F)
 .define SCOREBOARD_MASK   0x0080  ; Local TCM address for 32-bit in-flight bitmask
 .define BRANCH_SAVED_MASK 0x0084  ; Scoreboard snapshot before latest branch/jump
 
-.org 0x00000100
+    RESET_SLOT _reset_vector
+    TRAP_SLOT_BRANCH 1, _branch_flush_handler
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_UNEXPECTED 14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
+
 _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 0 (IF: [PC, Inst])
     LD      R2, 1               ; FIFO Ch1: Outbound to Core 2 (EX: [Ctrl, OpA, OpB, PC])
@@ -39,9 +56,8 @@ _init_rf_loop:
 
 ; ==============================================================================
 ; Trap Vector 1: Pipeline Flush on Branch / Jump (Core 2 Strobe)
-; Strobe from Core 2 lands at TRAP_TABLE_BASE + (1 * 64) = 0x00000140
+; Vector 1's slot branches here
 ; ==============================================================================
-.org 0x00000140
 _branch_flush_handler:
     ; Restore Scoreboard mask to pre-branch snapshot (preserves older in-flight instructions)
     LD      R14, BRANCH_SAVED_MASK
@@ -56,7 +72,6 @@ _branch_flush_handler:
 ; ==============================================================================
 ; Main Decode Pipeline Loop
 ; ==============================================================================
-.org 0x00000180
 _id_main_loop:
     ; --------------------------------------------------------------------------
     ; 1. Service Retiring Writebacks (Non-blocking check)

@@ -1,6 +1,8 @@
 ; FIFO channels loop back to the core: W, R, TRYW, TRYR (status in R14) and
 ; STAT, including TRYR on an empty channel
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LD      R1, 1           ; channel 1
     LD      R2, 2           ; channel 2
     LDI     R3, 0x1111

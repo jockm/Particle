@@ -1,7 +1,7 @@
 
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _c0_entry
 
 _c0_entry:
     ; --- BEQ Taken Stimulus ---

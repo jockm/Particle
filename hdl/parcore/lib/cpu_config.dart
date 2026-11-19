@@ -8,7 +8,7 @@ class CpuConfig {
   /// Base address for direct stride exception table (Default: 0x00000100)
   final int trapTableBase;
 
-  /// Stride size in bytes per trap vector slot (Default: 64 bytes)
+  /// Stride size in bytes per trap vector slot (Default: 16 bytes, 8 instructions)
   final int trapStrideBytes;
 
   /// Number of point-to-point streaming FIFO channels (Default: 4)
@@ -56,7 +56,7 @@ class CpuConfig {
 
   const CpuConfig({
     this.trapTableBase = 0x00000100,
-    this.trapStrideBytes = 64,
+    this.trapStrideBytes = 16,
     this.fifoChannels = 4,
     this.fifoDepth = 256,
     this.coreId = 0,

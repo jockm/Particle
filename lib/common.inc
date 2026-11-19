@@ -5,7 +5,7 @@
 .define _PARTICLE_COMMON_INC_ 1
 
 .define TRAP_TABLE_BASE     0x00000100
-.define TRAP_STRIDE_BYTES   64
+.define TRAP_STRIDE_BYTES   16
 
 .define TRAP_RESET          0
 .define TRAP_MBOX           1

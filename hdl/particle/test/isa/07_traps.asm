@@ -2,17 +2,32 @@
 ; a misaligned store takes vector 14 with R14 = the faulting instruction and
 ; changes nothing
 ; check-memory: 0x8000 16
-.org 0x100
-    LDI     R14, _main
-    JMP     R14, R0
-.org 0x1C0                  ; vector 3
+.include "lib/vectors.inc"
+    RESET_SLOT _main
+    TRAP_SLOT_UNEXPECTED 1
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_BRANCH 3, _vec3
+    TRAP_SLOT_BRANCH 4, _vec4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_BRANCH 14, _vec14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
+_vec3:
     ADD     R1, 1
     LD      R2, R14         ; return address
     JMP     R14, R0
-.org 0x200                  ; vector 4
+_vec4:
     ADD     R3, 1
     JMP     R14, R0
-.org 0x480                  ; vector 14: skip the faulting instruction
+_vec14:                     ; skip the faulting instruction
     ADD     R5, 1
     LD      R6, R14
     ADD     R14, 2

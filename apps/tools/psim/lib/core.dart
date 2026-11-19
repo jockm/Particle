@@ -55,7 +55,7 @@ class ParticleCore {
   int pc = 0x00000100;
   final List<Queue<int>> fifos;
   final int trapBase = 0x00000100;
-  final int trapStride = 64;
+  final int trapStride = 16;
 
   int cycleCount = 0;
   bool halted = false;
@@ -93,13 +93,14 @@ class ParticleCore {
   Uint8List? shared;
   int sharedBase = 0;
 
-  /// Called when this core executes MBOX with vector Imm4; null when there
-  /// is no other core (MBOX does nothing).
-  void Function(int vector)? onMbox;
+  /// Called when this core executes MBOX with vector Imm4 and the value of
+  /// Rr; null when there is no other core (MBOX does nothing).
+  void Function(int vector, int value)? onMbox;
 
   /// A trap another core raised with MBOX, taken before the next
-  /// instruction.
+  /// instruction, and the value it sent. A newer MBOX replaces an older one.
   int? pendingTrap;
+  int pendingMboxValue = 0;
 
   ParticleCore({this.memSize = 0x20000, int numFifos = 4})
       : fifos = List.generate(numFifos, (_) => Queue<int>()),
@@ -256,6 +257,8 @@ class ParticleCore {
       pendingTrap = null;
       stalled = false;
       waitingChannel = null;
+      // The value goes to MBOX_VALUE, the word below the trap table
+      write32((trapBase - 4) & mask32, pendingMboxValue);
       triggerTrap(pending, pc);
       _trapTaken = false;
       cycleCount++;
@@ -758,8 +761,8 @@ class ParticleCore {
         q.add(r[rr]);
       }
     } else if (opcode == 0xE5) {
-      // MBOX: raise trap Imm4 on another core
-      onMbox?.call(imm4);
+      // MBOX: raise trap Imm4 on another core, sending Rr
+      onMbox?.call(imm4, r[rr]);
     } else if (opcode == 0xE4) {
       final fid = r[rl] % fifos.length;
       final emptyB = fifos[fid].isEmpty ? 1 : 0;
@@ -782,6 +785,9 @@ class ParticleCore {
       } else {
         r[14] = 0;
       }
+    } else {
+      // Undefined opcode: vector 15, R14 = its address (as on hardware)
+      triggerTrap(15, pc);
     }
 
     // A fault taken during the instruction has already set the PC to its

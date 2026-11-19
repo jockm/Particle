@@ -141,7 +141,7 @@ class Cluster {
       final source = i;
       final t = target;
       var warned = false;
-      cores[i].onMbox = (vector) {
+      cores[i].onMbox = (vector, value) {
         if (t == null) {
           if (!warned) {
             stdout.writeln("\n[SIM] ${names[source]}: MBOX with no target (set 'mbox_target' for clusters of more than two cores)");
@@ -150,7 +150,10 @@ class Cluster {
           return;
         }
         final dest = cores[t];
-        if (!dest.halted) dest.pendingTrap ??= vector & 0x0F;
+        if (!dest.halted) {
+          dest.pendingTrap = vector & 0x0F;
+          dest.pendingMboxValue = value;
+        }
       };
     }
     return Cluster._(cores, ids, names);

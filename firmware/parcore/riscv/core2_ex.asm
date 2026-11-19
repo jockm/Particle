@@ -3,9 +3,9 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core2_ex.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _reset_vector
 .define CSR_BASE         0x0004  ; Zero Page CSR block (0x0004..0x0043)
 .define CSR_OFS_CYCLE    0x00    ; 0xC00 (cycle), 0xC01 (time)
 .define CSR_OFS_CYCLEH   0x04    ; 0xC80 (cycleh), 0xC81 (timeh)

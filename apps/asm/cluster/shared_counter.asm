@@ -2,13 +2,10 @@
 ; memory 50 times, holding a TAS lock around each update. Core 1 (R13 = 1,
 ; from the cluster file) then sets a done flag; core 0 waits for it and
 ; checks that the counter is 100.
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
-_reset:
-    JUMP    _main
+    VECTOR_TABLE _main
 
-.org 0x00000200
 _main:
     LOAD32  R5, 0x80000000      ; lock
     LOAD32  R6, 0x80000004      ; counter

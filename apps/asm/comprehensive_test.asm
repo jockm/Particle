@@ -5,23 +5,36 @@
 ;              and register pre-seeding.
 ; ==============================================================================
 
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    RESET_SLOT _reset_handler
+    TRAP_SLOT 1, _mbox_handler
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_UNEXPECTED 14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
 
-; --- Reset Vector (0x0100) ---
+; --- Reset ---
 _reset_handler:
     ; Explicit initialization (expanded from START_PROGRAM macro)
     LOAD32  R15, 0x00010000     ; Stack Pointer to top of 64KB RAM
     LOAD32  R14, _main          ; Load address of main
     JMP     R14, R0             ; Jump to _main without linking
-    .align  64
 
-; --- Trap 1: MBOX Vector (0x0140) ---
+; --- Trap 1: MBOX (its slot has already done FAST_ENTER_TRAP) ---
 _mbox_handler:
-    FAST_ENTER_TRAP
     FAST_EXIT_TRAP
-    .align  64
 
 ; --- Application Main Entry Point ---
 _main:

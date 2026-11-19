@@ -3,9 +3,26 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core0_if_uart.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    RESET_SLOT _reset_vector
+    TRAP_SLOT_BRANCH 1, _branch_redirect_handler
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_UNEXPECTED 14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
+
 _reset_vector:
     LOAD16  R10, 0x0500         ; Guest RV32 PC (Base at 0x00000500)
     ; LD      R0, 0               ; R0 = 0 (Channel 0: FTDI Console UART)
@@ -50,12 +67,9 @@ _if_main_loop:
 
 ; ==============================================================================
 ; Trap 1: Core 2 (EX) Branch Redirection & Pipeline Flush Handler
-; Strobe from Core 2 lands at TRAP_TABLE_BASE + (1 * 64) = 0x00000140
+; Core 2's MBOX lands at vector 1; its slot branches here
 ; ==============================================================================
-.org 0x00000140
-.define REDIRECT_TARGET_ADDR 0x0000013C
-
 _branch_redirect_handler:
-    LOAD16  R14, REDIRECT_TARGET_ADDR
+    LOAD16  R14, MBOX_VALUE
     LD32    R10, (R14)          ; Set primary PC pointer to redirect target
     BBRA    _if_main_loop

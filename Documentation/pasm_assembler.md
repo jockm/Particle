@@ -107,6 +107,17 @@ Macros support parameter substitution via `%parameter` syntax and unique local l
 .endmacro
 ```
 
+Conditionals (`.if`, `.ifdef`, `.ifndef`, `.else`, `.endif`) and `.define` inside a macro are evaluated each time the macro is expanded, after its arguments are substituted, so a macro can choose what to emit from its arguments:
+```assembly
+.macro SLOT n
+.ifdef HANDLER_%n
+    LD      R1, 1
+.else
+    LD      R1, 2
+.endif
+.endmacro
+```
+
 An error in a line a macro expands to is reported at the line that calls the macro, and names the macro and the line of its definition. For a macro called from another macro, it names each, innermost first:
 
 ```text

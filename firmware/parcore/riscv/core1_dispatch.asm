@@ -3,7 +3,7 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core1_dispatch.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
 ; ------------------------------------------------------------------------------
 ; Token Formats (Streamed over FIFO Ch 0 from Core 0)
@@ -20,7 +20,7 @@
 .define OP_JAL          0x07
 .define OP_JALR         0x08
 
-.org 0x00000100
+    VECTOR_TABLE _reset_vector
 _reset_vector:
     ; Channel 0: Core 0 -> Core 1 Token Stream
     LD      R1, 0               ; FIFO Channel 0

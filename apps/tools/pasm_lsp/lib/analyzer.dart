@@ -203,7 +203,7 @@ const Map<String, String> mnemonicDocs = {
   "SSLE": "`SSLE Rd, Rs` (`0x9D`) — Signed Set-Less-Or-Equal: `Rd = (Rd <= Rs) ? 1 : 0`.",
   "JMP": "`JMP Rtarget, Rlink` (`0xA0`) — Absolute jump to `Rtarget`, storing `PC + 2` into `Rlink` (defaults to `R0`).",
   "RJUMP": "`RJUMP Roffset, Rlink` (`0xA1`) — PC-relative jump by signed byte offset in `Roffset`, saving `PC + 2` into `Rlink`.",
-  "TRAP": "`TRAP Rr` | `TRAP Imm4` (`0xA2` / `0xA3`) — Triggers exception vector `0..15` (base `0x00000100`, 64-byte stride), saving `PC + 2` in `R14`.",
+  "TRAP": "`TRAP Rr` | `TRAP Imm4` (`0xA2` / `0xA3`) — Triggers exception vector `0..15` (base `0x00000100`, 16-byte stride), saving `PC + 2` in `R14`.",
   "BRANCH": "`BRANCH Rr` (`0xA4`) — Branches to address in register `Rr`.",
   "JUMP": "`JUMP <label>` (pseudo-instruction) — Jumps to `<label>` at any distance. The assembler picks the smallest form that reaches it: `FBRA`/`BBRA` (1 halfword, up to 255 halfwords away), `LDI R14, label` + `JMP R14, R0` (3 halfwords, target below 64K), or `LDI` + 2 `PUSH8` + `JMP R14, R0` (5 halfwords). The longer forms overwrite `R14`.",
   "FBRA": "`FBRA <label>` (`0xB0`) — Unconditional forward PC-relative branch (`0..255` halfwords ahead).",

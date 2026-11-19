@@ -1,5 +1,7 @@
 ; Shifts, rotates, bit operations, BEXTR, CLZ (counts Rl) and REV32
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LDI     R1, 0x8421
     SHIFTL  R1, 15
     ADD     R1, 0x9         ; R1 = 0x42108009

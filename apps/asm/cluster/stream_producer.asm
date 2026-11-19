@@ -1,12 +1,9 @@
 ; Cluster test: core 0 sends 1..5 on channel 1, which the cluster file
 ; routes to core 1's channel 1.
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
-_reset:
-    JUMP    _main
+    VECTOR_TABLE _main
 
-.org 0x00000200
 _main:
     LD      R2, 5               ; values to send
     LD      R3, 1               ; first value

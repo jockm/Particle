@@ -291,6 +291,15 @@ class Preprocessor {
       // Evaluate active condition status from conditional stack
       final active = condStack.isEmpty ? true : condStack.every((c) => c);
 
+      // Inside a macro definition every line up to .endmacro is kept as it
+      // is, conditionals and .define included, so they take effect each time
+      // the macro is expanded (with its arguments substituted)
+      if (inMacro && line.split(RegExp(r"\s+"))[0].toLowerCase() != ".endmacro") {
+        macroBody.add(raw);
+        macroLines.add(lno);
+        continue;
+      }
+
       // Preprocessor directive handling
       if (line.startsWith(".")) {
         final parts = line.split(RegExp(r"\s+"));
@@ -368,13 +377,6 @@ class Preprocessor {
           defines[defParts[0]] = val;
           continue;
         }
-      }
-
-      // Collect macro body lines verbatim
-      if (inMacro) {
-        macroBody.add(raw);
-        macroLines.add(lno);
-        continue;
       }
 
       if (!active) continue;

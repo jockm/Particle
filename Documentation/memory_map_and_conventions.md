@@ -9,8 +9,9 @@ Particle has a single 32-bit, byte-addressed address space for code and data. On
 | Address | Contents |
 |---|---|
 | `0x00000000`–`0x000000FF` | Zero page: 256 bytes reachable with an 8-bit address (the `LDZP32`/`STZP32` macros) |
-| `0x00000100`–`0x000004FF` | Trap vector table: 16 vectors × 64 bytes (vector 0 is the reset entry point) |
-| `0x00000500` up | The rest of the program image: code, then constants and global data |
+| `0x000000F4`–`0x000000FF` | Trap words: `0xF4` return PC and `0xF8` vector number of the last unexpected trap (`lib/vectors.inc`); `0xFC` the value of the last `MBOX` received |
+| `0x00000100`–`0x000001FF` | Trap vector table: 16 vectors × 16 bytes (vector 0 is the reset entry point) |
+| `0x00000200` up | The rest of the program image: code, then constants and global data |
 | `__image_end` up | The heap: the allocator (`lib/alloc.asm`) starts it at the end of the image, which the assembler defines as `__image_end`, and it grows upward |
 | below `0x00010000` | The stack: `R15` starts at `0x00010000` and the stack grows downward (full-descending, 4-byte aligned). The Action compiler's `--stack-top` and the `START_PROGRAM` macro set it. |
 | `0x80000000` | In a psim cluster, the default shared memory window (`shared_memory_base`) |
@@ -22,19 +23,19 @@ The image is loaded at `0x00000100`, the reset vector, so a program starts with 
 
 ## Trap Vector Table
 
-Each vector is a 64-byte (32-instruction) slot at a fixed address, and a trap jumps straight to it; there is no table of pointers:
+Each vector is a 16-byte (8-instruction) slot at a fixed address, and a trap jumps straight to it; there is no table of pointers:
 
-$$\text{Vector address} = \text{trapTableBase} + \text{vector} \times 64$$
+$$\text{Vector address} = \text{trapTableBase} + \text{vector} \times 16$$
 
 with `trapTableBase` = `0x00000100`.
 
 | Vector | Address | Use |
 |---|---|---|
 | 0 | `0x00000100` | Reset: the program's entry point. `TRAP 0` ends a psim run. |
-| 1 | `0x00000140` | Inter-core notification, by convention: `MBOX Rr, 1` from another core. (`MBOX` can raise any vector.) |
-| 2–13 | `0x00000180`–`0x0000047F` | Software traps (`TRAP n`) and other `MBOX` vectors |
-| 14 | `0x00000480` | Misaligned memory access or odd PC |
-| 15 | `0x000004C0` | Undefined opcode (in the spec; see `hdl_architecture.md` for the current hardware). `TRAP 15` ends a psim run as a failure. |
+| 1 | `0x00000110` | Inter-core notification, by convention: `MBOX Rr, 1` from another core. (`MBOX` can raise any vector.) |
+| 2–13 | `0x00000120`–`0x000001DF` | Software traps (`TRAP n`) and other `MBOX` vectors |
+| 14 | `0x000001E0` | Misaligned memory access or odd PC |
+| 15 | `0x000001F0` | Undefined opcode. `TRAP 15` ends a psim run as a failure. |
 
 On a trap, `R14` gets the return address and the PC jumps to the vector (see §3 of `particle_spec.md`).
 

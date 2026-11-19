@@ -29,7 +29,7 @@ The states are Boot (the first fetch after reset), Exec, Imm (the `LDI`/`LDIS` i
 * **Memory port A** (`memPortAAddr`, `memPortARData`, 16 bits): instruction fetch. `memPortAAddr` is a byte address; the data for it is expected in the next cycle.
 * **Memory port B** (`memPortBAddr`, `memPortBWData`, `memPortBRData`, byte enables, read and write enables, 32 bits): loads, stores and `TAS`. A store's write happens at the clock edge; a load's data is expected in the next cycle (read-first for `TAS`). Any data source on port B, including memory-mapped registers and multiplexers between memories, must answer the same way (see `ParcoreTop`'s conductor readback).
 * **FIFO port** (`fifoChanSelect`, `fifoPushData`, `fifoPushEn`, `fifoPopEn`, `fifoPopData`, `fifoStatus`): to a FIFO subsystem or a design's own interconnect. The channel is the low 2 bits of register `Rl`; `fifoStatus` bit 0 is empty and bit 1 full.
-* **MBOX** (`mboxStrobeOut`/`mboxVectorOut` and `mboxStrobeIn`/`mboxVectorIn`): `MBOX` raises a vector on another core; an incoming strobe makes this core take the vector.
+* **MBOX** (`mboxStrobeOut`/`mboxVectorOut`/`mboxDataOut` and `mboxStrobeIn`/`mboxVectorIn`/`mboxDataIn`): `MBOX Rr, Imm4` raises vector `Imm4` on another core and sends `Rr`; an incoming strobe makes this core take the vector, and in that trap-entry cycle it writes the value through port B to the word below its trap table (`trapTableBase − 4`, `0xFC` by default).
 * **SARF** (`sarfRs1Addr`, `sarfRs2Addr`, `sarfRdAddr`, data and write enable): the shared architectural register fabric planned for Parcore (proposals 02–04). The core drives the addresses from its `Rr`/`Rl` fields; its write enable is not yet driven.
 
 ### Registers
@@ -38,7 +38,7 @@ The register file has two write ports. Port 1 takes an instruction's result and 
 
 ### Traps and interrupts
 
-The trap table base and stride come from `CpuConfig` (`trapTableBase`, default `0x100`; `trapStrideBytes`, 64). On every trap, R14 gets a return address:
+The trap table base and stride come from `CpuConfig` (`trapTableBase`, default `0x100`; `trapStrideBytes`, 16). On every trap, R14 gets a return address:
 
 | Cause | Vector | R14 |
 |---|---|---|
@@ -48,7 +48,7 @@ The trap table base and stride come from `CpuConfig` (`trapTableBase`, default `
 | Opcode not in the spec, or a multiply/divide opcode when that unit is disabled | 15 | the illegal instruction |
 | Incoming `MBOX` | its vector | the instruction it interrupted |
 
-An incoming `MBOX` strobe is held until the core is between instructions, or stalled on a `FIFO.R` or a divide. It is taken before the next instruction runs; a stalled `FIFO.R` or divide is abandoned and runs again when the handler returns (`JMP R14, R0`). It never interrupts a load or `LDI` part-way.
+An incoming `MBOX` strobe (and its value) is held until the core is between instructions, or stalled on a `FIFO.R` or a divide; a newer strobe replaces an older one that hasn't been taken. It is taken before the next instruction runs; a stalled `FIFO.R` or divide is abandoned and runs again when the handler returns (`JMP R14, R0`). It never interrupts a load or `LDI` part-way.
 
 ### Configuration
 
@@ -58,7 +58,7 @@ An incoming `MBOX` strobe is held until the core is between instructions, or sta
 
 psim and the hardware are allowed to differ in a few places, which the differential test avoids:
 
-* Unknown opcodes: psim treats them as no-ops; the hardware raises vector 15. `TRAP 0` and `TRAP 15` end a psim run.
+* `TRAP 0` and `TRAP 15` end a psim run; on hardware they go to their vectors.
 * `FIFO.STAT`'s entry count: psim reports up to 256 (bit 16); the hardware's count field is 8 bits.
 
 ---

@@ -1,12 +1,9 @@
 ; Cluster test: core 1 reads five values from channel 1 and checks that
 ; they add up to 15 (1 + 2 + 3 + 4 + 5).
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
-_reset:
-    JUMP    _main
+    VECTOR_TABLE _main
 
-.org 0x00000200
 _main:
     LD      R2, 5               ; values to read
     LD      R1, 0               ; sum

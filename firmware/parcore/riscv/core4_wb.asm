@@ -3,12 +3,12 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core4_wb.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
 .define INSTRET_LO_ADDR 0x0004  ; Zero Page low 32 bits of minstret
 .define INSTRET_HI_ADDR 0x0008  ; Zero Page high 32 bits of minstret
 
-.org 0x00000100
+    VECTOR_TABLE _reset_vector
 _reset_vector:
     LD      R14, INSTRET_LO_ADDR
     LD      R4, 0

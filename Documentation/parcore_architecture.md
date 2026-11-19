@@ -82,7 +82,7 @@ Core 0's channel 0 is the FTDI UART, not a FIFO: `FIFO.W` on channel 0 sends the
 
 Each stage runs a loop that reads its input FIFO, does its part of the RISC-V instruction, and writes the result to the next FIFO.
 
-**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`). Each pass it echoes any byte waiting on the UART (`FIFO.TRYR`, which reports in R14 whether a byte was read), checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC, instruction]` on channel 1. A zero word is not pushed. Its trap vector 1 (`0x140`) is the branch-redirect handler: it loads a new PC from `0x13C` and goes back to the loop.
+**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`). Each pass it echoes any byte waiting on the UART (`FIFO.TRYR`, which reports in R14 whether a byte was read), checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC, instruction]` on channel 1. A zero word is not pushed. Its trap vector 1 (`0x110`) branches to the branch-redirect handler, which loads the new PC from `MBOX_VALUE` (`0xFC`) and goes back to the loop.
 
 **Core 1 (ID)** keeps the 32 RISC-V registers in its zero page (`x0`–`x31` at `0x00`–`0x7F`), a scoreboard of registers with results in flight at `0x80`, and a copy of the scoreboard taken at the last branch at `0x84`. It first drains any writeback on channel 2 into the register file and clears that register's scoreboard bit, then decodes the next instruction from channel 0, waits while its source registers are in flight, and sends a 4-word packet to core 2 on channel 1. Its trap vector 1 restores the scoreboard from the branch copy.
 
@@ -92,7 +92,7 @@ Each stage runs a loop that reads its input FIFO, does its part of the RISC-V in
 
 ### Branches
 
-On a taken branch core 2 executes `MBOX R14, 1`. In `ParcoreTop` core 2's MBOX strobe goes to core 0's MBOX input and to `pipelineFlush`, so core 0 takes trap vector 1 and `ifToId` and `idToEx` are emptied. `MBOX` on the Particle core sends only the vector, not the register value; core 0's handler takes the new PC from `0x13C` in its own TCM.
+On a taken branch core 2 executes `MBOX R14, 1`. In `ParcoreTop` core 2's MBOX strobe goes to core 0's MBOX input and to `pipelineFlush`, so core 0 takes trap vector 1 and `ifToId` and `idToEx` are emptied. `MBOX` sends `R14`, the target PC, which core 0 stores at `MBOX_VALUE` (`0xFC`) in its own TCM as it takes the trap; its handler loads the new PC from there.
 
 ## Conductor
 

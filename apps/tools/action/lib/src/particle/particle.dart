@@ -23,7 +23,7 @@ class ParticleAsmBackend extends Backend {
   @override
   int get vectorBase => 0x00000100;
   @override
-  int get vectorStride => 64;
+  int get vectorStride => 16;
   @override
   int get vectorCount => 16;
 

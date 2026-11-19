@@ -127,9 +127,11 @@ void main() {
 
     test("Core 1 boots and stalls on FIFO.R waiting for token", () async {
       // Core 0's stimulus sends tokens, so look before it has run far: core 1
-      // reaches its FIFO.R (0x102) and waits there for the first token
-      await step(3);
-      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000102));
+      // takes its reset slot to _reset_vector, reaches its FIFO.R (0x210,
+      // just after the vector table) and waits there for the first token
+      // (from step 6 to step 11), presenting the FIFO.R's own address
+      await step(8);
+      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000210));
     });
 
     test("Branch TAKEN: Core 0 pushes tokens -> Core 1 evaluates BEQ and strobes MBOX", () async {

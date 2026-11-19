@@ -48,7 +48,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 * **Ending a run**: `TRAP 0` ends the run on that core, printing `R1` (unless `--no-exit-on-reset`). `TRAP 15` ends it as an out-of-bounds or sentinel trap. Every other trap, including a misaligned access (vector 14), goes to its vector as on hardware. A misaligned load, store or `TAS` changes no register and no memory (not even a pointer update) before taking vector 14, whose R14 is the faulting instruction's address.
 * **FIFOs**: Each core has 4 channels of 256 entries; a channel number is taken modulo 4. `FIFO.R` on an empty channel stalls: the PC stays on the instruction, and the stalled cycles count. A write to a full channel is dropped (`FIFO.TRYW` reports it in `R14`).
 * **Memory**: 128 KiB per core by default; data addresses wrap within it.
-* **Unlisted opcodes** execute as no-ops (hardware raises vector 15).
+* **Unlisted opcodes** take vector 15 with R14 = their address, as on hardware.
 * **R0** always reads 0; writes to it are discarded.
 * **Alignment**: misaligned 16- and 32-bit accesses, and an odd PC, raise vector 14 before any state changes.
 
@@ -60,7 +60,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 
 * **FIFO routing**: a core's `fifo_connections.tx` routes each local channel to a receive channel on another core. A write to a routed channel (`FIFO.W`, `FIFO.TRYW`) goes into the target core's channel, where its `FIFO.R`/`FIFO.TRYR` read it. A channel that is not routed stays local, as on a single core. `FIFO.STAT` reports the core's own (receiving) channel.
 * **Shared memory**: when `shared_memory_size` is not 0, the window from `shared_memory_base` is the same memory on every core. Loads, stores and `TAS` in it are seen at once by all cores, so `TAS` works as a lock between cores.
-* **MBOX**: `MBOX Rr, Imm4` raises trap `Imm4` on another core, before that core's next instruction. In a two-core cluster the target is the other core and `Rr` is not used, as on the hardware. With more cores, each core's `mbox_target` names its target. A core stalled on an empty FIFO is interrupted: its `R14` gets the address of the stalled instruction, so returning from the handler (`JMP R14, R0`) runs it again. An `MBOX` to a core that has stopped does nothing. With a single core, `MBOX` does nothing.
+* **MBOX**: `MBOX Rr, Imm4` raises trap `Imm4` on another core, before that core's next instruction. It also sends `Rr`: as the target takes the trap, it stores the value at `0xFC`, the word below its trap table, as on the hardware. A newer `MBOX` replaces one not yet taken. In a two-core cluster the target is the other core. With more cores, each core's `mbox_target` names its target. A core stalled on an empty FIFO is interrupted: its `R14` gets the address of the stalled instruction, so returning from the handler (`JMP R14, R0`) runs it again. An `MBOX` to a core that has stopped does nothing. With a single core, `MBOX` does nothing.
 * **Deadlock**: when every running core is waiting on an empty FIFO and no `MBOX` trap is pending, nothing can change. psim stops with exit code 19 and names each core and the channel it waits on.
 
 ### Cluster file

@@ -1,6 +1,8 @@
 ; Multiplies and divides, including division by zero and INT_MIN / -1
 ; max-cycles: 40000
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LDI     R1, 0x8000
     SHIFTL  R1, 15
     SHIFTL  R1, 1           ; INT_MIN

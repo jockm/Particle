@@ -3,7 +3,7 @@
 ; Architecture: Parcore System Lifecycle & Firmware Boot Supervisor
 ; Target: Particle Conductor Core (Minimal Config: No Mul/Div/FIFO, 2 KB TCM)
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
 ; ------------------------------------------------------------------------------
 ; Hardware MMIO Registers
@@ -38,7 +38,7 @@
 ;   R15 = Stack Pointer (0x0000_0800 = top of 2 KB Conductor TCM)
 ; ------------------------------------------------------------------------------
 
-.org 0x00000100
+    VECTOR_TABLE _reset_vector
 _reset_vector:
     ; Initialize stack pointer to top of 2 KB Conductor local TCM
     LDI     SP, 0x0800

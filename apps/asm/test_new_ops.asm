@@ -1,7 +1,7 @@
 ; apps/asm/test_new_ops.asm
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _reset
 
 _reset:
     ; 1. Test Immediate Multiplier: MULL R1, 6

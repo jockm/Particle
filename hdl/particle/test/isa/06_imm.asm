@@ -1,5 +1,7 @@
 ; Immediate loads: LD forms, PUSH4, PUSH8, LDI and LDIS (back to back)
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LD      R1, 15
     LD      R2, -15
     LD      R3, 0

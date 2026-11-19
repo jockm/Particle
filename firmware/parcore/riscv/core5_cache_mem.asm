@@ -3,7 +3,7 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core5_cache_mem.asm
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
 .define TAG_ARRAY_BASE   0x0400
 .define DATA_ARRAY_BASE  0x1000
@@ -14,7 +14,7 @@
 .define SDRAM_CMD_REG    0xF0000034
 .define SDRAM_DATA_PORT  0xF0000038
 
-.org 0x00000100
+    VECTOR_TABLE _reset_vector
 _reset_vector:
     LOAD16  R1, TAG_ARRAY_BASE
     LD      R2, 0

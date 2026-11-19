@@ -17,7 +17,9 @@ String randomProgram(int seed, {int length = 120}) {
     ..writeln('; Random differential program, seed $seed')
     ..writeln('; check-memory: 0x${dataBase.toRadixString(16)} 256')
     ..writeln('; max-cycles: 20000')
-    ..writeln('.org 0x100');
+    ..writeln('.include "lib/vectors.inc"')
+    ..writeln('    VECTOR_TABLE _start')
+    ..writeln('_start:');
 
   String reg() => 'R${1 + rnd.nextInt(11)}'; // R1..R11
   int u4() => rnd.nextInt(16);

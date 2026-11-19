@@ -30,10 +30,12 @@ class ParticleCpuCore extends Module {
   // Cross-Core Inbound Mailbox Strobe and Vector
   Logic get mboxStrobeIn => input('mboxStrobeIn');
   Logic get mboxVectorIn => input('mboxVectorIn');
+  Logic get mboxDataIn => input('mboxDataIn');
 
   // Cross-Core Outbound Mailbox Strobe and Vector
   Logic get mboxStrobeOut => output('mboxStrobeOut');
   Logic get mboxVectorOut => output('mboxVectorOut');
+  Logic get mboxDataOut => output('mboxDataOut');
 
   // Streaming FIFO Subsystem Interface
   Logic get fifoChanSelect => output('fifoChanSelect');
@@ -65,11 +67,12 @@ class ParticleCpuCore extends Module {
     required Logic memPortBRData,
     required Logic mboxStrobeIn,
     required Logic mboxVectorIn,
+    Logic? mboxDataIn,
     Logic? fifoPopData,
     Logic? fifoStatus,
     Logic? sarfRs1Data,
     Logic? sarfRs2Data,
-    this.config = const CpuConfig(trapTableBase: 0x0100, trapStrideBytes: 64),
+    this.config = const CpuConfig(trapTableBase: 0x0100, trapStrideBytes: 16),
     super.name = 'particle_cpu_core',
   }) {
     addInput('clk', clk);
@@ -78,6 +81,8 @@ class ParticleCpuCore extends Module {
     addInput('memPortBRData', memPortBRData, width: ParticleWidths.word);
     addInput('mboxStrobeIn', mboxStrobeIn);
     addInput('mboxVectorIn', mboxVectorIn, width: ParticleWidths.trapVector);
+    addInput('mboxDataIn', mboxDataIn ?? Const(0, width: ParticleWidths.word),
+        width: ParticleWidths.word);
 
     addInput('fifoPopData', fifoPopData ?? Const(0, width: ParticleWidths.word),
         width: ParticleWidths.word);
@@ -97,6 +102,7 @@ class ParticleCpuCore extends Module {
 
     addOutput('mboxStrobeOut');
     addOutput('mboxVectorOut', width: ParticleWidths.trapVector);
+    addOutput('mboxDataOut', width: ParticleWidths.word);
 
     addOutput('fifoChanSelect', width: 2);
     addOutput('fifoPushData', width: ParticleWidths.word);
@@ -560,6 +566,11 @@ class ParticleCpuCore extends Module {
     // while a divide is in progress
     final mboxPending = Logic(name: 'mboxPending');
     final mboxPendingVec = Logic(name: 'mboxPendingVec', width: 4);
+    // The sender's Rr: stored at MBOX_VALUE (the word below the trap table)
+    // in the trap-entry cycle, which makes no other memory access
+    final mboxPendingData =
+        Logic(name: 'mboxPendingData', width: ParticleWidths.word);
+    final mboxValueAddr = Const(config.trapTableBase - 4, width: 32);
     final mboxTake = mboxPending & (inExec | inDivWait);
     final mboxTarget = vectorAddr(mboxPendingVec);
 
@@ -703,10 +714,10 @@ class ParticleCpuCore extends Module {
     // -------------------------------------------------------------------------
     // Memory port B, FIFOs, MBOX and SARF outputs
     // -------------------------------------------------------------------------
-    memPortBAddr <= effAddr;
-    memPortBWData <= storeWData;
-    memPortBBEn <= storeBEn;
-    memPortBWEn <= doExec & (isStoreOp | isTas);
+    memPortBAddr <= mux(mboxTake, mboxValueAddr, effAddr);
+    memPortBWData <= mux(mboxTake, mboxPendingData, storeWData);
+    memPortBBEn <= mux(mboxTake, Const(0xF, width: 4), storeBEn);
+    memPortBWEn <= mboxTake | (doExec & (isStoreOp | isTas));
     memPortBREn <= doExec & (isLoadOp | isTas);
 
     fifoChanSelect <= valB.slice(1, 0);
@@ -720,6 +731,7 @@ class ParticleCpuCore extends Module {
 
     mboxStrobeOut <= doExec & op(ParticleOpcodes.mbox);
     mboxVectorOut <= rl;
+    mboxDataOut <= valA;
 
     sarfRs1Addr <= rr.zeroExtend(5);
     sarfRs2Addr <= rl.zeroExtend(5);
@@ -812,11 +824,14 @@ class ParticleCpuCore extends Module {
       ldLow: Const(0, width: 2),
       mboxPending: Const(0),
       mboxPendingVec: Const(0, width: 4),
+      mboxPendingData: Const(0, width: ParticleWidths.word),
     }, [
-      // MBOX: a new strobe is remembered; a taken one is cleared
+      // MBOX: a new strobe is remembered (a newer one replaces an older
+      // one); a taken one is cleared
       If(mboxStrobeIn, then: [
         mboxPending < Const(1),
         mboxPendingVec < mboxVectorIn,
+        mboxPendingData < mboxDataIn,
       ], orElse: [
         If(mboxTake, then: [mboxPending < Const(0)]),
       ]),

@@ -1,5 +1,7 @@
 ; XCHG, XCHGALL, XCHGMOST and the RBASE window
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LD      R1, 1
     LD      R2, 2
     LD      R3, 3

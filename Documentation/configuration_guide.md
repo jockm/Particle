@@ -11,7 +11,7 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | Field | Default | Meaning |
 |---|---|---|
 | `trapTableBase` | `0x00000100` | Base address of the direct stride trap vector table |
-| `trapStrideBytes` | `64` | Bytes per trap vector slot |
+| `trapStrideBytes` | `16` | Bytes per trap vector slot (8 instructions) |
 | `fifoChannels` | `4` | Number of point-to-point streaming FIFO channels |
 | `fifoDepth` | `256` | Depth of each FIFO channel, in 32-bit words |
 | `coreId` | `0` | The core's identifier in multi-core topologies |

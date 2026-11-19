@@ -1,6 +1,8 @@
 ; Every branch and jump form, taken and not taken, and the links of JMP and
 ; RJUMP. Each taken branch skips a poison write (LD R15, 15).
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LD      R15, 0
     LD      R1, 0
     LD      R2, -3

@@ -4,23 +4,27 @@
 .ifndef _PARTICLE_RUNTIME_ASM_
 .define _PARTICLE_RUNTIME_ASM_ 1
 
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
-
-; Every vector fits in 8 halfwords. The reset vector jumps to the startup
-; code; a trap vector jumps to its handler, which returns from the trap
-; itself with FAST_EXIT_TRAP.
-_vector_reset:
-    LOAD_R14_32 _start
-    JMP     R14, R0
-    .align  TRAP_STRIDE_BYTES
-
-_vector_mbox:
-    FAST_ENTER_TRAP
-    LOAD_R14_32 _on_mbox_trap
-    JMP     R14, R0
-    .align  TRAP_STRIDE_BYTES
+; Reset jumps to the startup code; an MBOX (vector 1) returns at once; every
+; other vector is unexpected (lib/vectors.inc).
+    RESET_SLOT _start
+    TRAP_SLOT 1, _on_mbox_trap
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_UNEXPECTED 14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
 
 _start:
     LOAD32  R15, 0x00010000
@@ -29,13 +33,5 @@ _start:
 
 _on_mbox_trap:
     FAST_EXIT_TRAP
-
-_on_alignment_error:
-_panic_align_loop:
-    BBRA    _panic_align_loop
-
-_on_illegal_instruction:
-_panic_illegal_loop:
-    BBRA    _panic_illegal_loop
 
 .endif

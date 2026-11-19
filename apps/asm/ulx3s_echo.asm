@@ -12,9 +12,11 @@
 ; there it echoes its own banner over and over.
 ; ==============================================================================
 
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _start
+
+_start:
     START_PROGRAM
 
 _main:

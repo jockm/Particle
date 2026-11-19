@@ -1,7 +1,9 @@
 ; Every load and store addressing mode at 8, 16 and 32 bits, the cases where
 ; the pointer is also the data register, and TAS
 ; check-memory: 0x8000 128
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LDI     R1, 0xA1B2
     SHIFTL  R1, 15
     SHIFTL  R1, 1

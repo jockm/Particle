@@ -2,9 +2,9 @@
 ; Test Suite: Particle Extended ISA Validation
 ; Tests: NEG, REV32, SEQ, SNE, SLE, SSLE
 ; ==============================================================================
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _reset
 _reset:
     ; 1. Test NEG (0x48): R1 = -10
     LD      R1, 10

@@ -100,7 +100,7 @@ _h: BBRA    _h              ; 0x112
 
   // Vector 1 handler: count in R2, keep the return address in R3, return
   const mboxHandler = '''
-.org 0x140
+.org 0x110
     ADD     R2, 1
     LD      R3, R14
     JMP     R14, R0
@@ -137,7 +137,7 @@ _main:
 .org 0x100
     LDI     R14, _main
     JMP     R14, R0
-.org 0x140
+.org 0x110
     ADD     R2, 1
     LD      R3, R14
     LDI     R5, 0x77
@@ -168,7 +168,7 @@ _h: BBRA    _h
 .org 0x100
     LDI     R14, _main
     JMP     R14, R0
-.org 0x140
+.org 0x110
     ADD     R2, 1
     LD      R3, R14
     LDI     R8, 1000
@@ -202,7 +202,7 @@ _h: BBRA    _h
 .org 0x100
     LDI     R14, _main
     JMP     R14, R0
-.org 0x4C0
+.org 0x1F0
     LD      R6, R14
 _h15: BBRA  _h15
 .org 0x500
@@ -225,7 +225,7 @@ _main:
 .org 0x100
     LDI     R14, _main
     JMP     R14, R0
-.org 0x480
+.org 0x1E0
     LD      R6, R14
 _h14: BBRA  _h14
 .org 0x500
@@ -249,7 +249,7 @@ _main:
 .org 0x100
     LDI     R14, _main
     JMP     R14, R0
-.org 0x4C0
+.org 0x1F0
     LD      R6, R14
 _h15: BBRA  _h15
 .org 0x500

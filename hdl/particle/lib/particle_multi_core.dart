@@ -117,8 +117,10 @@ class ParticleMultiCore extends Module {
     // Cross-Core Mailbox Interconnect
     final c0MboxStrobeIn = Logic(name: 'c0MboxStrobeIn');
     final c0MboxVectorIn = Logic(name: 'c0MboxVectorIn', width: 4);
+    final c0MboxDataIn = Logic(name: 'c0MboxDataIn', width: 32);
     final c1MboxStrobeIn = Logic(name: 'c1MboxStrobeIn');
     final c1MboxVectorIn = Logic(name: 'c1MboxVectorIn', width: 4);
+    final c1MboxDataIn = Logic(name: 'c1MboxDataIn', width: 32);
     // Dual Streaming FIFO Channels for Cross-Core Dataflow
     final c0FifoPushData = Logic(name: 'c0FifoPushData', width: 32);
     final c0FifoPushEn   = Logic(name: 'c0FifoPushEn');
@@ -160,6 +162,7 @@ class ParticleMultiCore extends Module {
       memPortBRData: c0MemPortBRData,
       mboxStrobeIn: c0MboxStrobeIn,
       mboxVectorIn: c0MboxVectorIn,
+      mboxDataIn: c0MboxDataIn,
       fifoPopData: fifo1to0.popData,
       fifoStatus: fifo1to0.statusWord,
       sarfRs1Data: sarf.c0Rs1Data,
@@ -193,6 +196,7 @@ class ParticleMultiCore extends Module {
       memPortBRData: c1MemPortBRData,
       mboxStrobeIn: c1MboxStrobeIn,
       mboxVectorIn: c1MboxVectorIn,
+      mboxDataIn: c1MboxDataIn,
       fifoPopData: fifo0to1.popData,
       fifoStatus: fifo0to1.statusWord,
       sarfRs1Data: sarf.c1Rs1Data,
@@ -221,8 +225,10 @@ class ParticleMultiCore extends Module {
     // Cross-connect MBOX strobes
     c1MboxStrobeIn <= core0.mboxStrobeOut;
     c1MboxVectorIn <= core0.mboxVectorOut;
+    c1MboxDataIn <= core0.mboxDataOut;
     c0MboxStrobeIn <= core1.mboxStrobeOut;
     c0MboxVectorIn <= core1.mboxVectorOut;
+    c0MboxDataIn <= core1.mboxDataOut;
 
     output('c0_mboxStrobeIn') <= c0MboxStrobeIn;
     output('c0_mboxVectorIn') <= c0MboxVectorIn;

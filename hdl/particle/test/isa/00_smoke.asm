@@ -1,6 +1,8 @@
 ; Bring-up: immediates, ALU, LDI, a load and a store, a taken branch
 ; check-memory: 0x8000 16
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LD      R1, 5
     LD      R2, 7
     ADD     R1, R2          ; R1 = 12

@@ -955,7 +955,7 @@ A failed check executes `TRAP 15`, like a failed bounds check. `-fno-reference-c
 The generated assembly is organized as follows:
 
 1. A header comment, then `.include "lib/common.inc"`.
-2. **If the program defines `main`:** the trap vector table at `.org 0x00000100`, one vector every `TRAP_STRIDE_BYTES` (from `lib/common.inc`, 64 bytes today). Each vector fits in 8 halfwords:
+2. **If the program defines `main`:** the trap vector table at `.org 0x00000100`, one vector every `TRAP_STRIDE_BYTES` (from `lib/common.inc`, 16 bytes). Each vector fits in 8 halfwords:
    - vector 0, `_vector_reset`: `LOAD_R14_32 _start` and `JMP R14, R0`, a jump to the startup code
    - vectors 1–15 (`_vector_mbox`, then `_vector_2` … `_vector_15`): with a trap handler, `FAST_ENTER_TRAP`, `LOAD_R14_32` of the handler and `JMP R14, R0`, a jump to the handler, which returns from the trap itself; without one, `FAST_ENTER_TRAP` then `FAST_EXIT_TRAP`
 
@@ -2256,10 +2256,10 @@ The vectors are defined by the Particle specification:
 | Vector | Address | Use |
 |--------|---------|-----|
 | 0 | `0x100` | reset (the startup code) |
-| 1 | `0x140` | inbound mailbox / inter-core notification |
-| 2–13 | `0x180`–`0x47F` | software and user-defined traps |
-| 14 | `0x480` | misaligned memory access |
-| 15 | `0x4C0` | undefined / illegal opcode |
+| 1 | `0x110` | inbound mailbox / inter-core notification |
+| 2–13 | `0x120`–`0x1DF` | software and user-defined traps |
+| 14 | `0x1E0` | misaligned memory access |
+| 15 | `0x1F0` | undefined / illegal opcode |
 
 A vector with no handler simply returns. For a fault such as a misaligned access, that returns to the faulting instruction, which faults again.
 

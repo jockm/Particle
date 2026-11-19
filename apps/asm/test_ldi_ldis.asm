@@ -8,9 +8,9 @@
 ;              4. Symbol/label resolution & 4-byte PC tracking across branches
 ; ==============================================================================
 
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
-.org 0x00000100
+    VECTOR_TABLE _reset
 
 _reset:
     ; Pre-load R14 with sentinel 0xABCD to verify LDI/LDIS never clobber R14

@@ -1,5 +1,7 @@
 ; Arithmetic, logic, comparisons and sign extension, register and immediate forms
-.org 0x100
+.include "lib/vectors.inc"
+    VECTOR_TABLE _start
+_start:
     LDI     R1, 0x8000
     SHIFTL  R1, 15
     SHIFTL  R1, 1           ; R1 = 0x80000000

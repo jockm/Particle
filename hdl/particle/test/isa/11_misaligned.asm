@@ -2,10 +2,25 @@
 ; instruction and changes nothing: no pointer update, no register written,
 ; no memory written. Every pointer mode, and the pointer as data register.
 ; check-memory: 0x8000 16
-.org 0x100
-    LDI     R14, _main
-    JMP     R14, R0
-.org 0x480                  ; vector 14: count, record R14, skip the instruction
+.include "lib/vectors.inc"
+    RESET_SLOT _main
+    TRAP_SLOT_UNEXPECTED 1
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_BRANCH 14, _vec14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
+_vec14:                     ; count, record R14, skip the instruction
     ADD     R13, 1
     LD      R12, R14
     ADD     R14, 2

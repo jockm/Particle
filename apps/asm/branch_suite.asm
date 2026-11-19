@@ -4,11 +4,9 @@
 ; Description: Exhaustive regression test for FBRA.NZ, BBRA.NZ, and BRANCH Rr.
 ; ==============================================================================
 
-.org 0x00000100
+.include "lib/vectors.inc"
 
-_reset_handler:
-    FBRA    _main               ; Branch directly to _main in 1 instruction
-    .align  64
+    VECTOR_TABLE _main
 
 _main:
     ; --------------------------------------------------------------------------

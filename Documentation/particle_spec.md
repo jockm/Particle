@@ -35,18 +35,22 @@ This revision of the specification is aligned with the reference simulator `psim
 ---
 
 ## 3. Direct Stride Vector Table
-Vectors are computed without indirect pointer memory fetches using a direct 64-byte (32-instruction) stride:
-$$\text{Target} = \text{TRAP\_TABLE\_BASE} + (\text{Vector} \times 64)$$
+Vectors are computed without indirect pointer memory fetches using a direct 16-byte (8-instruction) stride:
+$$\text{Target} = \text{TRAP\_TABLE\_BASE} + (\text{Vector} \times 16)$$
 
 - Base Address: `0x00000100`
-- Stride: 64 bytes (`0x40`)
+- Stride: 16 bytes (`0x10`); the 16 vectors fill `0x00000100`–`0x000001FF`, and code starts at `0x00000200` or later
 - Vector 0 (`0x00000100`): Cold Power-On Reset (reset PC)
-- Vector 1 (`0x00000140`): Inbound MBOX / Inter-Core Hardware Strobe Notification
-- Vectors 2–13 (`0x00000180`–`0x0000047F`): Software & User-defined Traps
-- Vector 14 (`0x00000480`): Memory Bus Misalignment Fault
-- Vector 15 (`0x000004C0`): Undefined / Illegal Opcode Decoded
+- Vector 1 (`0x00000110`): Inbound MBOX / Inter-Core Hardware Strobe Notification
+- Vectors 2–13 (`0x00000120`–`0x000001DF`): Software & User-defined Traps
+- Vector 14 (`0x000001E0`): Memory Bus Misalignment Fault
+- Vector 15 (`0x000001F0`): Undefined / Illegal Opcode Decoded
+
+A slot holds 8 instructions, which is enough to jump anywhere: `lib/vectors.inc` fills every slot, sending the vectors a program doesn't handle to a common `_unexpected_trap` (see the assembler documentation).
 
 **Trap entry**: $R14 \leftarrow \text{return PC}$; $PC \leftarrow \text{Target}$. For `TRAP` instructions the return PC is the following instruction ($PC + 2$). For a misalignment fault the return PC is the address of the faulting instruction.
+
+**MBOX value**: The word at `0x000000FC`, just below the table, holds the value sent by the last `MBOX` taken (see §4.10). `0x000000F4` and `0x000000F8` are used by `lib/vectors.inc`'s `_unexpected_trap` (the return PC and the vector number).
 
 **Interruptible stalls**: A trap raised by another core's `MBOX` is taken before the core's next instruction. If the core is stalled (on an empty FIFO, or in a multi-cycle divide), the stall is abandoned and the return PC is the address of the stalled instruction, so returning from the handler (`JMP R14, R0`) runs it again.
 
@@ -254,7 +258,7 @@ FIFO channels are 256 entries deep. A channel number is taken modulo the number 
 - `0xE1`: `FIFO.W Rr, Rl` — Write `Rr` to channel `Rl`; dropped if the channel is full
 - `0xE4`: `FIFO.STAT Rr, Rl` — Status of channel `Rl` into `Rr`
   - Status word: `bit[0]` = empty, `bit[1]` = full, `bits[16:8]` = current entry count
-- `0xE5`: `MBOX Rr, Imm4` — Signal another core: it takes trap vector `Imm4` (see §3, interruptible stalls). The two-core hardware signals the other core and does not use `Rr`; in `psim`, a cluster's configuration names each core's target.
+- `0xE5`: `MBOX Rr, Imm4` — Signal another core with the value of `Rr`: it takes trap vector `Imm4` (see §3, interruptible stalls), and as it does, stores the value at `MBOX_VALUE`, the word below its trap table (`0x000000FC`), where the handler reads it. A newer `MBOX` that arrives before the trap is taken replaces the older one. In `psim`, a cluster's configuration names each core's target.
 - `0xE6`: `FIFO.TRYR Rr, Rl` — Non-blocking read from channel `Rl`: if data, $Rr \leftarrow$ data and $R14 \leftarrow 1$; else $R14 \leftarrow 0$ ($Rr$ unchanged)
 - `0xE7`: `FIFO.TRYW Rr, Rl` — Non-blocking write of `Rr` to channel `Rl`: $R14 \leftarrow 1$ if accepted, $0$ if full
 

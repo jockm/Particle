@@ -74,7 +74,7 @@ void main() {
 
     test('Core 0 strobing MBOX interrupts Core 1 to designated vector slot', () async {
       // Core 0 executes MBOX R1, Vector 2 (Opcode 0xE5, rr=1, rl=2 -> 0xE512)
-      // Vector 2 destination for Core 1: 0x200 + (2 * 64) = 0x280
+      // Vector 2 destination for Core 1: 0x200 + (2 * 16) = 0x220
       c0MemARData.put(0xE512);
       c1MemARData.put(0); // NOP
 
@@ -84,7 +84,28 @@ void main() {
       // Core 0 executes MBOX strobe, Core 1 latches vector
       await stepClocks(1);
 
-      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000280));
+      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000220));
+    });
+
+    test('MBOX sends Rr: the target stores it below its trap table', () async {
+      // Core 0: LD R1, 5 (0x0115), then MBOX R1, 2 (0xE512). Core 1's table
+      // is at 0x200, so it stores 5 at 0x1FC as it takes vector 2 (0x220)
+      c0MemARData.put(0x0115);
+      c1MemARData.put(0); // NOP
+      await stepClocks(1);
+      c0MemARData.put(0xE512);
+      var seen = false;
+      for (var i = 0; i < 4 && !seen; i++) {
+        await stepClocks(1);
+        if (multiCore.c1MemPortAAddr.value.toInt() == 0x220) {
+          seen = true;
+          expect(multiCore.c1MemPortBWEn.value.toInt(), equals(1));
+          expect(multiCore.c1MemPortBAddr.value.toInt(), equals(0x1FC));
+          expect(multiCore.c1MemPortBWData.value.toInt(), equals(5));
+          expect(multiCore.c1MemPortBBEn.value.toInt(), equals(0xF));
+        }
+      }
+      expect(seen, isTrue, reason: 'core 1 should take vector 2');
     });
   });
 }

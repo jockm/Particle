@@ -6,7 +6,7 @@
 ;              on FIFO.0, Configurable Aux GPIO UART on FIFO.1, and MMIO Baud Divisor).
 ; ==============================================================================
 
-.include "lib/common.inc"
+.include "lib/vectors.inc"
 
 ; ------------------------------------------------------------------------------
 ; Hardware MMIO Definitions
@@ -15,18 +15,34 @@
 .define DEFAULT_AUX_DIVISOR     217         ; ~115200 baud @ 25 MHz system clock
 
 ; ------------------------------------------------------------------------------
-; Direct Stride Vector Table Entry Points (0x00000100 - 0x000004FF)
+; Vector table (0x00000100 - 0x000001FF): reset, trap 1 = breakpoint, the
+; rest unexpected
 ; ------------------------------------------------------------------------------
-.org 0x00000100
+    RESET_SLOT _vector_reset
+    TRAP_SLOT_BRANCH 1, _vector_breakpoint
+    TRAP_SLOT_UNEXPECTED 2
+    TRAP_SLOT_UNEXPECTED 3
+    TRAP_SLOT_UNEXPECTED 4
+    TRAP_SLOT_UNEXPECTED 5
+    TRAP_SLOT_UNEXPECTED 6
+    TRAP_SLOT_UNEXPECTED 7
+    TRAP_SLOT_UNEXPECTED 8
+    TRAP_SLOT_UNEXPECTED 9
+    TRAP_SLOT_UNEXPECTED 10
+    TRAP_SLOT_UNEXPECTED 11
+    TRAP_SLOT_UNEXPECTED 12
+    TRAP_SLOT_UNEXPECTED 13
+    TRAP_SLOT_UNEXPECTED 14
+    TRAP_SLOT_UNEXPECTED 15
+    UNEXPECTED_TRAP_ROUTINE
 
-; --- Trap 0: Hardware Reset ---
+; --- Reset ---
 _vector_reset:
     LOAD32  R15, 0x00010000     ; Initialize SP to top of 64KB TCM RAM
     LOAD32  R14, _monitor_start
     JMP     R14, R0             ; Jump to monitor cold boot
-    .align  64
 
-; --- Trap 1: Soft Breakpoint Handler ---
+; --- Trap 1: Soft Breakpoint Handler (R14 = the return PC) ---
 _vector_breakpoint:
     ; Context save: Hardware latches PC of instruction following trap into R14
     LD      R13, R14            ; Preserve trap return PC before LOAD32 uses R14
@@ -63,11 +79,6 @@ _vector_breakpoint:
     ; Return back to monitor command prompt
     LOAD32  R14, _cmd_prompt_loop
     JMP     R14, R0
-    .align  64
-
-; Pad through default empty traps to user code boundary
-_vector_trap2_15:
-    .align  0x00000500
 
 ; ------------------------------------------------------------------------------
 ; Monitor Cold Boot & Command Loop

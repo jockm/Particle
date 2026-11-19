@@ -282,6 +282,7 @@ class ParcoreTop extends Module {
     final c0MemBRData = Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
     final c0MboxStrobe = Logic(name: 'c0_mbox_strobe');
     final c0MboxVector = Logic(name: 'c0_mbox_vector', width: 4);
+    final c0MboxData = Logic(name: 'c0_mbox_data', width: 32);
 
     final c0FifoPopData = Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
     final c0FifoStatus  = Logic(name: 'c0_fifo_status', width: ParticleWidths.word);
@@ -294,6 +295,7 @@ class ParcoreTop extends Module {
       memPortBRData: c0MemBRData,
       mboxStrobeIn: c0MboxStrobe,
       mboxVectorIn: c0MboxVector,
+      mboxDataIn: c0MboxData,
       fifoPopData: c0FifoPopData,
       fifoStatus: c0FifoStatus,
       config: ParcoreConfig.core0If,
@@ -445,6 +447,7 @@ class ParcoreTop extends Module {
     pipelineFlush <= core2.mboxStrobeOut | condFifoFlush;
     c0MboxStrobe <= core2.mboxStrobeOut;
     c0MboxVector <= core2.mboxVectorOut;
+    c0MboxData <= core2.mboxDataOut;
 
     branchRedirectStrobe <= core2.mboxStrobeOut;
     branchRedirectVector <= core2.mboxVectorOut;
