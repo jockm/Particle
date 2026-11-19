@@ -78,13 +78,14 @@ void main() {
       c0MemARData.put(0xE512);
       c1MemARData.put(0); // NOP
 
-      // StateFetch -> StateExec
-      await stepClocks(1);
-
-      // Core 0 executes MBOX strobe, Core 1 latches vector
-      await stepClocks(1);
-
-      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000220));
+      // The MBOX goes through core 0's pipeline (fetch, decode, execute),
+      // then core 1 takes the vector at its next instruction
+      var seen = false;
+      for (var i = 0; i < 8 && !seen; i++) {
+        await stepClocks(1);
+        seen = multiCore.c1MemPortAAddr.value.toInt() == 0x00000220;
+      }
+      expect(seen, isTrue, reason: 'core 1 should fetch its vector 2 (0x220)');
     });
 
     test('MBOX sends Rr: the target stores it below its trap table', () async {

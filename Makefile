@@ -162,7 +162,7 @@ generate-parcore: setup
 # RAM; the bitstream has to be rebuilt to change it.
 ULX3S_BLD      := $(BUILD_DIR)/ulx3s
 ULX3S_PROGRAM  ?= apps/asm/ulx3s_echo.asm
-ULX3S_CLOCK_HZ ?= 50000000
+ULX3S_CLOCK_HZ ?= 35000000
 ULX3S_LPF      := $(ROHD_DIR)/boards/ulx3s/ulx3s_v20.lpf
 YOSYS          ?= yosys
 NEXTPNR_ECP5   ?= nextpnr-ecp5

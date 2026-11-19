@@ -23,7 +23,7 @@ class CpuConfig {
 
   // ---------------- Missing MR4 Hardware Configuration Options ----------------
 
-  /// Enable single-cycle DSP multiplier hardware (if false, traps to soft emulation)
+  /// Enable the DSP multiplier hardware (2 cycles) (if false, traps to soft emulation)
   final bool enableMultiplier;
 
   /// Enable multi-cycle non-restoring divider hardware (if false, traps to soft emulation)

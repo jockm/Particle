@@ -1,19 +1,10 @@
 # TODO
 
-- Change Vector Stride to 8 instructions
-    - 8 instructions is 16 bytes
-    - vector table becomes 256 bytes
-    - each vector is basically 
-    - something is wrong with how action generates the vector table, there are two xchngmost in a row
-    - move code start to 0? we don't seem to be using the pseudo zero page much/at all
-
-
 - Particle
     - Add R14 shifts to allow for IMM5 shifts?
-    - Fix errors in monitor
-    - Monitor needs way to load files
+    - Fix errors in monitor.act
+    - Monitor(s) needs way to load files
     - Simulator needs way to load files
-    - HINT Instruction
     - We need a decompiler
 
 - Parcore

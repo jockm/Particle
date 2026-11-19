@@ -8,7 +8,7 @@
 //
 // Usage (run from hdl/particle; `make generate-ulx3s` does this):
 //   dart run bin/generate_ulx3s.dart --hex <program.hex> --out <dir>
-//       [--base 0x100] [--clock-hz 50000000]
+//       [--base 0x100] [--clock-hz 35000000]
 //
 // <program.hex> is `pasm --format hex` output: one 16-bit word per line,
 // starting at --base. The generator writes, in <dir>:
@@ -27,7 +27,7 @@ const ulx3sOscillatorHz = 25000000;
 Never usage(String message) {
   stderr.writeln('generate_ulx3s: $message');
   stderr.writeln('usage: dart run bin/generate_ulx3s.dart --hex <program.hex> '
-      '--out <dir> [--base 0x100] [--clock-hz 50000000]');
+      '--out <dir> [--base 0x100] [--clock-hz 35000000]');
   exit(2);
 }
 
@@ -74,7 +74,7 @@ Future<void> main(List<String> args) async {
   String? hexPath;
   String? outDir;
   var base = 0x100;
-  var clockHz = 50000000;
+  var clockHz = 35000000;
 
   for (var i = 0; i < args.length; i++) {
     String next() => i + 1 < args.length ? args[++i] : usage('${args[i]} needs a value');

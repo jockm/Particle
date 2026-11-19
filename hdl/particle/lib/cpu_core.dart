@@ -56,9 +56,11 @@ class ParticleCpuCore extends Module {
 
   final CpuConfig config;
 
-  /// The register file and the program counter, for tests and debugging.
+  /// The register file, and the PC of the instruction in the execute stage
+  /// (valid when [execValid] is high), for tests and debugging.
   late final RegisterFile registerFile;
   late final Logic pcReg;
+  late final Logic execValid;
 
   ParticleCpuCore({
     required Logic clk,
@@ -120,16 +122,16 @@ class ParticleCpuCore extends Module {
 
   void _build() {
     // -------------------------------------------------------------------------
-    // States. Memory is synchronous: an address presented in one cycle gives
-    // its data in the next. Exec presents the address of the next instruction
-    // (or of the LDI immediate), so most instructions take one cycle.
+    // Pipeline. Memory is synchronous: an address presented in one cycle gives
+    // its data in the next.
+    //   F  presents the fetch address (memPortAAddr)
+    //   I  the instruction arrives (memPortARData) and is latched into D
+    //   D  decode and register read; PC-relative branches that can be decided
+    //      here (no register still being written) redirect the fetch
+    //   E  execute, with the operands forwarded from the last cycle's writes;
+    //      register writes; traps, MBOX, jumps and the other branches redirect
+    //   W  a load's (or TAS's) data arrives and is written (E is empty then)
     // -------------------------------------------------------------------------
-    const sBoot = 0; // after reset: the first fetch is in flight
-    const sExec = 1; // memPortARData holds the instruction at pc
-    const sImm = 2; // memPortARData holds the LDI/LDIS immediate (pc + 2)
-    const sLoadWB = 3; // memPortBRData holds a load's (or TAS's) data
-    const sDivWait = 4; // a DIV/MOD is running
-
     final trapBase = config.trapTableBase;
     final strideShift = (config.trapStrideBytes - 1).bitLength;
     if (config.trapStrideBytes != 1 << strideShift) {
@@ -138,15 +140,80 @@ class ParticleCpuCore extends Module {
     Logic vectorAddr(Logic vec) =>
         Const(trapBase, width: 32) + (vec.zeroExtend(32) << strideShift);
 
-    final pc = Logic(name: 'pc', width: ParticleWidths.word);
-    pcReg = pc;
-    final state = Logic(name: 'state', width: 3);
-    final inExec = state.eq(Const(sExec, width: 3));
-    final inImm = state.eq(Const(sImm, width: 3));
-    final inLoadWB = state.eq(Const(sLoadWB, width: 3));
-    final inDivWait = state.eq(Const(sDivWait, width: 3));
+    // F / I: the address presented last cycle, whose data arrives now
+    final fPc = Logic(name: 'fPc', width: 32);
+    final fValid = Logic(name: 'fValid');
+    // D
+    final dValid = Logic(name: 'dValid');
+    final dPc = Logic(name: 'dPc', width: 32);
+    final dInst = Logic(name: 'dInst', width: 16);
+    // E
+    final eValid = Logic(name: 'eValid');
+    final ePc = Logic(name: 'ePc', width: 32);
+    final eInst = Logic(name: 'eInst', width: 16);
+    final eA = Logic(name: 'eA', width: 32); // operand A as read in D
+    final eB = Logic(name: 'eB', width: 32); // operand B as read in D
+    final eAsrc = Logic(name: 'eAsrc', width: 4); // their registers
+    final eBsrc = Logic(name: 'eBsrc', width: 4);
+    final eImm16 = Logic(name: 'eImm16', width: 16); // LDI/LDIS immediate
+    final eResolved = Logic(name: 'eResolved'); // a branch D already decided
+    final eDivStarted = Logic(name: 'eDivStarted');
+    // The last cycle's register writes, for forwarding (port 2 wins). Whether
+    // E's operands are one of them is worked out a cycle early, when the
+    // writes are made, so E only selects.
+    final fw1D = Logic(name: 'fw1D', width: 32);
+    final fw2D = Logic(name: 'fw2D', width: 32);
+    final eFa1 = Logic(name: 'eFa1'); // operand A is fw1D
+    final eFa2 = Logic(name: 'eFa2'); // operand A is fw2D
+    final eFb1 = Logic(name: 'eFb1');
+    final eFb2 = Logic(name: 'eFb2');
+    // W
+    final lValid = Logic(name: 'lValid');
+    final lIsMul = Logic(name: 'lIsMul'); // W writes a MUL's result
 
-    final inst = memPortARData;
+    pcReg = ePc;
+    execValid = eValid;
+
+    // -------------------------------------------------------------------------
+    // D: decode, register read
+    // -------------------------------------------------------------------------
+    final dOpcode = dInst.slice(15, 8);
+    final dRr = dInst.slice(7, 4);
+    final dRl = dInst.slice(3, 0);
+    Logic dOp(int code) => dOpcode.eq(Const(code, width: 8));
+    Logic dAnyOp(List<int> codes) => codes.map(dOp).reduce((a, b) => a | b);
+
+    final dReadsR14 = dAnyOp([
+      ParticleOpcodes.push8,
+      ParticleOpcodes.sltR14Imm8,
+      ParticleOpcodes.sltR14NegImm8,
+      ParticleOpcodes.ssltR14Imm8,
+      ParticleOpcodes.ssltR14NegImm8,
+      ParticleOpcodes.fbraZImm8,
+      ParticleOpcodes.fbraNImm8,
+      ParticleOpcodes.fbraPImm8,
+      ParticleOpcodes.fbraNZImm8,
+      ParticleOpcodes.bbraZImm8,
+      ParticleOpcodes.bbraNImm8,
+      ParticleOpcodes.bbraPImm8,
+      ParticleOpcodes.bbraNZImm8,
+    ]);
+    final rAddrA = mux(dReadsR14, Const(14, width: 4), dRr);
+
+    final rfWEn = Logic(name: 'rfWEn');
+    final rfWAddr = Logic(name: 'rfWAddr', width: 4);
+    final rfWData = Logic(name: 'rfWData', width: 32);
+    final rfWEn2 = Logic(name: 'rfWEn2');
+    final rfWAddr2 = Logic(name: 'rfWAddr2', width: 4);
+    final rfWData2 = Logic(name: 'rfWData2', width: 32);
+    final rfXchgEn = Logic(name: 'rfXchgEn');
+    final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
+    final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
+    final rfRbaseEn = Logic(name: 'rfRbaseEn');
+    final rfRbaseIn = Logic(name: 'rfRbaseIn', width: 5);
+
+    final inst = eInst;
+    final pc = ePc;
     final opcode = inst.slice(15, 8);
     final rr = inst.slice(7, 4);
     final rl = inst.slice(3, 0);
@@ -162,43 +229,11 @@ class ParticleCpuCore extends Module {
     Logic anyOp(List<int> codes) =>
         codes.map(op).reduce((a, b) => a | b);
 
-    // -------------------------------------------------------------------------
-    // Register file: read A = Rr (or R14 for the R14 forms), read B = Rl
-    // -------------------------------------------------------------------------
-    final readsR14 = anyOp([
-      ParticleOpcodes.push8,
-      ParticleOpcodes.sltR14Imm8,
-      ParticleOpcodes.sltR14NegImm8,
-      ParticleOpcodes.ssltR14Imm8,
-      ParticleOpcodes.ssltR14NegImm8,
-      ParticleOpcodes.fbraZImm8,
-      ParticleOpcodes.fbraNImm8,
-      ParticleOpcodes.fbraPImm8,
-      ParticleOpcodes.fbraNZImm8,
-      ParticleOpcodes.bbraZImm8,
-      ParticleOpcodes.bbraNImm8,
-      ParticleOpcodes.bbraPImm8,
-      ParticleOpcodes.bbraNZImm8,
-    ]);
-    final rAddrA = mux(readsR14, Const(14, width: 4), rr);
-
-    final rfWEn = Logic(name: 'rfWEn');
-    final rfWAddr = Logic(name: 'rfWAddr', width: 4);
-    final rfWData = Logic(name: 'rfWData', width: 32);
-    final rfWEn2 = Logic(name: 'rfWEn2');
-    final rfWAddr2 = Logic(name: 'rfWAddr2', width: 4);
-    final rfWData2 = Logic(name: 'rfWData2', width: 32);
-    final rfXchgEn = Logic(name: 'rfXchgEn');
-    final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
-    final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
-    final rfRbaseEn = Logic(name: 'rfRbaseEn');
-    final rfRbaseIn = Logic(name: 'rfRbaseIn', width: 5);
-
     final rf = RegisterFile(
       clk: clk,
       reset: reset,
       rAddrA: rAddrA,
-      rAddrB: rl,
+      rAddrB: dRl,
       wAddr: rfWAddr,
       wData: rfWData,
       wEn: rfWEn,
@@ -213,8 +248,15 @@ class ParticleCpuCore extends Module {
       rbaseIn: rfRbaseIn,
     );
     registerFile = rf;
-    final valA = rf.rDataA;
-    final valB = rf.rDataB;
+    final dValA = rf.rDataA;
+    final dValB = rf.rDataB;
+
+    // -------------------------------------------------------------------------
+    // E: operands, forwarded from the writes D's read didn't see (the last
+    // cycle's; R0 is never forwarded)
+    // -------------------------------------------------------------------------
+    final valA = mux(eFa2, fw2D, mux(eFa1, fw1D, eA));
+    final valB = mux(eFb2, fw2D, mux(eFb1, fw1D, eB));
 
     // -------------------------------------------------------------------------
     // ALU
@@ -356,10 +398,26 @@ class ParticleCpuCore extends Module {
               [mulMode < Const(3, width: 2), mulOperandB < imm4Val]),
         ]),
       ]);
+      // MUL takes two cycles: E latches the operands, and the next cycle (W,
+      // with E empty) multiplies and writes
+      final mulA = Logic(name: 'mulA', width: 32);
+      final mulB = Logic(name: 'mulB', width: 32);
+      final mulModeReg = Logic(name: 'mulModeReg', width: 2);
+      Sequential(clk, reset: reset, resetValues: {
+        mulA: Const(0, width: 32),
+        mulB: Const(0, width: 32),
+        mulModeReg: Const(0, width: 2),
+      }, [
+        If(isMulOp, then: [
+          mulA < valA,
+          mulB < mulOperandB,
+          mulModeReg < mulMode,
+        ]),
+      ]);
       mulResult = ParticleMultiplier(
-        operandA: valA,
-        operandB: mulOperandB,
-        mulMode: mulMode,
+        operandA: mulA,
+        operandB: mulB,
+        mulMode: mulModeReg,
       ).result;
     }
 
@@ -462,7 +520,7 @@ class ParticleCpuCore extends Module {
       ]),
     ]);
 
-    // Latched for the cycle the load data arrives
+    // W: latched for the cycle the load data arrives (the cycle after E)
     final ldDest = Logic(name: 'ldDest', width: 4);
     final ldSizeCode = Logic(name: 'ldSizeCode', width: 2); // 0: 8, 1: 16, 2: 32
     final ldLow = Logic(name: 'ldLow', width: 2);
@@ -504,11 +562,14 @@ class ParticleCpuCore extends Module {
     final pcPlus2 = pc + Const(2, width: 32);
 
     final branchNextPc = Logic(name: 'branchNextPc', width: 32);
+    final branchTaken = Logic(name: 'branchTaken');
     CaseItem cond(int code, Logic taken, Logic target) =>
-        CaseItem(Const(code, width: 8),
-            [branchNextPc < mux(taken, target, pcPlus2)]);
-    CaseItem always(int code, Logic target) =>
-        CaseItem(Const(code, width: 8), [branchNextPc < target]);
+        CaseItem(Const(code, width: 8), [
+          branchNextPc < mux(taken, target, pcPlus2),
+          branchTaken < taken,
+        ]);
+    CaseItem always(int code, Logic target) => CaseItem(
+        Const(code, width: 8), [branchNextPc < target, branchTaken < Const(1)]);
 
     Combinational([
       Case(opcode, [
@@ -542,6 +603,7 @@ class ParticleCpuCore extends Module {
         cond(ParticleOpcodes.bbraNZImm8, isNotZero, pc - dispImm8),
       ], defaultItem: [
         branchNextPc < pcPlus2,
+        branchTaken < Const(0),
       ]),
     ]);
 
@@ -561,9 +623,9 @@ class ParticleCpuCore extends Module {
         mux(op(ParticleOpcodes.trapR), valA.slice(3, 0), imm4);
     final isLdi = anyOp([ParticleOpcodes.ldi, ParticleOpcodes.ldis]);
 
-    // An MBOX strobe is held until the core can take it: in Exec, before the
-    // instruction there runs (it runs again after the handler returns), or
-    // while a divide is in progress
+    // An MBOX strobe is held until the core can take it: when an instruction
+    // is in E and hasn't run yet (it runs again after the handler returns),
+    // or while a divide is in progress
     final mboxPending = Logic(name: 'mboxPending');
     final mboxPendingVec = Logic(name: 'mboxPendingVec', width: 4);
     // The sender's Rr: stored at MBOX_VALUE (the word below the trap table)
@@ -571,23 +633,31 @@ class ParticleCpuCore extends Module {
     final mboxPendingData =
         Logic(name: 'mboxPendingData', width: ParticleWidths.word);
     final mboxValueAddr = Const(config.trapTableBase - 4, width: 32);
-    final mboxTake = mboxPending & (inExec | inDivWait);
+    final divWaiting = eValid & eDivStarted;
+    final mboxTake = mboxPending & eValid;
     final mboxTarget = vectorAddr(mboxPendingVec);
 
     final fifoEmpty = fifoStatus.slice(0, 0);
     final fifoFull = fifoStatus.slice(1, 1);
     final fifoReadStall = op(ParticleOpcodes.fifoR) & fifoEmpty;
 
-    // In Exec: nothing happens if the MBOX is taken, the opcode is illegal,
-    // the access is misaligned or the instruction is a TRAP
-    final execRuns = inExec & ~mboxTake;
+    // In E: nothing happens if the MBOX is taken, the opcode is illegal, the
+    // access is misaligned or the instruction is a TRAP
+    final execRuns = eValid & ~eDivStarted & ~mboxTake;
     final faultIllegal = execRuns & illegal;
     final faultAlign = execRuns & ~illegal & misaligned;
     final trapInstr = execRuns & ~illegal & isTrapInstr;
     final doExec = execRuns & ~illegal & ~misaligned & ~isTrapInstr;
+    // A branch or jump E decides (D decided the others)
+    final ctlTaken = doExec & ~eResolved & branchTaken;
     // A branch or jump to an odd address runs (a JMP still links) and then
     // takes vector 14, with R14 = the odd target
-    final oddTarget = doExec & branchNextPc.slice(0, 0).eq(1);
+    final oddTarget = ctlTaken & branchNextPc.slice(0, 0).eq(1);
+    // These change which register is which: what follows is fetched again
+    final isSerialize = anyOp([
+      ParticleOpcodes.xchg, ParticleOpcodes.xchgAll, ParticleOpcodes.xchgMost,
+      ParticleOpcodes.rbaseImm4, ParticleOpcodes.rbaseR,
+    ]);
 
     final vec14 = Const(trapBase + 14 * config.trapStrideBytes, width: 32);
     final vec15 = Const(trapBase + 15 * config.trapStrideBytes, width: 32);
@@ -595,27 +665,20 @@ class ParticleCpuCore extends Module {
     // -------------------------------------------------------------------------
     // Register file write ports
     // -------------------------------------------------------------------------
-    final immDestReg = Logic(name: 'immDestReg', width: 4);
-    final immIsSigned = Logic(name: 'immIsSigned');
-    final imm16Extended = mux(immIsSigned, memPortARData.signExtend(32),
-        memPortARData.zeroExtend(32));
+    final imm16Extended = mux(op(ParticleOpcodes.ldis),
+        eImm16.signExtend(32), eImm16.zeroExtend(32));
 
     Combinational([
-      // Port 1: an instruction's result
+      // Port 1: an instruction's result, or a load's data in W
       rfWEn < Const(0),
       rfWAddr < rr,
       rfWData < aluUnit.result,
-      If(inImm, then: [
-        rfWEn < Const(1),
-        rfWAddr < immDestReg,
-        rfWData < imm16Extended,
-      ]),
-      If(inLoadWB, then: [
+      If(lValid, then: [
         rfWEn < Const(1),
         rfWAddr < ldDest,
-        rfWData < ldData,
+        rfWData < mux(lIsMul, mulResult, ldData),
       ]),
-      If(inDivWait & divDone & ~mboxTake, then: [
+      If(divWaiting & divDone & ~mboxTake, then: [
         rfWEn < Const(1),
         rfWAddr < rr,
         rfWData < divResult,
@@ -623,6 +686,11 @@ class ParticleCpuCore extends Module {
       If(doExec, then: [
         If(aluWritesRr, then: [rfWEn < Const(1)]),
         If(aluWritesR14, then: [rfWEn < Const(1), rfWAddr < Const(14, width: 4)]),
+        If(isLdi, then: [
+          rfWEn < Const(1),
+          rfWAddr < rl,
+          rfWData < imm16Extended,
+        ]),
         Case(opcode, [
           CaseItem(Const(ParticleOpcodes.ld, width: 8),
               [rfWEn < Const(1), rfWData < valB]),
@@ -666,7 +734,6 @@ class ParticleCpuCore extends Module {
           CaseItem(Const(ParticleOpcodes.fifoStat, width: 8),
               [rfWEn < Const(1), rfWData < fifoStatus]),
         ]),
-        If(isMulOp, then: [rfWEn < Const(1), rfWData < mulResult]),
       ]),
 
       // Port 2: pointer updates, TRYR's status, and R14 on trap entry. Port 2
@@ -740,56 +807,51 @@ class ParticleCpuCore extends Module {
     sarfRdWe <= Const(0);
 
     divStart <= doExec & isDivOp;
-    divAbort <= inDivWait & mboxTake;
+    divAbort <= divWaiting & mboxTake;
 
     // -------------------------------------------------------------------------
-    // Next PC, next state, and the instruction fetch address
+    // E: stall, completion and redirect
     // -------------------------------------------------------------------------
-    final execNextPc = Logic(name: 'execNextPc', width: 32);
-    final execNextState = Logic(name: 'execNextState', width: 3);
-    final execFetchAddr = Logic(name: 'execFetchAddr', width: 32);
+    // E keeps its instruction while a FIFO.R waits for data or a divide runs
+    final eStall = (doExec & fifoReadStall) |
+        (doExec & isDivOp) |
+        (divWaiting & ~divDone & ~mboxTake);
+    final eDone = eValid & ~eStall;
+    // A load, TAS or MUL writes in W, the next cycle, when E must be empty
+    final wNext = doExec & (isLoadOp | isTas | isMulOp);
+
+    final eRedirect = Logic(name: 'eRedirect');
+    final eTarget = Logic(name: 'eTarget', width: 32);
     Combinational([
-      execNextPc < branchNextPc,
-      execNextState < Const(sExec, width: 3),
-      execFetchAddr < branchNextPc,
+      eRedirect < Const(0),
+      eTarget < pcPlus2,
       If(mboxTake, then: [
-        execNextPc < mboxTarget,
-        execFetchAddr < mboxTarget,
+        eRedirect < Const(1),
+        eTarget < mboxTarget,
       ], orElse: [
-        If(illegal, then: [
-          execNextPc < vec15,
-          execFetchAddr < vec15,
+        If(faultIllegal, then: [
+          eRedirect < Const(1),
+          eTarget < vec15,
         ], orElse: [
-          If(misaligned, then: [
-            execNextPc < vec14,
-            execFetchAddr < vec14,
+          If(faultAlign, then: [
+            eRedirect < Const(1),
+            eTarget < vec14,
           ], orElse: [
-            If(isTrapInstr, then: [
-              execNextPc < vectorAddr(trapVec),
-              execFetchAddr < vectorAddr(trapVec),
+            If(trapInstr, then: [
+              eRedirect < Const(1),
+              eTarget < vectorAddr(trapVec),
             ], orElse: [
-              If(fifoReadStall, then: [
-                execNextPc < pc,
-                execFetchAddr < pc,
+              If(oddTarget, then: [
+                eRedirect < Const(1),
+                eTarget < vec14,
               ], orElse: [
-                If(isDivOp, then: [
-                  execNextPc < pc,
-                  execNextState < Const(sDivWait, width: 3),
-                  execFetchAddr < pc,
+                If(ctlTaken, then: [
+                  eRedirect < Const(1),
+                  eTarget < branchNextPc,
                 ], orElse: [
-                  If(isLdi, then: [
-                    execNextPc < pc,
-                    execNextState < Const(sImm, width: 3),
-                    execFetchAddr < pcPlus2,
-                  ], orElse: [
-                    If(branchNextPc.slice(0, 0).eq(1), then: [
-                      execNextPc < vec14,
-                      execFetchAddr < vec14,
-                    ], orElse: [
-                      If(isLoadOp | isTas, then: [
-                        execNextState < Const(sLoadWB, width: 3),
-                      ]),
-                    ]),
+                  If(doExec & isSerialize, then: [
+                    eRedirect < Const(1),
+                    eTarget < pcPlus2,
                   ]),
                 ]),
               ]),
@@ -799,26 +861,85 @@ class ParticleCpuCore extends Module {
       ]),
     ]);
 
+    // -------------------------------------------------------------------------
+    // D: advance into E, and the unconditional branches D can decide
+    // -------------------------------------------------------------------------
+    final dIsLdi = dAnyOp([ParticleOpcodes.ldi, ParticleOpcodes.ldis]);
+    // LDI's immediate is the halfword arriving now
+    final dImmReady = fValid & fPc.eq(dPc + Const(2, width: 32));
+    final eFree = ~eValid | eDone;
+    final dAdvance = dValid &
+        ~eRedirect &
+        eFree &
+        ~wNext &
+        (~dIsLdi | dImmReady);
+
+    // D decides the unconditional FBRA/BBRA imm8 forms: they need no
+    // register, so the redirect costs one cycle. Conditional branches test a
+    // register and are decided in E, where the operand is forwarded; testing
+    // it here put the register-file read on the path to the fetch address
+    // (about 35.5 MHz against 39.5 MHz on the ULX3S).
+    final dIsFbra = dOpcode.eq(Const(ParticleOpcodes.fbraImm8, width: 8));
+    final dIsBbra = dOpcode.eq(Const(ParticleOpcodes.bbraImm8, width: 8));
+    final dResolves = dAdvance & (dIsFbra | dIsBbra);
+    final dTaken = Const(1);
+    final dImm8Disp = dInst.slice(7, 0).zeroExtend(32) << 1;
+    final dTarget = mux(dIsBbra, dPc - dImm8Disp, dPc + dImm8Disp);
+    final dRedirect = dResolves & dTaken;
+
+    // -------------------------------------------------------------------------
+    // Fetch. The halfword arriving now is dropped on a redirect, and when it
+    // is the immediate of the LDI going to E; it is fetched again when D can't
+    // take it.
+    // -------------------------------------------------------------------------
+    final dropArriving = eRedirect | dRedirect | (dAdvance & dIsLdi);
+    final dCapture = fValid & ~dropArriving & (~dValid | dAdvance);
     final fetchAddr = Logic(name: 'fetchAddr', width: 32);
     Combinational([
-      fetchAddr < pc,
-      If(inExec, then: [fetchAddr < execFetchAddr]),
-      If(inImm, then: [fetchAddr < pc + Const(4, width: 32)]),
-      If(inDivWait, then: [
-        If(mboxTake, then: [
-          fetchAddr < mboxTarget,
+      fetchAddr < fPc + Const(2, width: 32),
+      If(eRedirect, then: [
+        fetchAddr < eTarget,
+      ], orElse: [
+        If(dRedirect, then: [
+          fetchAddr < dTarget,
         ], orElse: [
-          If(divDone, then: [fetchAddr < pcPlus2]),
+          If(fValid & ~dropArriving & ~dCapture, then: [fetchAddr < fPc]),
         ]),
       ]),
     ]);
     memPortAAddr <= fetchAddr;
 
+    // E's source registers next cycle, and whether this cycle's writes hit
+    // them (R0 is never forwarded)
+    final nextSrcA = mux(dAdvance, rAddrA, eAsrc);
+    final nextSrcB = mux(dAdvance, dRl, eBsrc);
+    Logic fwdHit(Logic wEn, Logic wAddr, Logic src) =>
+        wEn & wAddr.eq(src) & ~src.eq(0);
+
     Sequential(clk, reset: reset, resetValues: {
-      pc: Const(trapBase, width: 32),
-      state: Const(sBoot, width: 3),
-      immDestReg: Const(0, width: 4),
-      immIsSigned: Const(0),
+      fPc: Const(trapBase - 2, width: 32),
+      fValid: Const(0),
+      dValid: Const(0),
+      dPc: Const(0, width: 32),
+      dInst: Const(0, width: 16),
+      eValid: Const(0),
+      ePc: Const(trapBase, width: 32),
+      eInst: Const(0, width: 16),
+      eA: Const(0, width: 32),
+      eB: Const(0, width: 32),
+      eAsrc: Const(0, width: 4),
+      eBsrc: Const(0, width: 4),
+      eImm16: Const(0, width: 16),
+      eResolved: Const(0),
+      eDivStarted: Const(0),
+      fw1D: Const(0, width: 32),
+      fw2D: Const(0, width: 32),
+      eFa1: Const(0),
+      eFa2: Const(0),
+      eFb1: Const(0),
+      eFb2: Const(0),
+      lValid: Const(0),
+      lIsMul: Const(0),
       ldDest: Const(0, width: 4),
       ldSizeCode: Const(0, width: 2),
       ldLow: Const(0, width: 2),
@@ -836,45 +957,54 @@ class ParticleCpuCore extends Module {
         If(mboxTake, then: [mboxPending < Const(0)]),
       ]),
 
-      Case(state, [
-        CaseItem(Const(sBoot, width: 3), [
-          state < Const(sExec, width: 3),
-        ]),
-        CaseItem(Const(sExec, width: 3), [
-          pc < execNextPc,
-          state < execNextState,
-          If(isLdi, then: [
-            immDestReg < rl,
-            immIsSigned < op(ParticleOpcodes.ldis),
-          ]),
-          If(isLoadOp | isTas, then: [
-            ldDest < mux(isTas, rl, rr),
-            ldSizeCode < mux(isSize4, Const(2, width: 2),
-                mux(isSize2, Const(1, width: 2), Const(0, width: 2))),
-            ldLow < effAddr.slice(1, 0),
-          ]),
-        ]),
-        CaseItem(Const(sImm, width: 3), [
-          pc < pc + Const(4, width: 32),
-          state < Const(sExec, width: 3),
-        ]),
-        CaseItem(Const(sLoadWB, width: 3), [
-          state < Const(sExec, width: 3),
-        ]),
-        CaseItem(Const(sDivWait, width: 3), [
-          If(mboxTake, then: [
-            pc < mboxTarget,
-            state < Const(sExec, width: 3),
-          ], orElse: [
-            If(divDone, then: [
-              pc < pcPlus2,
-              state < Const(sExec, width: 3),
-            ]),
-          ]),
-        ]),
-      ], defaultItem: [
-        state < Const(sExec, width: 3),
+      fPc < fetchAddr,
+      fValid < Const(1),
+
+      If(dCapture, then: [
+        dValid < Const(1),
+        dPc < fPc,
+        dInst < memPortARData,
+      ], orElse: [
+        If(dAdvance | eRedirect, then: [dValid < Const(0)]),
       ]),
+
+      If(dAdvance, then: [
+        eValid < Const(1),
+        ePc < dPc,
+        eInst < dInst,
+        eA < dValA,
+        eB < dValB,
+        eAsrc < rAddrA,
+        eBsrc < dRl,
+        eImm16 < memPortARData,
+        eResolved < dResolves,
+        eDivStarted < Const(0),
+      ], orElse: [
+        If(eStall, then: [
+          eA < valA,
+          eB < valB,
+          If(doExec & isDivOp, then: [eDivStarted < Const(1)]),
+        ], orElse: [
+          eValid < Const(0),
+          eDivStarted < Const(0),
+        ]),
+      ]),
+
+      lValid < wNext,
+      lIsMul < wNext & isMulOp,
+      If(wNext, then: [
+        ldDest < mux(isTas, rl, rr),
+        ldSizeCode < mux(isSize4, Const(2, width: 2),
+            mux(isSize2, Const(1, width: 2), Const(0, width: 2))),
+        ldLow < effAddr.slice(1, 0),
+      ]),
+
+      fw1D < rfWData,
+      fw2D < rfWData2,
+      eFa1 < fwdHit(rfWEn, rfWAddr, nextSrcA),
+      eFa2 < fwdHit(rfWEn2, rfWAddr2, nextSrcA),
+      eFb1 < fwdHit(rfWEn, rfWAddr, nextSrcB),
+      eFb2 < fwdHit(rfWEn2, rfWAddr2, nextSrcB),
     ]);
   }
 }

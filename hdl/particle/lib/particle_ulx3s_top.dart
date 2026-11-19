@@ -48,7 +48,7 @@ class ParticleUlx3sTop extends Module {
     required Logic resetN,
     required Logic ftdiRxPin,
     required Logic gpioRxPin,
-    this.config = const CpuConfig(systemClockHz: 50000000),
+    this.config = const CpuConfig(systemClockHz: 35000000),
     this.ftdiBaud = 1000000,
     List<int>? programBytes,
     int programBase = 0x100,

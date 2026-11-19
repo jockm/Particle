@@ -192,10 +192,10 @@ int main(int argc, char** argv) {
     }
     std::printf("CYCLES=%d C0_PC=0x%04x C1_PC=0x%04x C2_PC=0x%04x C3_PC=0x%04x\n",
                 cyc,
-                top->rootp->ParcoreTop__DOT__core0_if__DOT__pc,
-                top->rootp->ParcoreTop__DOT__core1_id__DOT__pc,
-                top->rootp->ParcoreTop__DOT__core2_ex__DOT__pc,
-                top->rootp->ParcoreTop__DOT__core3_mem__DOT__pc);
+                top->rootp->ParcoreTop__DOT__core0_if__DOT__ePc,
+                top->rootp->ParcoreTop__DOT__core1_id__DOT__ePc,
+                top->rootp->ParcoreTop__DOT__core2_ex__DOT__ePc,
+                top->rootp->ParcoreTop__DOT__core3_mem__DOT__ePc);
     std::printf("SCOREBOARD=0x%08x\n", word(c1_b0, c1_b1, 0x80));
     for (int r = 0; r < 32; r++) {
         std::printf("R%d=0x%08x\n", r, word(c1_b0, c1_b1, r * 4));

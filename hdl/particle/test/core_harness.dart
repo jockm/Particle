@@ -132,28 +132,42 @@ class CoreHarness {
 
   int get pc => core.pcReg.value.toInt();
 
-  /// The core's state (1 = Exec).
-  late final Logic _state =
-      core.internalSignals.firstWhere((s) => s.name == 'state');
+  /// True when the instruction at [pc] is in the execute stage this cycle.
+  bool get inExec =>
+      core.execValid.value.isValid && core.execValid.value.toInt() == 1;
 
-  /// True when the core is executing the instruction at [pc] this cycle.
-  bool get inExec => _state.value.isValid && _state.value.toInt() == 1;
-
-  /// Runs until the core has sat in Exec at the same PC for [stableCycles]
-  /// cycles (the program's final jump-to-self), or [maxCycles]. A divide
-  /// also holds the PC, but in its own state.
+  /// Runs until the execute stage has seen only the instruction at one PC
+  /// [stableCycles] times in a row (the program's final jump-to-self), or
+  /// [maxCycles]. Cycles with nothing in execute (pipeline bubbles) don't
+  /// count either way. A divide holds its PC too, so it has to finish: the
+  /// count only starts again when a new instruction enters execute.
   Future<void> runToHalt({int maxCycles = 20000, int stableCycles = 8}) async {
     var last = -1;
     var same = 0;
+    var wasExec = false;
     while (cycles < maxCycles) {
       await step();
+      if (!inExec) {
+        wasExec = false;
+        continue;
+      }
       final v = core.pcReg.value;
       final now = v.isValid ? v.toInt() : -1;
-      same = (now == last && inExec) ? same + 1 : 0;
+      // Only a new entry into execute counts (a stall at one PC doesn't)
+      final entered = !wasExec || _entered();
+      wasExec = true;
+      if (!entered) continue;
+      same = (now == last) ? same + 1 : 0;
       last = now;
       if (same >= stableCycles) return;
     }
   }
+
+  late final Logic _eDivStarted =
+      core.internalSignals.firstWhere((s) => s.name == 'eDivStarted');
+  // An instruction is new in execute unless a divide is under way there
+  bool _entered() =>
+      !(_eDivStarted.value.isValid && _eDivStarted.value.toInt() == 1);
 
   CoreState snapshot() {
     final rf = core.registerFile;

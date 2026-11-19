@@ -3,6 +3,8 @@
 // Architecture: Particle 32-bit RISC
 // =============================================================================
 
+import 'dart:math';
+
 import 'package:rohd/rohd.dart';
 import 'package:test/test.dart';
 import '../lib/constants.dart';
@@ -45,6 +47,50 @@ void main() {
       mulMode.put(2); // SMULH
       Simulator.tick();
       expect(mul.result.value.toInt(), equals(0xFFFFFFFF));
+    });
+
+    test('Multiplier matches exact products in every mode', () async {
+      await Simulator.reset();
+      final opA = Logic(name: 'opA', width: ParticleWidths.word);
+      final opB = Logic(name: 'opB', width: ParticleWidths.word);
+      final mulMode = Logic(name: 'mulMode', width: 2);
+      final mul = ParticleMultiplier(
+          operandA: opA, operandB: opB, mulMode: mulMode);
+      await mul.build();
+
+      final mask = (BigInt.one << 32) - BigInt.one;
+      BigInt signed(int v) =>
+          v >= 0x80000000 ? BigInt.from(v) - (BigInt.one << 32) : BigInt.from(v);
+      int expected(int a, int b, int mode) {
+        final ua = BigInt.from(a), ub = BigInt.from(b);
+        final p = switch (mode) {
+          0 => ua * ub, // MULL: the low word is the same signed or not
+          1 => ua * ub, // MULH
+          2 => signed(a) * signed(b), // SMULH
+          _ => signed(a) * ub, // MULHSU
+        };
+        return ((mode == 0 ? p : p >> 32) & mask).toInt();
+      }
+
+      const edges = [0, 1, 2, 0x7FFFFFFF, 0x80000000, 0x80000001, 0xFFFFFFFF];
+      final rnd = Random(1234);
+      final pairs = [
+        for (final a in edges)
+          for (final b in edges) (a, b),
+        for (var i = 0; i < 300; i++)
+          (rnd.nextInt(1 << 32), rnd.nextInt(1 << 32)),
+      ];
+      for (final (a, b) in pairs) {
+        for (var mode = 0; mode < 4; mode++) {
+          opA.put(a);
+          opB.put(b);
+          mulMode.put(mode);
+          Simulator.tick();
+          expect(mul.result.value.toInt(), equals(expected(a, b, mode)),
+              reason: 'a=0x${a.toRadixString(16)} b=0x${b.toRadixString(16)} '
+                  'mode=$mode');
+        }
+      }
     });
 
     test('Divider computes Unsigned Div with multi-cycle completion', () async {

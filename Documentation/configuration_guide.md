@@ -15,13 +15,13 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | `fifoChannels` | `4` | Number of point-to-point streaming FIFO channels |
 | `fifoDepth` | `256` | Depth of each FIFO channel, in 32-bit words |
 | `coreId` | `0` | The core's identifier in multi-core topologies |
-| `enableMultiplier` | `true` | Include the single-cycle DSP multiplier. When `false`, the multiply opcodes take the illegal-opcode trap (vector 15) |
+| `enableMultiplier` | `true` | Include the DSP multiplier (2 cycles). When `false`, the multiply opcodes take the illegal-opcode trap (vector 15) |
 | `enableDivider` | `true` | Include the divider (34 cycles per divide). When `false`, the divide and remainder opcodes take the illegal-opcode trap (vector 15) |
 | `tcmSizeBytes` | `65536` | On-chip tightly coupled block RAM, in bytes (64 KiB) |
 | `mmioBaseAddr` | `0xF0000000` | Base address of the memory-mapped I/O and external memory window |
 | `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleUlx3sTop`, which always has it) |
 | `ulx3sUartFifoChannel` | `0` | FIFO channel of the FTDI UART (not used: `ParticleUlx3sTop` puts it on channel 0) |
-| `systemClockHz` | `25000000` | System clock, for the UART baud divisors. `ParticleUlx3sTop` defaults to 50 MHz, from the PLL |
+| `systemClockHz` | `25000000` | System clock, for the UART baud divisors. `ParticleUlx3sTop` defaults to 35 MHz, from the PLL |
 | `enableAuxGpioUart` | `true` | Include the auxiliary UART on the GPIO header pins (not used by `ParticleUlx3sTop`, which always has it) |
 | `auxUartFifoChannel` | `1` | FIFO channel of the auxiliary UART (not used: `ParticleUlx3sTop` puts it on channel 1) |
 | `auxUartDefaultBaud` | `115200` | Baud rate of the auxiliary UART. The core has no MMIO bus yet, so it can't be changed at run time |
@@ -47,7 +47,7 @@ The generators are Dart programs (`hdl/particle/bin/generate.dart`, `generate_ul
 
 ## The ULX3S Board
 
-`make ulx3s-bit` builds a bitstream for the ULX3S 85F: one Particle core at 50 MHz with 64 KiB of block RAM holding a program, the FTDI USB UART and a GPIO UART. It needs the OSS CAD Suite (Yosys, `nextpnr-ecp5`, `ecppack`; see *Prerequisites* in `GettingStarted.md`).
+`make ulx3s-bit` builds a bitstream for the ULX3S 85F: one Particle core at 35 MHz with 64 KiB of block RAM holding a program, the FTDI USB UART and a GPIO UART. It needs the OSS CAD Suite (Yosys, `nextpnr-ecp5`, `ecppack`; see *Prerequisites* in `GettingStarted.md`).
 
 ```bash
 make ulx3s-bit                                    # apps/asm/ulx3s_echo.asm
@@ -64,7 +64,7 @@ make ulx3s-term                                   # talk to it over the FTDI UAR
 | `make ulx3s-flash` | Writes the bitstream to the board's configuration flash (`openFPGALoader -b ulx3s -f`), so it loads at every power-up. |
 | `make ulx3s-term` | Opens the FTDI UART with `hdl/particle/boards/ulx3s/ulx3s_term.py`, a small terminal using only the Python standard library: the first `/dev/cu.usbserial-*` (macOS) or `/dev/ttyUSB*` (Linux) port, at 1 Mbps (`ULX3S_PORT`, `ULX3S_BAUD`). Ctrl-] leaves. |
 
-Variables: `ULX3S_PROGRAM` (default `apps/asm/ulx3s_echo.asm`), `ULX3S_CLOCK_HZ` (default `50000000`; the generator stops if the PLL can't make it exactly from 25 MHz), and `YOSYS`, `NEXTPNR_ECP5`, `ECPPACK`, `OPENFPGALOADER` for the tool commands.
+Variables: `ULX3S_PROGRAM` (default `apps/asm/ulx3s_echo.asm`), `ULX3S_CLOCK_HZ` (default `35000000`, below the core's measured Fmax of about 40 MHz; `make ulx3s-timing` reports it for your build. The generator stops if the PLL can't make the clock exactly from 25 MHz: 35 and 37.5 MHz work, 36 and 38 don't), and `YOSYS`, `NEXTPNR_ECP5`, `ECPPACK`, `OPENFPGALOADER` for the tool commands.
 
 The program is part of the bitstream, so changing it means running `make ulx3s-bit` again. The hardware implements every instruction in the spec (see `hdl_architecture.md`), so an Action program built with `pbuild` should run too; so far only `ulx3s_echo.asm` has been run on the ULX3S design (in simulation).
 

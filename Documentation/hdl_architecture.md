@@ -12,17 +12,31 @@ The core implements all 151 opcodes of `particle_spec.md`, and the differential 
 
 ### Memory and timing
 
-Memory is **synchronous**, like FPGA block RAM: an address presented in one cycle gives its data in the next. The core presents the address of the next instruction while it executes the current one, so most instructions take one cycle:
+Memory is **synchronous**, like FPGA block RAM: an address presented in one cycle gives its data in the next.
+
+The core is a pipeline with these stages:
+
+| Stage | What happens |
+|---|---|
+| F | presents the address of the next halfword on port A |
+| D | receives that halfword, decodes it, reads the register file, and decides the unconditional `FBRA`/`BBRA` imm8 branches |
+| E | executes, with operands forwarded from the previous two cycles' writes; decides every other branch, jumps, traps and `MBOX` entry |
+| W | writes the register for loads, `TAS` and the multiplier, the cycle after E |
+
+Most instructions take one cycle:
 
 | Instruction | Cycles |
 |---|---|
-| ALU, multiply, moves, stores, FIFO operations, branches and jumps (taken or not) | 1 |
-| `LDI`, `LDIS` (the second word is fetched while the first executes) | 2 |
-| Loads, `TAS` (the data is written to the register in the second cycle) | 2 |
+| ALU, moves, stores, FIFO operations | 1 |
+| Conditional branches not taken | 1 |
+| `FBRA`/`BBRA` imm8 (decided in D) | 2 |
+| Conditional branches taken, jumps, `TRAP`, and the serialising `XCHG`, `XCHGALL`, `XCHGMOST`, `RBASE` (decided in E: the two halfwords behind are dropped) | 3 |
+| `LDI`, `LDIS` (the second halfword arrives while the first is in D) | 2 |
+| Loads, `TAS`, `MULL`, `MULH`, `SMULH`, `MULHSU` (the register is written in W) | 2 |
 | `DIV`, `MOD`, `SDIV`, `SMOD` and their immediate forms | 34 (fewer for a division by zero or `INT_MIN / -1`) |
 | `FIFO.R` on an empty channel | stalls until data arrives |
 
-The states are Boot (the first fetch after reset), Exec, Imm (the `LDI`/`LDIS` immediate arrives), LoadWB (load data arrives) and DivWait.
+Conditional branches are decided in E rather than D on purpose: testing the register in D puts the register-file read on the path to the fetch address, which cost about 4 MHz on the ULX3S (about 35.5 MHz against 39.5 MHz).
 
 ### Ports
 
@@ -69,7 +83,7 @@ psim and the hardware are allowed to differ in a few places, which the different
 |---|---|---|---|
 | `RegisterFile` | `register_file.dart` | the core | 32 physical 32-bit registers, seen through the 16-register `RBASE` window (`R0`–`R15`), plus one shadow register for each physical register. Two asynchronous read ports and two synchronous write ports (port 2 wins when both write one register). `R0` is always zero. `xchgEn` swaps one register with its shadow, `xchgAllEn` swaps all 31 physical registers (`XCHGALL`), and `xchgMostEn` swaps the physical registers virtual `R1`–`R14` map to, keeping the stack pointer (`XCHGMOST`, used by `FAST_ENTER_TRAP`/`FAST_EXIT_TRAP`). `physical` and `shadow` give tests the register values. |
 | `ParticleAlu` | `alu.dart` | the core | Single-cycle 32-bit ALU: `ADD`, `SUB`, `AND`, `OR`, `XOR`, the shifts and rotates, `CLZ`, `BEXTR`, `BSET`/`BCLR`/`BINV`/`BGET`, `SLT`/`SSLT`, `NOT`, `NEZ`, `NEG`, `REV32`, `SEQ`/`SNE`/`SLE`/`SSLE`, `SEXT8`/`SEXT16`. Outputs the result and `isZero`/`isNegative`. |
-| `ParticleMultiplier` | `multiplier.dart` | the core | Single-cycle 32×32 multiplier for the FPGA's DSP blocks: `MULL` (low 32 bits), `MULH` (high 32 bits, unsigned), `SMULH` (high, signed), `MULHSU` (high, signed × unsigned). |
+| `ParticleMultiplier` | `multiplier.dart` | the core | 32×32 multiplier for the FPGA's DSP blocks, fed from registers the core loads in E (the result is written in W): one unsigned product, with the signed high words corrected from it, `MULL` (low 32 bits), `MULH` (high 32 bits, unsigned), `SMULH` (high, signed), `MULHSU` (high, signed × unsigned). |
 | `ParticleDivider` | `divider.dart` | the core (when `enableDivider`) | Multi-cycle divider (one bit per cycle, 32 steps): signed and unsigned quotient and remainder, with a one-cycle `done` pulse, division-by-zero and `INT_MIN / -1` handling, and an `abort` input (an MBOX interrupting a divide). |
 | `ParticleMemoryBus` | `memory_bus.dart` | its tests | Byte enables, write-data alignment, sub-word read formatting and alignment fault detection for 8-, 16- and 32-bit accesses. The core does the same work internally. |
 | `ParticleBlockRamTdp` | `block_ram_tdp.dart` | `ParticleUlx3sTop`, Parcore's `ParcoreTcm`, the test harness | True dual-port block RAM for the FPGA's embedded RAM: port A reads 16-bit instructions (halfword address), port B reads and writes 32-bit data with byte enables (word address); default 16,384 words, 64 KiB. Two 16-bit banks (halfwords at byte addresses 4n and 4n+2), each with one port A read and one port B read/write port, as ECP5 block RAM provides. Both ports are synchronous: the address before a rising edge gives its data after it, as the core expects (read-first when port B reads and writes one word). Simulation loads it from a byte list; the generated SystemVerilog loads each bank with `$readmemh` (`ParticleBlockRamTdp.bankFiles` writes the files) or from the byte list as initial values. |
@@ -86,7 +100,7 @@ psim and the hardware are allowed to differ in a few places, which the different
 | `CacheSubsystemTop` | `cache_subsystem_top.dart` | Two cores: core 0 runs the application, core 1 runs a cache and SDRAM worker. MBOX strobes between them, and an MMIO bridge to the SDRAM controller. |
 | `SdramController` | `sdram_controller.dart` | The ULX3S's 16-bit SDRAM: PHY and command state machine. |
 | `ParticleUlx3sTop` | `particle_ulx3s_top.dart` | The ULX3S board design: one core, 64 KiB of `ParticleBlockRamTdp` loaded with a program, the FTDI UART on FIFO channel 0 (1 Mbps) and the GPIO UART on channel 1 (`auxUartDefaultBaud`, 115200), synchronized reset and receive pins, and the LEDs showing the low byte of the fetch address. `FIFO.STAT` gives bit 0 = nothing received, bit 1 = transmitter busy; channels 2 and 3 report both. Each UART holds one received byte and sends one at a time, so a `FIFO.W` while the transmitter is busy is dropped. |
-| `ulx3sBoardVerilog` | `ulx3s_board.dart` | The SystemVerilog top level `ulx3s_board` around `ParticleUlx3sTop`: the ECP5 PLL (25 MHz to the system clock, 50 MHz by default) and the board's pin names. `btn[0]` resets, `ftdi_txd`/`ftdi_rxd` are the FTDI UART, `gp[0]` transmits and `gp[1]` receives for the GPIO UART, and `wifi_gpio0` is held high. Written as text, because ROHD 0.5 has no vendor primitives or bidirectional ports. |
+| `ulx3sBoardVerilog` | `ulx3s_board.dart` | The SystemVerilog top level `ulx3s_board` around `ParticleUlx3sTop`: the ECP5 PLL (25 MHz to the system clock, 35 MHz by default) and the board's pin names. `btn[0]` resets, `ftdi_txd`/`ftdi_rxd` are the FTDI UART, `gp[0]` transmits and `gp[1]` receives for the GPIO UART, and `wifi_gpio0` is held high. Written as text, because ROHD 0.5 has no vendor primitives or bidirectional ports. |
 | `ParticleUartTransceiver` | `uart.dart` | 8-N-1 transmitter and receiver with a configurable baud divisor; holds a received byte until `rxReady`, sampling in the middle of each bit. Used by `ParticleUlx3sTop` and Parcore. |
 | `ParticleFtdiUart`, `ParticleGpioUart` | `ftdi_uart.dart`, `gpio_uart.dart` | Board UART peripherals built on `ParticleUartTransceiver`: the FTDI UART with its divisor fixed by the clock and baud rate (1 Mbps by default), and a GPIO UART whose divisor can be written at run time (`mmioDivisor`, default 217: about 115200 baud at 25 MHz). Not used by the current tops, which instantiate the transceiver directly. |
 

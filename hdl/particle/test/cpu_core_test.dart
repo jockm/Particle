@@ -64,7 +64,7 @@ void main() {
     await h.stop();
   });
 
-  test('Cycle counts: ALU and taken branches 1, LDI 2, loads 2, stores 1',
+  test('Cycle counts: ALU 1, LDI 2, loads 2, stores 1, taken FBRA 2',
       () async {
     final h = CoreHarness(asm('''
 .org 0x100
@@ -73,7 +73,7 @@ void main() {
     LDI     R2, 0x8000      ; 0x104 (2 cycles)
     ST32    (R2), R1        ; 0x108
     LD32    R3, (R2)        ; 0x10A (2 cycles)
-    FBRA    _t              ; 0x10C (taken)
+    FBRA    _t              ; 0x10C (taken, decided in D: 2 cycles)
     ADD     R4, 1
 _t: ADD     R5, 1           ; 0x110
 _h: BBRA    _h              ; 0x112
@@ -90,9 +90,41 @@ _h: BBRA    _h              ; 0x112
     expect(seen[0x108]! - seen[0x104]!, equals(2), reason: 'LDI');
     expect(seen[0x10A]! - seen[0x108]!, equals(1), reason: 'ST32');
     expect(seen[0x10C]! - seen[0x10A]!, equals(2), reason: 'LD32');
-    expect(seen[0x110]! - seen[0x10C]!, equals(1), reason: 'taken FBRA');
+    expect(seen[0x110]! - seen[0x10C]!, equals(2), reason: 'taken FBRA');
     final st = h.snapshot();
     expect(st.reg(3), equals(2));
+    expect(st.reg(4), equals(0));
+    expect(st.reg(5), equals(1));
+    await h.stop();
+  });
+
+  test('Cycle counts: MUL 2, conditional branches 1 or 3, JMP 3', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    ADD     R1, 3           ; 0x100
+    MULL    R1, R1          ; 0x102 (2 cycles)
+    FBRA.Z  R1, _x          ; 0x104 (not taken: 1 cycle)
+    FBRA.NZ R1, _t          ; 0x106 (taken, decided in E: 3 cycles)
+    ADD     R4, 1
+_t: LDI     R6, _j          ; 0x10A
+    JMP     R6, R0          ; 0x10E (3 cycles)
+    ADD     R4, 1
+_j: ADD     R5, 1           ; 0x112
+_h: BBRA    _h              ; 0x114
+_x: BBRA    _x
+'''));
+    await h.start();
+    final seen = <int, int>{};
+    for (var c = 0; c < 30; c++) {
+      if (h.inExec) seen.putIfAbsent(h.pc, () => c);
+      await h.step();
+    }
+    expect(seen[0x104]! - seen[0x102]!, equals(2), reason: 'MULL');
+    expect(seen[0x106]! - seen[0x104]!, equals(1), reason: 'FBRA.Z not taken');
+    expect(seen[0x10A]! - seen[0x106]!, equals(3), reason: 'FBRA.NZ taken');
+    expect(seen[0x112]! - seen[0x10E]!, equals(3), reason: 'JMP');
+    final st = h.snapshot();
+    expect(st.reg(1), equals(9));
     expect(st.reg(4), equals(0));
     expect(st.reg(5), equals(1));
     await h.stop();
