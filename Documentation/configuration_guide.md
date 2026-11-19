@@ -61,7 +61,8 @@ make ulx3s-term                                   # talk to it over the FTDI UAR
 | `make generate-ulx3s` | Builds `ULX3S_PROGRAM` with `pbuild --format hex` into `build/ulx3s/program.hex`, then runs `hdl/particle/bin/generate_ulx3s.dart`. That splits the image into the two block RAM banks (`program_bank0.hex`, `program_bank1.hex`, placed at `0x100`) and writes `particle_ulx3s.sv`, whose top level is `ulx3s_board`. |
 | `make ulx3s-bit` | `generate-ulx3s`, then Yosys (`synth_ecp5`), nextpnr (`--85k --package CABGA381`, pins from `hdl/particle/boards/ulx3s/ulx3s_v20.lpf`) and `ecppack`, in `build/ulx3s`. Prints nextpnr's maximum frequency; the logs are `yosys.log` and `nextpnr.log`. The bitstream is `build/ulx3s/particle_ulx3s.bit`. |
 | `make ulx3s-prog` | Loads the bitstream into the board's FPGA with `openFPGALoader -b ulx3s` (until the next power cycle). |
-| `make ulx3s-term` | Opens the FTDI UART with `screen`: the first `/dev/tty.usbserial-*` or `/dev/ttyUSB*` port, at 1 Mbps (`ULX3S_PORT`, `ULX3S_BAUD`). Ctrl-A then K leaves. |
+| `make ulx3s-flash` | Writes the bitstream to the board's configuration flash (`openFPGALoader -b ulx3s -f`), so it loads at every power-up. |
+| `make ulx3s-term` | Opens the FTDI UART with `hdl/particle/boards/ulx3s/ulx3s_term.py`, a small terminal using only the Python standard library: the first `/dev/cu.usbserial-*` (macOS) or `/dev/ttyUSB*` (Linux) port, at 1 Mbps (`ULX3S_PORT`, `ULX3S_BAUD`). Ctrl-] leaves. |
 
 Variables: `ULX3S_PROGRAM` (default `apps/asm/ulx3s_echo.asm`), `ULX3S_CLOCK_HZ` (default `50000000`; the generator stops if the PLL can't make it exactly from 25 MHz), and `YOSYS`, `NEXTPNR_ECP5`, `ECPPACK`, `OPENFPGALOADER` for the tool commands.
 

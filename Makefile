@@ -75,7 +75,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
-        generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-term firmware apps clean help
+        generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -113,7 +113,8 @@ help:
 	@echo "  make ulx3s-bit        - Synthesize, place and route the ULX3S design (build/ulx3s/particle_ulx3s.bit)"
 	@echo "  make ulx3s-timing     - Show the last ULX3S build's Fmax and critical path (from nextpnr.log)"
 	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
-	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000) with screen"
+	@echo "  make ulx3s-flash      - Write build/ulx3s/particle_ulx3s.bit to the ULX3S flash (kept across power cycles)"
+	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000); Ctrl-] leaves"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
@@ -208,17 +209,27 @@ ulx3s-prog:
 	fi
 	$(OPENFPGALOADER) -b ulx3s "$(ULX3S_BLD)/particle_ulx3s.bit"
 
+# The same, written to the configuration flash: the board loads it at every
+# power-up (until something else is written there)
+ulx3s-flash:
+	@if [ ! -f "$(ULX3S_BLD)/particle_ulx3s.bit" ]; then \
+		echo "[FAIL] $(ULX3S_BLD)/particle_ulx3s.bit not found: run make ulx3s-bit first."; exit 1; \
+	fi
+	$(OPENFPGALOADER) -b ulx3s -f "$(ULX3S_BLD)/particle_ulx3s.bit"
+
 # The FTDI UART: the first USB serial port found, unless ULX3S_PORT is given.
-# In screen, Ctrl-A then K (and y) leaves.
-ULX3S_PORT ?= $(firstword $(wildcard /dev/tty.usbserial-* /dev/ttyUSB*))
+# On macOS that is the call-out device (/dev/cu.*), which opens at once; the
+# /dev/tty.* one waits for a carrier signal the board doesn't send. The
+# terminal is a small Python script (screen can't set 1 Mbps on macOS).
+# Ctrl-] leaves.
+ULX3S_PORT ?= $(firstword $(wildcard /dev/cu.usbserial-* /dev/ttyUSB*))
 ULX3S_BAUD ?= 1000000
 
 ulx3s-term:
 	@if [ -z "$(ULX3S_PORT)" ]; then \
 		echo "[FAIL] No USB serial port found: connect the ULX3S, or give ULX3S_PORT=/dev/..."; exit 1; \
 	fi
-	@echo "==> $(ULX3S_PORT) at $(ULX3S_BAUD) baud (Ctrl-A K to leave)"
-	@screen $(ULX3S_PORT) $(ULX3S_BAUD)
+	@$(PYTHON) $(ROHD_DIR)/boards/ulx3s/ulx3s_term.py $(ULX3S_PORT) $(ULX3S_BAUD)
 
 # ------------------------------------------------------------------------------
 # Verification & Test Suites
