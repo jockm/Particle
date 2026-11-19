@@ -9,6 +9,7 @@ TESTS=(
   "Sub-word Memory"
   "Control Transfer"
   "System & CSR"
+  "FENCE.I"
 )
 
 echo "===================================================="

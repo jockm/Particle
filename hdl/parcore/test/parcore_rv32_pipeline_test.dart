@@ -163,7 +163,6 @@ int main(int argc, char** argv) {
     top->clk = 0;
     top->reset = 1;
     top->uart_rx = 1;
-    top->guest_text_end = 0x00000800;
     top->eval();
 
     // Each TCM is two 16-bit banks: bank 0 holds bits 15:0 of each word,
@@ -499,6 +498,58 @@ void main() {
       expect(regs[9]! & 0xFFFFFFFF, equals(0x12345670), reason: 'csrrwi old val');
       expect(regs[10]! & 0xFFFFFFFF, equals(0x1A), reason: 'csrrsi result');
       expectMatchesReference(res, guestProg, c3Kernel);
+    });
+
+    test('Guest instructions - FENCE.I (code written with SW and SB, then run)', () async {
+      // Writes a routine at 0x900 (addi x5, x0, 0x123 with SW; addi x6, x0,
+      // 0x456 with four SBs; jalr x0, 0(x1) with SW), runs it after FENCE.I,
+      // then replaces its first instruction (addi x5, x0, 0x321) and runs it
+      // again. Core 0 only fetches the new code if core 3 mirrored the stores
+      // into its TCM. The RV32 reference keeps code and data apart, so it
+      // can't check this program.
+      final guestInstructions = <int>[
+0x00001537, // lui x10, 0x1
+        0x90050513, // addi x10, x10, -1792
+        0x123005b7, // lui x11, 0x12300
+        0x29358593, // addi x11, x11, 659
+        0x00b52023, // sw x11, 0(x10)     ; word store
+        0x45600637, // lui x12, 0x45600
+        0x31360613, // addi x12, x12, 787
+        0x00c50223, // sb x12, 4(x10)     ; byte stores
+        0x00865613, // srli x12, x12, 8
+        0x00c502a3, // sb x12, 5(x10)     ; byte stores
+        0x00865613, // srli x12, x12, 8
+        0x00c50323, // sb x12, 6(x10)     ; byte stores
+        0x00865613, // srli x12, x12, 8
+        0x00c503a3, // sb x12, 7(x10)     ; byte stores
+        0x000086b7, // lui x13, 0x8
+        0x06768693, // addi x13, x13, 103
+        0x00d52423, // sw x13, 8(x10)
+        0x0000100f, // fence.i
+        0x000500e7, // jalr x1, 0(x10)    ; x5 = 0x123, x6 = 0x456
+        0x00028493, // addi x9, x5, 0
+        0x321005b7, // lui x11, 0x32100
+        0x29358593, // addi x11, x11, 659
+        0x00b52023, // sw x11, 0(x10)     ; replace code already run
+        0x0000100f, // fence.i
+        0x000500e7, // jalr x1, 0(x10)    ; x5 = 0x321
+        0x07700393, // addi x7, x0, 0x77
+      ];
+      final guestProg = encodeWords(guestInstructions);
+      final res = await runPipeline(
+        c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
+        c1Kernel: c1Kernel,
+        c2Kernel: c2Kernel,
+        c3Kernel: c3Kernel,
+        maxCycles: 20000,
+      );
+      final regs = res.regs;
+      print('FENCE.I test completed in ${res.cycles} cycles');
+      expect(regs[9]! & 0xFFFFFFFF, equals(0x123), reason: 'first run, SW');
+      expect(regs[6]! & 0xFFFFFFFF, equals(0x456), reason: 'first run, SB');
+      expect(regs[5]! & 0xFFFFFFFF, equals(0x321),
+          reason: 'second run sees the replaced instruction');
+      expect(regs[7]! & 0xFFFFFFFF, equals(0x77), reason: 'returned twice');
     });
   });
 }

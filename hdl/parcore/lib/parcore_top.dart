@@ -37,9 +37,6 @@ class ParcoreTop extends Module {
   Logic get spiMosi => output('spi_mosi');
   Logic get spiMiso => input('spi_miso');
 
-  // Runtime guest .text end address (for FENCE.I store-mirror coherence)
-  Logic get guestTextEnd => input('guest_text_end');
-
   // Diagnostic observability
   Logic get branchRedirectStrobe => output('branch_redirect_strobe');
   Logic get branchRedirectVector => output('branch_redirect_vector');
@@ -49,7 +46,6 @@ class ParcoreTop extends Module {
     required Logic reset,
     required Logic uartRx,
     Logic? spiMiso,
-    Logic? guestTextEnd,
     int clkFreqMhz = 25,
     int ftdiBaud = 1000000,
     List<int>? conductorBinary,
@@ -68,7 +64,6 @@ class ParcoreTop extends Module {
     addInput('reset', reset);
     addInput('uart_rx', uartRx);
     addInput('spi_miso', spiMiso ?? Const(0));
-    addInput('guest_text_end', guestTextEnd ?? Const(0, width: 32), width: 32);
 
     addOutput('uart_tx');
     addOutput('spi_cs_n');
@@ -264,6 +259,10 @@ class ParcoreTop extends Module {
     final memToWbData = Logic(name: 'memToWbData', width: 32);
     final memToWbPop = Logic(name: 'memToWbPop');
 
+    final memToIfPush = Logic(name: 'memToIfPush');
+    final memToIfData = Logic(name: 'memToIfData', width: 32);
+    final memToIfPop = Logic(name: 'memToIfPop');
+
     final pipelineFlush = Logic(name: 'pipeline_flush');
     final interconnect = ParcoreInterconnect(
       clk: clk,
@@ -281,6 +280,9 @@ class ParcoreTop extends Module {
       memToWbPush: memToWbPush,
       memToWbData: memToWbData,
       memToWbPop: memToWbPop,
+      memToIfPush: memToIfPush,
+      memToIfData: memToIfData,
+      memToIfPop: memToIfPop,
     );
 
     // -------------------------------------------------------------------------
@@ -330,6 +332,8 @@ class ParcoreTop extends Module {
 
     final uartTxValid = core0.fifoPushEn & core0.fifoChanSelect.eq(Const(0, width: 2));
     c0FifoPopEn <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(0, width: 2));
+    // Channel 2: the stores core 3 mirrors into core 0's guest area
+    memToIfPop <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(2, width: 2));
 
     final ftdiUart = ParticleUartTransceiver(
       clk: clk,
@@ -344,18 +348,23 @@ class ParcoreTop extends Module {
     uartTx <= ftdiUart.output('txPin');
 
     // FIFO.STAT: channel 0 the UART (bit 0: nothing received), channel 1
-    // ifToId (core 0 checks for room before pushing a packet)
+    // ifToId (core 0 checks for room before pushing a packet), channel 2
+    // memToIf
     c0FifoStatus <= mux(
       core0.fifoChanSelect.eq(Const(0, width: 2)),
       [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
-      mux(core0.fifoChanSelect.eq(Const(1, width: 2)),
-          interconnect.ifToIdStatus, Const(0, width: ParticleWidths.word)),
+      mux(
+          core0.fifoChanSelect.eq(Const(1, width: 2)),
+          interconnect.ifToIdStatus,
+          mux(core0.fifoChanSelect.eq(Const(2, width: 2)),
+              interconnect.memToIfStatus, Const(0, width: ParticleWidths.word))),
     );
 
-    c0FifoPopData <= [
-      Const(0, width: 24),
-      ftdiUart.output('rxData'),
-    ].swizzle();
+    c0FifoPopData <= mux(
+      core0.fifoChanSelect.eq(Const(2, width: 2)),
+      interconnect.memToIfOut,
+      [Const(0, width: 24), ftdiUart.output('rxData')].swizzle(),
+    );
 
     // -------------------------------------------------------------------------
     // Core 1: ID & Register Scoreboard
@@ -472,6 +481,9 @@ class ParcoreTop extends Module {
     final c3MemARData = Logic(name: 'c3_mem_a_rdata', width: ParticleWidths.halfWord);
     final c3MemBRData = Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
 
+    // FIFO.STAT: channel 2 memToIf (core 3 waits for room before mirroring
+    // a store), any other channel exToMem
+    final c3FifoStatus = Logic(name: 'c3_fifo_status', width: ParticleWidths.word);
     final core3 = ParticleCpuCore(
       clk: clk,
       reset: reset | condCoreReset.slice(3, 3),
@@ -480,7 +492,7 @@ class ParcoreTop extends Module {
       mboxStrobeIn: Const(0),
       mboxVectorIn: Const(0, width: 4),
       fifoPopData: interconnect.exToMemOut,
-      fifoStatus: interconnect.exToMemStatus,
+      fifoStatus: c3FifoStatus,
       config: ParcoreConfig.core3Mem,
       name: 'core3_mem',
     );
@@ -504,5 +516,9 @@ class ParcoreTop extends Module {
 
     memToWbPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
     memToWbData <= core3.fifoPushData;
+    memToIfPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(2, width: 2));
+    memToIfData <= core3.fifoPushData;
+    c3FifoStatus <= mux(core3.fifoChanSelect.eq(Const(2, width: 2)),
+        interconnect.memToIfStatus, interconnect.exToMemStatus);
   }
 }

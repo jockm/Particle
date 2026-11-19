@@ -671,10 +671,21 @@ _do_auipc:
     JMP     R14, R0
 
 _do_fence_i:
-    LOAD16  R5, _taken_branch
+    ; Like a taken branch to pc + 4, but with MBOX vector 2: core 0's FENCE.I
+    ; handler then waits for core 3's marker, which follows every earlier
+    ; store, so the next instruction is fetched after they are in its TCM.
     LD      R14, R13
     ADD     R14, 4
-    JMP     R5, R0
+    MBOX    R14, 2
+    LD      R14, EX_EPOCH
+    LD32    R6, (R14)
+    LD      R7, 1
+    XOR     R6, R7
+    ST32    (R14), R6
+    ; Send core 3 the FENCE.I item (valid, memory operation 11, no Rd)
+    LOAD32  R10, 0x000B0001
+    LOAD16  R14, _forward_to_mem
+    JMP     R14, R0
 
 _do_mul:
     LD      R15, R11

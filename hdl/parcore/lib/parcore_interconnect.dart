@@ -40,6 +40,12 @@ class ParcoreInterconnect extends Module {
   Logic get memToWbOut => output('memToWbOut');
   Logic get memToWbStatus => output('memToWbStatus');
 
+  Logic get memToIfPush => input('memToIfPush');
+  Logic get memToIfData => input('memToIfData');
+  Logic get memToIfPop => input('memToIfPop');
+  Logic get memToIfOut => output('memToIfOut');
+  Logic get memToIfStatus => output('memToIfStatus');
+
   ParcoreInterconnect({
     required Logic clk,
     required Logic reset,
@@ -56,6 +62,9 @@ class ParcoreInterconnect extends Module {
     required Logic memToWbPush,
     required Logic memToWbData,
     required Logic memToWbPop,
+    required Logic memToIfPush,
+    required Logic memToIfData,
+    required Logic memToIfPop,
     super.name = 'parcore_interconnect',
   }) {
     addInput('clk', clk);
@@ -85,6 +94,12 @@ class ParcoreInterconnect extends Module {
     addInput('memToWbPop', memToWbPop);
     addOutput('memToWbOut', width: 32);
     addOutput('memToWbStatus', width: 32);
+
+    addInput('memToIfPush', memToIfPush);
+    addInput('memToIfData', memToIfData, width: 32);
+    addInput('memToIfPop', memToIfPop);
+    addOutput('memToIfOut', width: 32);
+    addOutput('memToIfStatus', width: 32);
 
     _build();
   }
@@ -144,5 +159,20 @@ class ParcoreInterconnect extends Module {
     );
     memToWbOut <= fifo3to1.popData;
     memToWbStatus <= fifo3to1.statusWord;
+
+    // Guest stores into core 0's guest area, and FENCE.I markers, from core 3
+    // to core 0. Not flushed: a mirrored store is never wrong-path.
+    final fifo3to0 = ParticleFifoSubsystem(
+      clk: clk,
+      reset: reset,
+      chanSelect: Const(0, width: 2),
+      pushData: memToIfData,
+      pushEn: memToIfPush,
+      popEn: memToIfPop,
+      channels: 1,
+      name: 'parcore_fifo_mem_to_if',
+    );
+    memToIfOut <= fifo3to0.popData;
+    memToIfStatus <= fifo3to0.statusWord;
   }
 }

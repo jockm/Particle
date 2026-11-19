@@ -23,7 +23,6 @@ Future<({int x31, int gp, int a0, int cycles})> _runVerilatorSynth(
   List<int> c1Kernel,
   List<int> c2Kernel,
   Uint8List c3Merged,
-  int guestTextEndAddr,
   int maxCycles,
 ) async {
   final tmpDir = Directory('/tmp/parcore_verilator');
@@ -51,15 +50,10 @@ int main(int argc, char** argv) {
     VParcoreTop* top = new VParcoreTop;
     int max_cycles = 150000;
     if (const char* mc = std::getenv("MAX_CYCLES")) max_cycles = std::atoi(mc);
-    uint32_t guest_text_end = 0x00000800;
-    if (const char* ge = std::getenv("GUEST_TEXT_END")) {
-        guest_text_end = static_cast<uint32_t>(std::strtoul(ge, nullptr, 10));
-    }
 
     top->clk = 0;
     top->reset = 1;
     top->uart_rx = 1;
-    top->guest_text_end = guest_text_end;
     top->eval();
 
     // Core 1's TCM is two 16-bit banks: bank 0 = bits 15:0 of each word
@@ -148,7 +142,7 @@ int main(int argc, char** argv) {
   final runRes = Process.runSync(
     binFile.path,
     const [],
-    environment: {'MAX_CYCLES': '$maxCycles', 'GUEST_TEXT_END': '$guestTextEndAddr'},
+    environment: {'MAX_CYCLES': '$maxCycles'},
   );
   final out = '${runRes.stdout}';
   final m = RegExp(r'RESULT x31=0x([0-9a-fA-F]+) gp=(\d+) a0=0x([0-9a-fA-F]+) cyc=(\d+)').firstMatch(out);
@@ -164,10 +158,7 @@ int main(int argc, char** argv) {
 }
 
 /// Tests that can't pass yet, with the reason.
-const _knownGaps = {
-  'rv32ui/fence_i': 'needs FENCE.I coherence: guest stores (core 3) do not '
-      'reach the instructions core 0 fetches',
-};
+const _knownGaps = <String, String>{};
 
 void main() {
   tearDown(() async {
@@ -280,7 +271,6 @@ void main() {
               core1Binary: c1Kernel,
               core2Binary: c2Kernel,
               core3Binary: c3Merged,
-              guestTextEnd: Const(0x0500 + textBytes.length, width: 32),
               tcmInitDir: '/tmp/parcore_verilator',
             );
             await top.build();
@@ -292,7 +282,6 @@ void main() {
                 c1Kernel,
                 c2Kernel,
                 c3Merged,
-                0x0500 + textBytes.length,
                 450000,
               );
               stderr.writeln(

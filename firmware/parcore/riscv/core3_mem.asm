@@ -5,10 +5,26 @@
 ; ==============================================================================
 .include "lib/vectors.inc"
 
+; FENCE.I coherence: core 0 fetches guest instructions from its own TCM, so
+; every guest store into core 0's guest area (GUEST_AREA_START up to
+; GUEST_AREA_END, the end of core 0's TCM) is also sent to core 0 on channel 2
+; (memToIf), which writes it into its TCM. An entry is one word, so an MBOX
+; can't split it:
+;   [31:16] data, [14:13] kind (1 byte, 2 halfword, 3 FENCE.I marker),
+;   [12:0] address
+; A word store is sent as two halfword entries. After all the stores before
+; it, a FENCE.I sends the marker, which core 0's FENCE.I handler waits for.
+.define GUEST_AREA_START 0x0500     ; _mirror_store tests address >> 8 >= 5
+.define GUEST_AREA_END   0x2000     ; and address >> 13 == 0
+.define MIRROR_BYTE      0x2000     ; kind 1 << 13
+.define MIRROR_HALF      0x4000     ; kind 2 << 13
+.define MIRROR_MARKER    0x6000     ; kind 3 << 13
+
     VECTOR_TABLE _reset_vector
 _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 2 (EX)
     LD      R2, 1               ; FIFO Ch1: Outbound WB to Core 1 (memToWb)
+    LD      R7, 2               ; FIFO Ch2: Outbound store mirror to Core 0 (memToIf)
 
 ; ==============================================================================
 ; Main Memory Pipeline Loop
@@ -85,8 +101,18 @@ _chk_sw:
     LOAD16  R5, 10
     LD      R6, R3
     SUB     R6, R5
-    FBRA.NZ R6, _chk_loads
+    FBRA.NZ R6, _chk_fence_i
     LOAD16  R14, _do_sw
+    JMP     R14, R0
+
+_chk_fence_i:
+    ; 11: FENCE.I. No writeback (core 1 counts no destination for it).
+    LOAD16  R5, 11
+    LD      R6, R3
+    SUB     R6, R5
+    FBRA.NZ R6, _chk_loads
+    LOAD16  R9, MIRROR_MARKER
+    LOAD16  R14, _mirror_push
     JMP     R14, R0
 
 _chk_loads:
@@ -135,20 +161,81 @@ _mem_drop:
 _do_sb:
     ; Byte store: ST8 to effective address
     ST8     (R12), R13
-    LOAD16  R14, _mem_main_loop
+    LOAD16  R8, MIRROR_BYTE
+    LOAD16  R14, _mirror_store
     JMP     R14, R0
 
 _do_sh:
     ; Halfword store: ST16 to effective address
     ST16    (R12), R13
-    LOAD16  R14, _mem_main_loop
+    LOAD16  R8, MIRROR_HALF
+    LOAD16  R14, _mirror_store
     JMP     R14, R0
 
 _do_sw:
-    ; Word store: ST32 to effective address
+    ; Word store: ST32 to effective address. Mirrored as two halfwords: the
+    ; low one here, the high one at address + 2 by _mirror_store.
     ST32    (R12), R13
+    LOAD16  R8, MIRROR_HALF
+    OR      R8, 1               ; bit 0: a word store
+    LOAD16  R14, _mirror_store
+    JMP     R14, R0
+
+; ==============================================================================
+; Store mirror (FENCE.I coherence): R12 address, R13 data, R8 kind (bit 0 set
+; for a word store). Stores outside core 0's guest area aren't sent.
+; ==============================================================================
+_mirror_store:
+    ; In range when address >> 13 is 0 (below GUEST_AREA_END) and
+    ; address >> 8 is at least 5 (GUEST_AREA_START). The tests use R14, the
+    ; register with the longer branch form.
+    LD      R14, R12
+    SHIFTR  R14, 13
+    FBRA.NZ R14, ._outside
+    LD      R14, R12
+    SHIFTR  R14, 8
+    SUB     R14, 5
+    FBRA.N  R14, ._outside
+    LD      R9, R13
+    SHIFTL  R9, 8
+    SHIFTL  R9, 8               ; low halfword of the data into [31:16]
+    OR      R9, R12             ; address into [12:0]
+    LD      R14, R8
+    AND     R14, 1
+    XOR     R8, R14             ; kind without the word-store bit
+    OR      R9, R8
+    FBRA.Z  R14, _mirror_push
+    ; Word store: the low halfword now, then the high one at address + 2
+    LOAD16  R5, _mirror_wait
+    JMP     R5, R15
+    FIFO.W  R9, R7
+    LD      R9, R13
+    LOAD32  R5, 0xFFFF0000
+    AND     R9, R5              ; high halfword of the data in [31:16]
+    OR      R9, R12
+    ADD     R9, 2
+    OR      R9, R8
+    LOAD16  R14, _mirror_push
+    JMP     R14, R0
+._outside:
     LOAD16  R14, _mem_main_loop
     JMP     R14, R0
+
+; Push the entry in R9 once memToIf has room, then go back to the main loop
+_mirror_push:
+    LOAD16  R5, _mirror_wait
+    JMP     R5, R15
+    FIFO.W  R9, R7
+    LOAD16  R14, _mem_main_loop
+    JMP     R14, R0
+
+; Wait while memToIf holds 128 words or more (core 0 drains it); returns to
+; the address in R15
+_mirror_wait:
+    FIFO.STAT R6, R7
+    SHIFTR  R6, 15              ; depth[7]
+    BBRA.NZ R6, _mirror_wait
+    JMP     R15, R0
 
 ; ==============================================================================
 ; Load Operations (LB, LH, LW, LBU, LHU)
