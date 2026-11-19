@@ -6,7 +6,7 @@
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
-import 'uart_engine.dart';
+import 'uart.dart';
 
 class ParticleGpioUart extends Module {
   Logic get clk => input('clk');
@@ -21,6 +21,7 @@ class ParticleGpioUart extends Module {
   Logic get txValid => input('txValid');
   Logic get txReady => output('txReady');
 
+  // rxValid is high while a received byte waits; rxReady pops it
   Logic get rxData => output('rxData');
   Logic get rxValid => output('rxValid');
   Logic get rxReady => input('rxReady');
@@ -69,7 +70,7 @@ class ParticleGpioUart extends Module {
       ]),
     ]);
 
-    final engine = ParticleUartEngine(
+    final engine = ParticleUartTransceiver(
       clk: clk,
       reset: reset,
       rxPin: gpioRxPin,
