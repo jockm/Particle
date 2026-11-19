@@ -54,6 +54,10 @@ class ParticleCpuCore extends Module {
 
   final CpuConfig config;
 
+  /// The register file and the program counter, for tests and debugging.
+  late final RegisterFile registerFile;
+  late final Logic pcReg;
+
   ParticleCpuCore({
     required Logic clk,
     required Logic reset,
@@ -109,25 +113,32 @@ class ParticleCpuCore extends Module {
   }
 
   void _build() {
-    const int stateFetch = 0;
-    const int stateExec = 1;
-    const int stateWait = 2;
-    const int stateFetchImm = 3;
+    // -------------------------------------------------------------------------
+    // States. Memory is synchronous: an address presented in one cycle gives
+    // its data in the next. Exec presents the address of the next instruction
+    // (or of the LDI immediate), so most instructions take one cycle.
+    // -------------------------------------------------------------------------
+    const sBoot = 0; // after reset: the first fetch is in flight
+    const sExec = 1; // memPortARData holds the instruction at pc
+    const sImm = 2; // memPortARData holds the LDI/LDIS immediate (pc + 2)
+    const sLoadWB = 3; // memPortBRData holds a load's (or TAS's) data
+    const sDivWait = 4; // a DIV/MOD is running
+
+    final trapBase = config.trapTableBase;
+    final strideShift = (config.trapStrideBytes - 1).bitLength;
+    if (config.trapStrideBytes != 1 << strideShift) {
+      throw ArgumentError('trapStrideBytes must be a power of two');
+    }
+    Logic vectorAddr(Logic vec) =>
+        Const(trapBase, width: 32) + (vec.zeroExtend(32) << strideShift);
 
     final pc = Logic(name: 'pc', width: ParticleWidths.word);
-    final nextPc = Logic(name: 'nextPc', width: ParticleWidths.word);
-    final state = Logic(name: 'state', width: 2);
-    final inFetchImm = state.eq(stateFetchImm);
-    final immDestReg = Logic(name: 'immDestReg', width: 4);
-    final immIsSigned = Logic(name: 'immIsSigned');
-
-    final outMemBREn = Logic(name: 'outMemBREn');
-    final outMemBWEn = Logic(name: 'outMemBWEn');
-    final outMemBAddr = Logic(name: 'outMemBAddr', width: ParticleWidths.word);
-    final outMemBWData = Logic(name: 'outMemBWData', width: ParticleWidths.word);
-    final outMemBBEn = Logic(name: 'outMemBBEn', width: ParticleWidths.byteEnable);
-
-    memPortAAddr <= mux(state.eq(stateFetchImm), pc + 2, pc);
+    pcReg = pc;
+    final state = Logic(name: 'state', width: 3);
+    final inExec = state.eq(Const(sExec, width: 3));
+    final inImm = state.eq(Const(sImm, width: 3));
+    final inLoadWB = state.eq(Const(sLoadWB, width: 3));
+    final inDivWait = state.eq(Const(sDivWait, width: 3));
 
     final inst = memPortARData;
     final opcode = inst.slice(15, 8);
@@ -135,707 +146,719 @@ class ParticleCpuCore extends Module {
     final rl = inst.slice(3, 0);
     final imm4 = inst.slice(3, 0);
     final imm8 = inst.slice(7, 0);
-
     final imm4Val = imm4.zeroExtend(32);
+    final imm4SVal = imm4.signExtend(32);
     final negImm4Val = Const(0, width: 32) - imm4Val;
     final imm8Val = imm8.zeroExtend(32);
     final negImm8Val = Const(0, width: 32) - imm8Val;
 
+    Logic op(int code) => opcode.eq(Const(code, width: 8));
+    Logic anyOp(List<int> codes) =>
+        codes.map(op).reduce((a, b) => a | b);
+
+    // -------------------------------------------------------------------------
+    // Register file: read A = Rr (or R14 for the R14 forms), read B = Rl
+    // -------------------------------------------------------------------------
+    final readsR14 = anyOp([
+      ParticleOpcodes.push8,
+      ParticleOpcodes.sltR14Imm8,
+      ParticleOpcodes.sltR14NegImm8,
+      ParticleOpcodes.ssltR14Imm8,
+      ParticleOpcodes.ssltR14NegImm8,
+      ParticleOpcodes.fbraZImm8,
+      ParticleOpcodes.fbraNImm8,
+      ParticleOpcodes.fbraPImm8,
+      ParticleOpcodes.fbraNZImm8,
+      ParticleOpcodes.bbraZImm8,
+      ParticleOpcodes.bbraNImm8,
+      ParticleOpcodes.bbraPImm8,
+      ParticleOpcodes.bbraNZImm8,
+    ]);
+    final rAddrA = mux(readsR14, Const(14, width: 4), rr);
+
     final rfWEn = Logic(name: 'rfWEn');
     final rfWAddr = Logic(name: 'rfWAddr', width: 4);
     final rfWData = Logic(name: 'rfWData', width: 32);
+    final rfWEn2 = Logic(name: 'rfWEn2');
+    final rfWAddr2 = Logic(name: 'rfWAddr2', width: 4);
+    final rfWData2 = Logic(name: 'rfWData2', width: 32);
     final rfXchgEn = Logic(name: 'rfXchgEn');
     final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
     final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
-    final rfXchgRegIdx = Logic(name: 'rfXchgRegIdx', width: 4);
     final rfRbaseEn = Logic(name: 'rfRbaseEn');
     final rfRbaseIn = Logic(name: 'rfRbaseIn', width: 5);
-
-    final isPushAccum = opcode.eq(Const(ParticleOpcodes.push4, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.push8, width: 8));
-    final effRAddrA = mux(isPushAccum, Const(14, width: 4), rr);
 
     final rf = RegisterFile(
       clk: clk,
       reset: reset,
-      rAddrA: effRAddrA,
+      rAddrA: rAddrA,
       rAddrB: rl,
       wAddr: rfWAddr,
       wData: rfWData,
       wEn: rfWEn,
+      wAddr2: rfWAddr2,
+      wData2: rfWData2,
+      wEn2: rfWEn2,
       xchgEn: rfXchgEn,
       xchgAllEn: rfXchgAllEn,
       xchgMostEn: rfXchgMostEn,
-      xchgRegIdx: rfXchgRegIdx,
+      xchgRegIdx: rr,
       rbaseEn: rfRbaseEn,
       rbaseIn: rfRbaseIn,
     );
+    registerFile = rf;
+    final valA = rf.rDataA;
+    final valB = rf.rDataB;
 
+    // -------------------------------------------------------------------------
+    // ALU
+    // -------------------------------------------------------------------------
     final aluOp = Logic(name: 'aluOp', width: 5);
+    final aluOperandA = mux(op(ParticleOpcodes.clz), valB, valA);
     final aluOperandB = Logic(name: 'aluOperandB', width: 32);
+
+    CaseItem alu(int code, int aluCode, [Logic? operandB]) =>
+        CaseItem(Const(code, width: 8), [
+          aluOp < Const(aluCode, width: 5),
+          if (operandB != null) aluOperandB < operandB,
+        ]);
 
     Combinational([
       aluOp < Const(AluOps.add, width: 5),
-      aluOperandB < rf.rDataB,
+      aluOperandB < valB,
       Case(opcode, [
-        // Arithmetic
-        CaseItem(Const(ParticleOpcodes.add, width: 8),
-            [aluOp < Const(AluOps.add, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.sub, width: 8),
-            [aluOp < Const(AluOps.sub, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.addImm4, width: 8),
-            [aluOp < Const(AluOps.add, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.subImm4, width: 8),
-            [aluOp < Const(AluOps.sub, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.saddImm4, width: 8), [
-          aluOp < Const(AluOps.add, width: 5),
-          aluOperandB < imm4.signExtend(32)
-        ]),
-        CaseItem(Const(ParticleOpcodes.ssubImm4, width: 8), [
-          aluOp < Const(AluOps.sub, width: 5),
-          aluOperandB < imm4.signExtend(32)
-        ]),
-
-        // Logic & Inversions
-        CaseItem(Const(ParticleOpcodes.notOp, width: 8),
-            [aluOp < Const(AluOps.not, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.nezOp, width: 8),
-            [aluOp < Const(AluOps.nez, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.andOp, width: 8),
-            [aluOp < Const(AluOps.and, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.orOp, width: 8),
-            [aluOp < Const(AluOps.or, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.xorOp, width: 8),
-            [aluOp < Const(AluOps.xor, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.andImm4, width: 8),
-            [aluOp < Const(AluOps.and, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.orImm4, width: 8),
-            [aluOp < Const(AluOps.or, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.xorImm4, width: 8),
-            [aluOp < Const(AluOps.xor, width: 5), aluOperandB < imm4Val]),
-
-        // Shifts & Rotates
-        CaseItem(Const(ParticleOpcodes.shiftL, width: 8),
-            [aluOp < Const(AluOps.shiftl, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.shiftR, width: 8),
-            [aluOp < Const(AluOps.shiftr, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.ashiftR, width: 8),
-            [aluOp < Const(AluOps.ashiftr, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.rotL, width: 8),
-            [aluOp < Const(AluOps.rotl, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.rotR, width: 8),
-            [aluOp < Const(AluOps.rotr, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.shiftLImm4, width: 8),
-            [aluOp < Const(AluOps.shiftl, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.shiftRImm4, width: 8),
-            [aluOp < Const(AluOps.shiftr, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.ashiftRImm4, width: 8),
-            [aluOp < Const(AluOps.ashiftr, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.rotLImm4, width: 8),
-            [aluOp < Const(AluOps.rotl, width: 5), aluOperandB < imm4Val]),        // Shifts & Rotates Immediate
-        CaseItem(Const(ParticleOpcodes.rotRImm4, width: 8),
-            [aluOp < Const(AluOps.rotr, width: 5), aluOperandB < imm4Val]),
-
-        // 4.6 Bit Manipulation & System Operations (0x80 - 0x8C)
-        CaseItem(Const(ParticleOpcodes.bextr, width: 8),
-            [aluOp < Const(AluOps.bextr, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.clz, width: 8),
-            [aluOp < Const(AluOps.clz, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.bset, width: 8),
-            [aluOp < Const(AluOps.bset, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.bsetImm4, width: 8),
-            [aluOp < Const(AluOps.bset, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.bclr, width: 8),
-            [aluOp < Const(AluOps.bclr, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.bclrImm4, width: 8),
-            [aluOp < Const(AluOps.bclr, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.binv, width: 8),
-            [aluOp < Const(AluOps.binv, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.binvImm4, width: 8),
-            [aluOp < Const(AluOps.binv, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.bget, width: 8),
-            [aluOp < Const(AluOps.bget, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.bgetImm4, width: 8),
-            [aluOp < Const(AluOps.bget, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.rev32, width: 8),
-            [aluOp < Const(AluOps.rev32, width: 5)]),
-
-        // Relational Comparisons
-        CaseItem(Const(ParticleOpcodes.slt, width: 8),
-            [aluOp < Const(AluOps.slt, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.sltImm4, width: 8),
-            [aluOp < Const(AluOps.slt, width: 5), aluOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.sltNegImm4, width: 8),
-            [aluOp < Const(AluOps.slt, width: 5), aluOperandB < negImm4Val]),
-        CaseItem(Const(ParticleOpcodes.sltR14Imm8, width: 8),
-            [aluOp < Const(AluOps.slt, width: 5), aluOperandB < imm8Val]),
-        CaseItem(Const(ParticleOpcodes.sltR14NegImm8, width: 8),
-            [aluOp < Const(AluOps.slt, width: 5), aluOperandB < negImm8Val]),
-        CaseItem(Const(ParticleOpcodes.sslt, width: 8),
-            [aluOp < Const(AluOps.sslt, width: 5)]),
-        CaseItem(Const(ParticleOpcodes.ssltImm4, width: 8), [
-          aluOp < Const(AluOps.sslt, width: 5),
-          aluOperandB < imm4.signExtend(32)
-        ]),
-        CaseItem(Const(ParticleOpcodes.ssltNegImm4, width: 8),
-            [aluOp < Const(AluOps.sslt, width: 5), aluOperandB < negImm4Val]),
-        CaseItem(Const(ParticleOpcodes.ssltR14Imm8, width: 8), [
-          aluOp < Const(AluOps.sslt, width: 5),
-          aluOperandB < imm8.signExtend(32)
-        ]),
-        CaseItem(Const(ParticleOpcodes.ssltR14NegImm8, width: 8),
-            [aluOp < Const(AluOps.sslt, width: 5), aluOperandB < negImm8Val]),
+        alu(ParticleOpcodes.add, AluOps.add),
+        alu(ParticleOpcodes.sub, AluOps.sub),
+        alu(ParticleOpcodes.addImm4, AluOps.add, imm4Val),
+        alu(ParticleOpcodes.subImm4, AluOps.sub, imm4Val),
+        alu(ParticleOpcodes.neg, AluOps.neg),
+        alu(ParticleOpcodes.sadd, AluOps.add),
+        alu(ParticleOpcodes.ssub, AluOps.sub),
+        alu(ParticleOpcodes.saddImm4, AluOps.add, imm4SVal),
+        alu(ParticleOpcodes.ssubImm4, AluOps.sub, imm4SVal),
+        alu(ParticleOpcodes.notOp, AluOps.not),
+        alu(ParticleOpcodes.nezOp, AluOps.nez),
+        alu(ParticleOpcodes.andOp, AluOps.and),
+        alu(ParticleOpcodes.orOp, AluOps.or),
+        alu(ParticleOpcodes.xorOp, AluOps.xor),
+        alu(ParticleOpcodes.andImm4, AluOps.and, imm4Val),
+        alu(ParticleOpcodes.orImm4, AluOps.or, imm4Val),
+        alu(ParticleOpcodes.xorImm4, AluOps.xor, imm4Val),
+        alu(ParticleOpcodes.shiftL, AluOps.shiftl),
+        alu(ParticleOpcodes.shiftR, AluOps.shiftr),
+        alu(ParticleOpcodes.ashiftR, AluOps.ashiftr),
+        alu(ParticleOpcodes.rotL, AluOps.rotl),
+        alu(ParticleOpcodes.rotR, AluOps.rotr),
+        alu(ParticleOpcodes.shiftLImm4, AluOps.shiftl, imm4Val),
+        alu(ParticleOpcodes.shiftRImm4, AluOps.shiftr, imm4Val),
+        alu(ParticleOpcodes.ashiftRImm4, AluOps.ashiftr, imm4Val),
+        alu(ParticleOpcodes.rotLImm4, AluOps.rotl, imm4Val),
+        alu(ParticleOpcodes.rotRImm4, AluOps.rotr, imm4Val),
+        alu(ParticleOpcodes.sext8, AluOps.sext8),
+        alu(ParticleOpcodes.sext16, AluOps.sext16),
+        alu(ParticleOpcodes.bextr, AluOps.bextr),
+        alu(ParticleOpcodes.clz, AluOps.clz),
+        alu(ParticleOpcodes.bset, AluOps.bset),
+        alu(ParticleOpcodes.bsetImm4, AluOps.bset, imm4Val),
+        alu(ParticleOpcodes.bclr, AluOps.bclr),
+        alu(ParticleOpcodes.bclrImm4, AluOps.bclr, imm4Val),
+        alu(ParticleOpcodes.binv, AluOps.binv),
+        alu(ParticleOpcodes.binvImm4, AluOps.binv, imm4Val),
+        alu(ParticleOpcodes.bget, AluOps.bget),
+        alu(ParticleOpcodes.bgetImm4, AluOps.bget, imm4Val),
+        alu(ParticleOpcodes.rev32, AluOps.rev32),
+        alu(ParticleOpcodes.slt, AluOps.slt),
+        alu(ParticleOpcodes.sltImm4, AluOps.slt, imm4Val),
+        alu(ParticleOpcodes.sltNegImm4, AluOps.slt, negImm4Val),
+        alu(ParticleOpcodes.sltR14Imm8, AluOps.slt, imm8Val),
+        alu(ParticleOpcodes.sltR14NegImm8, AluOps.slt, negImm8Val),
+        alu(ParticleOpcodes.sslt, AluOps.sslt),
+        alu(ParticleOpcodes.ssltImm4, AluOps.sslt, imm4SVal),
+        alu(ParticleOpcodes.ssltNegImm4, AluOps.sslt, negImm4Val),
+        alu(ParticleOpcodes.ssltR14Imm8, AluOps.sslt, imm8.signExtend(32)),
+        alu(ParticleOpcodes.ssltR14NegImm8, AluOps.sslt, negImm8Val),
+        alu(ParticleOpcodes.seq, AluOps.seq),
+        alu(ParticleOpcodes.sne, AluOps.sne),
+        alu(ParticleOpcodes.sle, AluOps.sle),
+        alu(ParticleOpcodes.ssle, AluOps.ssle),
       ]),
     ]);
 
-    final alu = ParticleAlu(
-      operandA: rf.rDataA,
+    final aluUnit = ParticleAlu(
+      operandA: aluOperandA,
       operandB: aluOperandB,
       aluOp: aluOp,
     );
 
-    final mulMode = Logic(name: 'mulMode', width: 2);
-    final mulOperandB = Logic(name: 'mulOperandB', width: 32);
+    // Ops whose result is the ALU result, written to Rr (or R14)
+    final aluWritesRr = anyOp([
+      ParticleOpcodes.add, ParticleOpcodes.sub, ParticleOpcodes.addImm4,
+      ParticleOpcodes.subImm4, ParticleOpcodes.neg, ParticleOpcodes.sadd,
+      ParticleOpcodes.ssub, ParticleOpcodes.saddImm4, ParticleOpcodes.ssubImm4,
+      ParticleOpcodes.notOp, ParticleOpcodes.nezOp, ParticleOpcodes.andOp,
+      ParticleOpcodes.orOp, ParticleOpcodes.xorOp, ParticleOpcodes.andImm4,
+      ParticleOpcodes.orImm4, ParticleOpcodes.xorImm4, ParticleOpcodes.shiftL,
+      ParticleOpcodes.shiftR, ParticleOpcodes.ashiftR, ParticleOpcodes.rotL,
+      ParticleOpcodes.rotR, ParticleOpcodes.shiftLImm4,
+      ParticleOpcodes.shiftRImm4, ParticleOpcodes.ashiftRImm4,
+      ParticleOpcodes.rotLImm4, ParticleOpcodes.rotRImm4, ParticleOpcodes.sext8,
+      ParticleOpcodes.sext16, ParticleOpcodes.bextr, ParticleOpcodes.clz,
+      ParticleOpcodes.bset, ParticleOpcodes.bsetImm4, ParticleOpcodes.bclr,
+      ParticleOpcodes.bclrImm4, ParticleOpcodes.binv, ParticleOpcodes.binvImm4,
+      ParticleOpcodes.bget, ParticleOpcodes.bgetImm4, ParticleOpcodes.rev32,
+      ParticleOpcodes.slt, ParticleOpcodes.sltImm4, ParticleOpcodes.sltNegImm4,
+      ParticleOpcodes.sslt, ParticleOpcodes.ssltImm4,
+      ParticleOpcodes.ssltNegImm4, ParticleOpcodes.seq, ParticleOpcodes.sne,
+      ParticleOpcodes.sle, ParticleOpcodes.ssle,
+    ]);
+    final aluWritesR14 = anyOp([
+      ParticleOpcodes.sltR14Imm8, ParticleOpcodes.sltR14NegImm8,
+      ParticleOpcodes.ssltR14Imm8, ParticleOpcodes.ssltR14NegImm8,
+    ]);
 
+    // -------------------------------------------------------------------------
+    // Multiplier (when enabled)
+    // -------------------------------------------------------------------------
+    const mulOps = [
+      ParticleOpcodes.mull, ParticleOpcodes.mulh, ParticleOpcodes.smulh,
+      ParticleOpcodes.mulhsu, ParticleOpcodes.mullImm4,
+      ParticleOpcodes.mulhImm4, ParticleOpcodes.smulhImm4,
+      ParticleOpcodes.mulhsuImm4,
+    ];
+    final isMulOp = anyOp(mulOps);
+    Logic mulResult = Const(0, width: 32);
+    if (config.enableMultiplier) {
+      final mulMode = Logic(name: 'mulMode', width: 2);
+      final mulOperandB = Logic(name: 'mulOperandB', width: 32);
+      Combinational([
+        mulMode < Const(0, width: 2),
+        mulOperandB < valB,
+        Case(opcode, [
+          CaseItem(Const(ParticleOpcodes.mulh, width: 8),
+              [mulMode < Const(1, width: 2)]),
+          CaseItem(Const(ParticleOpcodes.smulh, width: 8),
+              [mulMode < Const(2, width: 2)]),
+          CaseItem(Const(ParticleOpcodes.mulhsu, width: 8),
+              [mulMode < Const(3, width: 2)]),
+          CaseItem(Const(ParticleOpcodes.mullImm4, width: 8),
+              [mulOperandB < imm4Val]),
+          CaseItem(Const(ParticleOpcodes.mulhImm4, width: 8),
+              [mulMode < Const(1, width: 2), mulOperandB < imm4Val]),
+          CaseItem(Const(ParticleOpcodes.smulhImm4, width: 8),
+              [mulMode < Const(2, width: 2), mulOperandB < imm4SVal]),
+          CaseItem(Const(ParticleOpcodes.mulhsuImm4, width: 8),
+              [mulMode < Const(3, width: 2), mulOperandB < imm4Val]),
+        ]),
+      ]);
+      mulResult = ParticleMultiplier(
+        operandA: valA,
+        operandB: mulOperandB,
+        mulMode: mulMode,
+      ).result;
+    }
+
+    // -------------------------------------------------------------------------
+    // Divider (when enabled)
+    // -------------------------------------------------------------------------
+    const divOps = [
+      ParticleOpcodes.div, ParticleOpcodes.mod, ParticleOpcodes.divImm4,
+      ParticleOpcodes.modImm4, ParticleOpcodes.sdiv, ParticleOpcodes.smod,
+      ParticleOpcodes.sdivImm4, ParticleOpcodes.smodImm4,
+    ];
+    final isDivOp = anyOp(divOps);
+    final isRemOp = anyOp([
+      ParticleOpcodes.mod, ParticleOpcodes.modImm4,
+      ParticleOpcodes.smod, ParticleOpcodes.smodImm4,
+    ]);
+    final divStart = Logic(name: 'divStart');
+    final divAbort = Logic(name: 'divAbort');
+    Logic divDone = Const(0);
+    Logic divResult = Const(0, width: 32);
+    if (config.enableDivider) {
+      final isSignedDiv = anyOp([
+        ParticleOpcodes.sdiv, ParticleOpcodes.smod,
+        ParticleOpcodes.sdivImm4, ParticleOpcodes.smodImm4,
+      ]);
+      final divisor = mux(
+        anyOp([ParticleOpcodes.divImm4, ParticleOpcodes.modImm4]),
+        imm4Val,
+        mux(anyOp([ParticleOpcodes.sdivImm4, ParticleOpcodes.smodImm4]),
+            imm4SVal, valB),
+      );
+      final divider = ParticleDivider(
+        clk: clk,
+        reset: reset,
+        start: divStart,
+        abort: divAbort,
+        isSigned: isSignedDiv,
+        dividend: valA,
+        divisor: divisor,
+      );
+      divDone = divider.done;
+      divResult = mux(isRemOp, divider.remainder, divider.quotient);
+    }
+
+    // -------------------------------------------------------------------------
+    // Loads and stores
+    // -------------------------------------------------------------------------
+    final group = opcode.slice(7, 4);
+    final mode = opcode.slice(3, 0);
+    final isMemGroup = group.eq(Const(1, width: 4)) |
+        group.eq(Const(2, width: 4)) |
+        group.eq(Const(3, width: 4));
+    final isLoadOp = isMemGroup & mode.lte(Const(4, width: 4));
+    final isStoreOp = isMemGroup &
+        mode.gte(Const(5, width: 4)) &
+        mode.lte(Const(9, width: 4));
+    final isTas = op(ParticleOpcodes.tas);
+    // Size in bytes: 1, 2 or 4
+    final size = mux(group.eq(Const(1, width: 4)), Const(1, width: 32),
+        mux(group.eq(Const(2, width: 4)), Const(2, width: 32), Const(4, width: 32)));
+    // Load modes 1..4 and store modes 6..9 change the pointer register
+    final modeOfs = mux(isStoreOp, mode - Const(5, width: 4), mode);
+    final ptrMode = (isLoadOp | isStoreOp) & ~modeOfs.eq(Const(0, width: 4));
+    final preMode = modeOfs.eq(Const(1, width: 4)) | modeOfs.eq(Const(3, width: 4));
+    final incMode = modeOfs.eq(Const(1, width: 4)) | modeOfs.eq(Const(2, width: 4));
+    final ptrVal = mux(isStoreOp, valA, valB); // loads: (Rl); stores: (Rr)
+    final ptrReg = mux(isStoreOp, rr, rl);
+    final newPtr = mux(incMode, ptrVal + size, ptrVal - size);
+    final effAddr = mux(isTas, valA, mux(preMode, newPtr, ptrVal));
+    // A store through its own pointer (Rr == Rl) stores the updated pointer
+    final storeVal = mux(ptrMode & rr.eq(rl), newPtr, valB);
+    final isSize2 = group.eq(Const(2, width: 4));
+    final isSize4 = group.eq(Const(3, width: 4)) | isTas;
+    final memAccess = isLoadOp | isStoreOp | isTas;
+    final misaligned = memAccess &
+        ((isSize2 & effAddr.slice(0, 0).eq(1)) |
+            (isSize4 & ~effAddr.slice(1, 0).eq(Const(0, width: 2))));
+
+    final storeBEn = Logic(name: 'storeBEn', width: 4);
+    final storeWData = Logic(name: 'storeWData', width: 32);
     Combinational([
-      mulMode < Const(0, width: 2),
-      mulOperandB < rf.rDataB,
-      Case(opcode, [
-        CaseItem(Const(ParticleOpcodes.mull, width: 8),
-            [mulMode < Const(0, width: 2)]),
-        CaseItem(Const(ParticleOpcodes.mulh, width: 8),
-            [mulMode < Const(1, width: 2)]),
-        CaseItem(Const(ParticleOpcodes.smulh, width: 8),
-            [mulMode < Const(2, width: 2)]),
-        CaseItem(Const(ParticleOpcodes.mulhsu, width: 8),
-            [mulMode < Const(3, width: 2)]),
-        CaseItem(Const(ParticleOpcodes.mullImm4, width: 8),
-            [mulMode < Const(0, width: 2), mulOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.mulhImm4, width: 8),
-            [mulMode < Const(1, width: 2), mulOperandB < imm4Val]),
-        CaseItem(Const(ParticleOpcodes.smulhImm4, width: 8),
-            [mulMode < Const(2, width: 2), mulOperandB < imm4.signExtend(32)]),
-        CaseItem(Const(ParticleOpcodes.mulhsuImm4, width: 8),
-            [mulMode < Const(3, width: 2), mulOperandB < imm4Val]),
+      If(isSize4, then: [
+        storeBEn < Const(0xF, width: 4),
+        storeWData < mux(isTas, valB, storeVal),
+      ], orElse: [
+        If(isSize2, then: [
+          storeBEn < mux(effAddr.slice(1, 1).eq(1), Const(0xC, width: 4),
+              Const(0x3, width: 4)),
+          storeWData <
+              [storeVal.slice(15, 0), storeVal.slice(15, 0)].swizzle(),
+        ], orElse: [
+          storeBEn < (Const(1, width: 4) << effAddr.slice(1, 0)),
+          storeWData < [
+            storeVal.slice(7, 0),
+            storeVal.slice(7, 0),
+            storeVal.slice(7, 0),
+            storeVal.slice(7, 0),
+          ].swizzle(),
+        ]),
       ]),
     ]);
 
-    final mul = ParticleMultiplier(
-      operandA: rf.rDataA,
-      operandB: mulOperandB,
-      mulMode: mulMode,
-    );
+    // Latched for the cycle the load data arrives
+    final ldDest = Logic(name: 'ldDest', width: 4);
+    final ldSizeCode = Logic(name: 'ldSizeCode', width: 2); // 0: 8, 1: 16, 2: 32
+    final ldLow = Logic(name: 'ldLow', width: 2);
+    final ldData = Logic(name: 'ldData', width: 32);
+    Combinational([
+      If(ldSizeCode.eq(Const(2, width: 2)), then: [
+        ldData < memPortBRData,
+      ], orElse: [
+        If(ldSizeCode.eq(Const(1, width: 2)), then: [
+          ldData < mux(ldLow.slice(1, 1).eq(1), memPortBRData.slice(31, 16),
+                  memPortBRData.slice(15, 0))
+              .zeroExtend(32),
+        ], orElse: [
+          Case(ldLow, [
+            CaseItem(Const(0, width: 2),
+                [ldData < memPortBRData.slice(7, 0).zeroExtend(32)]),
+            CaseItem(Const(1, width: 2),
+                [ldData < memPortBRData.slice(15, 8).zeroExtend(32)]),
+            CaseItem(Const(2, width: 2),
+                [ldData < memPortBRData.slice(23, 16).zeroExtend(32)]),
+            CaseItem(Const(3, width: 2),
+                [ldData < memPortBRData.slice(31, 24).zeroExtend(32)]),
+          ]),
+        ]),
+      ]),
+    ]);
 
-    final trap14Strobe = Logic(name: 'trap14Strobe');
+    // -------------------------------------------------------------------------
+    // Branches, jumps and the next PC
+    // -------------------------------------------------------------------------
+    final isZero = valA.eq(0);
+    final isNegative = valA.slice(31, 31).eq(1);
+    final isPositive = ~isNegative & ~isZero;
+    final isNotZero = ~isZero;
+    final dispImm4 = imm4Val << 1;
+    final dispImm8 = imm8Val << 1;
+    final dispRegB = valB << 1;
+    final signedDispA = valA << 1;
+    final pcPlus2 = pc + Const(2, width: 32);
 
-    memPortBAddr <= outMemBAddr;
-    memPortBWData <= outMemBWData;
-    memPortBBEn <= outMemBBEn;
-    memPortBWEn <= outMemBWEn & ~trap14Strobe;
-    memPortBREn <= outMemBREn & ~trap14Strobe;
+    final branchNextPc = Logic(name: 'branchNextPc', width: 32);
+    CaseItem cond(int code, Logic taken, Logic target) =>
+        CaseItem(Const(code, width: 8),
+            [branchNextPc < mux(taken, target, pcPlus2)]);
+    CaseItem always(int code, Logic target) =>
+        CaseItem(Const(code, width: 8), [branchNextPc < target]);
 
-    final isR14Dest = opcode.eq(Const(ParticleOpcodes.ldImm8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.fifoTryW, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.ldNegImm8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.push4, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.push8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.sltR14Imm8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.sltR14NegImm8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.ssltR14Imm8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.ssltR14NegImm8, width: 8));
+    Combinational([
+      Case(opcode, [
+        always(ParticleOpcodes.jtbl, pcPlus2 + (valA << 1)),
+        always(ParticleOpcodes.branch, pc + signedDispA),
+        always(ParticleOpcodes.jmp, valA),
+        always(ParticleOpcodes.rjump, pc + signedDispA),
+        always(ParticleOpcodes.fbraImm8, pc + dispImm8),
+        always(ParticleOpcodes.bbraImm8, pc - dispImm8),
+        cond(ParticleOpcodes.fbraZR, isZero, pc + dispRegB),
+        cond(ParticleOpcodes.fbraNR, isNegative, pc + dispRegB),
+        cond(ParticleOpcodes.fbraPR, isPositive, pc + dispRegB),
+        cond(ParticleOpcodes.bbraZR, isZero, pc - dispRegB),
+        cond(ParticleOpcodes.bbraNR, isNegative, pc - dispRegB),
+        cond(ParticleOpcodes.bbraPR, isPositive, pc - dispRegB),
+        cond(ParticleOpcodes.fbraZImm4, isZero, pc + dispImm4),
+        cond(ParticleOpcodes.fbraNImm4, isNegative, pc + dispImm4),
+        cond(ParticleOpcodes.fbraPImm4, isPositive, pc + dispImm4),
+        cond(ParticleOpcodes.fbraNZImm4, isNotZero, pc + dispImm4),
+        cond(ParticleOpcodes.fbraZImm8, isZero, pc + dispImm8),
+        cond(ParticleOpcodes.fbraNImm8, isNegative, pc + dispImm8),
+        cond(ParticleOpcodes.fbraPImm8, isPositive, pc + dispImm8),
+        cond(ParticleOpcodes.fbraNZImm8, isNotZero, pc + dispImm8),
+        cond(ParticleOpcodes.bbraZImm4, isZero, pc - dispImm4),
+        cond(ParticleOpcodes.bbraNImm4, isNegative, pc - dispImm4),
+        cond(ParticleOpcodes.bbraPImm4, isPositive, pc - dispImm4),
+        cond(ParticleOpcodes.bbraNZImm4, isNotZero, pc - dispImm4),
+        cond(ParticleOpcodes.bbraZImm8, isZero, pc - dispImm8),
+        cond(ParticleOpcodes.bbraNImm8, isNegative, pc - dispImm8),
+        cond(ParticleOpcodes.bbraPImm8, isPositive, pc - dispImm8),
+        cond(ParticleOpcodes.bbraNZImm8, isNotZero, pc - dispImm8),
+      ], defaultItem: [
+        branchNextPc < pcPlus2,
+      ]),
+    ]);
 
-    rfWAddr <=
-        mux(inFetchImm, immDestReg, mux(
-          state.eq(stateFetchImm),
-          immDestReg,
-          mux(
-            trap14Strobe | isR14Dest,
-            Const(14, width: 4),
-            mux(opcode.eq(Const(ParticleOpcodes.tas, width: 8)), rl, rr),
-          ),
-        ));
-    rfXchgRegIdx <= rr;
+    // -------------------------------------------------------------------------
+    // Traps and interrupts
+    // -------------------------------------------------------------------------
+    final validOpcode = anyOp([
+      for (final code in ParticleOpcodes.all)
+        if ((config.enableMultiplier || !mulOps.contains(code)) &&
+            (config.enableDivider || !divOps.contains(code)))
+          code,
+    ]);
+    final illegal = ~validOpcode;
+    final isTrapInstr =
+        anyOp([ParticleOpcodes.trapR, ParticleOpcodes.trapImm4]);
+    final trapVec =
+        mux(op(ParticleOpcodes.trapR), valA.slice(3, 0), imm4);
+    final isLdi = anyOp([ParticleOpcodes.ldi, ParticleOpcodes.ldis]);
 
-    // Out-of-Band SARF default port connections
-    sarfRs1Addr <= rr.zeroExtend(5);
-    sarfRs2Addr <= rl.zeroExtend(5);
-    sarfRdAddr <= rr.zeroExtend(5);
-    sarfRdData <= rf.rDataA;
-
-    // Streaming FIFO default port connections
-    fifoChanSelect <= rf.rDataB.slice(1, 0);
-    fifoPushData <= rf.rDataA;
-    mboxVectorOut <= rl.slice(3, 0);
-
-    final inExec = state.eq(stateExec);
-
-    final outMboxStrobe = Logic(name: 'outMboxStrobe');
-    final outFifoPushEn = Logic(name: 'outFifoPushEn');
-    final outFifoPopEn = Logic(name: 'outFifoPopEn');
-    final outSarfRdWe = Logic(name: 'outSarfRdWe');
+    // An MBOX strobe is held until the core can take it: in Exec, before the
+    // instruction there runs (it runs again after the handler returns), or
+    // while a divide is in progress
+    final mboxPending = Logic(name: 'mboxPending');
+    final mboxPendingVec = Logic(name: 'mboxPendingVec', width: 4);
+    final mboxTake = mboxPending & (inExec | inDivWait);
+    final mboxTarget = vectorAddr(mboxPendingVec);
 
     final fifoEmpty = fifoStatus.slice(0, 0);
     final fifoFull = fifoStatus.slice(1, 1);
-    final isFifoRead = opcode.eq(Const(ParticleOpcodes.fifoR, width: 8));
-    final fifoReadStall = inExec & isFifoRead & fifoEmpty;
+    final fifoReadStall = op(ParticleOpcodes.fifoR) & fifoEmpty;
 
-    mboxStrobeOut <= outMboxStrobe;
-    fifoPushEn <= outFifoPushEn;
-    fifoPopEn <= outFifoPopEn;
-    sarfRdWe <= outSarfRdWe;
+    // In Exec: nothing happens if the MBOX is taken, the opcode is illegal,
+    // the access is misaligned or the instruction is a TRAP
+    final execRuns = inExec & ~mboxTake;
+    final faultIllegal = execRuns & illegal;
+    final faultAlign = execRuns & ~illegal & misaligned;
+    final trapInstr = execRuns & ~illegal & isTrapInstr;
+    final doExec = execRuns & ~illegal & ~misaligned & ~isTrapInstr;
+    // A branch or jump to an odd address runs (a JMP still links) and then
+    // takes vector 14, with R14 = the odd target
+    final oddTarget = doExec & branchNextPc.slice(0, 0).eq(1);
 
-    final isLoadImm16 = opcode.eq(Const(ParticleOpcodes.ldi, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.ldis, width: 8));
-    final imm16Extended =
-        mux(immIsSigned, memPortARData.signExtend(32), memPortARData.zeroExtend(32));
+    final vec14 = Const(trapBase + 14 * config.trapStrideBytes, width: 32);
+    final vec15 = Const(trapBase + 15 * config.trapStrideBytes, width: 32);
+
+    // -------------------------------------------------------------------------
+    // Register file write ports
+    // -------------------------------------------------------------------------
+    final immDestReg = Logic(name: 'immDestReg', width: 4);
+    final immIsSigned = Logic(name: 'immIsSigned');
+    final imm16Extended = mux(immIsSigned, memPortARData.signExtend(32),
+        memPortARData.zeroExtend(32));
 
     Combinational([
-      // Defaults
-      rfWData < mux(inFetchImm, imm16Extended, mux(trap14Strobe, pc + 2, alu.result)),
-      rfWEn < mux(inFetchImm, Const(1), mux(trap14Strobe, inExec, Const(0))),
-      rfXchgEn < Const(0),
-      rfXchgAllEn < Const(0),
-      rfXchgMostEn < Const(0),
-      rfRbaseEn < Const(0),
-      rfRbaseIn < Const(0, width: 5),
-      outMboxStrobe < Const(0),
-      outFifoPushEn < Const(0),
-      outFifoPopEn < Const(0),
-      outSarfRdWe < Const(0),
-      outMemBREn < Const(0),
-      outMemBWEn < Const(0),
-      outMemBAddr < rf.rDataB,
-      outMemBWData < rf.rDataA,
-      outMemBBEn < Const(0xF, width: 4),
-
-      Case(opcode, [
-        // Arithmetic
-        CaseItem(Const(ParticleOpcodes.add, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.sub, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.addImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.subImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.saddImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.ssubImm4, width: 8), [rfWEn < inExec]),
-
-        // Logic & Inversions
-        CaseItem(Const(ParticleOpcodes.notOp, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.nezOp, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.andOp, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.orOp, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.xorOp, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.andImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.orImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.xorImm4, width: 8), [rfWEn < inExec]),
-
-        // Shifts & Rotates
-        CaseItem(Const(ParticleOpcodes.shiftL, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.shiftR, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.ashiftR, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.rotL, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.rotR, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.shiftLImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.shiftRImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.ashiftRImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.rotLImm4, width: 8), [rfWEn < inExec]),        CaseItem(Const(ParticleOpcodes.rotRImm4, width: 8), [rfWEn < inExec]),
-
-        // 4.6 Bit Manipulation Writeback (0x80 - 0x8C)
-        CaseItem(Const(ParticleOpcodes.bextr, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.clz, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.bset, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.bsetImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.bclr, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.bclrImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.binv, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.binvImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.bget, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.bgetImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.rev32, width: 8), [rfWEn < inExec]),
-
-        // Multiplications
-        CaseItem(Const(ParticleOpcodes.mull, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.mulh, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.smulh, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.mulhsu, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.mullImm4, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.mulhImm4, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.smulhImm4, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.mulhsuImm4, width: 8),
-            [rfWData < mul.result, rfWEn < inExec]),
-
-        // Relational Comparisons
-        CaseItem(Const(ParticleOpcodes.slt, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.sltImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.sltNegImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.sltR14Imm8, width: 8), [rfWEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.sltR14NegImm8, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.sslt, width: 8), [rfWEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.ssltImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.ssltNegImm4, width: 8), [rfWEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.ssltR14Imm8, width: 8), [rfWEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.ssltR14NegImm8, width: 8), [rfWEn < inExec]),
-
-        // Context Exchange & RBASE
-        CaseItem(Const(ParticleOpcodes.xchg, width: 8), [rfXchgEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.xchgAll, width: 8), [rfXchgAllEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.rbaseImm4, width: 8),
-            [rfRbaseIn < imm8.slice(4, 0), rfRbaseEn < inExec]),
-        CaseItem(Const(ParticleOpcodes.rbaseR, width: 8),
-            [rfRbaseIn < rf.rDataA.slice(4, 0), rfRbaseEn < inExec]),
-        CaseItem(
-            Const(ParticleOpcodes.xchgMost, width: 8), [rfXchgMostEn < inExec]),
-
-        // 4.1 Loads & Immediates (0x00 - 0x06)
-        CaseItem(Const(ParticleOpcodes.ld, width: 8), [
-          rfWData < rf.rDataB,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.ldImm4, width: 8), [
-          rfWData < imm4Val,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.ldImm8, width: 8), [
-          rfWData < imm8Val,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.ldNegImm4, width: 8), [
-          rfWData < negImm4Val,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.ldNegImm8, width: 8), [
-          rfWData < negImm8Val,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.push4, width: 8), [
-          rfWData < ((rf.rDataA << 4) | imm4Val),
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.push8, width: 8), [
-          rfWData < ((rf.rDataA << 8) | imm8Val),
-          rfWEn < inExec,
-        ]),
-
-        // Memory Loads (Port B: Address in Rl/rDataB, Target in Rr/rfWData)
-        CaseItem(Const(ParticleOpcodes.ld8, width: 8), [
-          outMemBREn < inExec,
-          rfWEn < inExec,
-          Case(rf.rDataB.slice(1, 0), [
-            CaseItem(Const(0, width: 2), [rfWData < memPortBRData.slice(7, 0).zeroExtend(32)]),
-            CaseItem(Const(1, width: 2), [rfWData < memPortBRData.slice(15, 8).zeroExtend(32)]),
-            CaseItem(Const(2, width: 2), [rfWData < memPortBRData.slice(23, 16).zeroExtend(32)]),
-            CaseItem(Const(3, width: 2), [rfWData < memPortBRData.slice(31, 24).zeroExtend(32)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.ld8PostInc, width: 8), [
-          outMemBREn < inExec,
-          rfWEn < inExec,
-          Case(rf.rDataB.slice(1, 0), [
-            CaseItem(Const(0, width: 2), [rfWData < memPortBRData.slice(7, 0).zeroExtend(32)]),
-            CaseItem(Const(1, width: 2), [rfWData < memPortBRData.slice(15, 8).zeroExtend(32)]),
-            CaseItem(Const(2, width: 2), [rfWData < memPortBRData.slice(23, 16).zeroExtend(32)]),
-            CaseItem(Const(3, width: 2), [rfWData < memPortBRData.slice(31, 24).zeroExtend(32)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.ld16, width: 8), [
-          outMemBREn < inExec,
-          rfWEn < inExec,
-          Case(rf.rDataB.slice(1, 1), [
-            CaseItem(Const(0, width: 1), [rfWData < memPortBRData.slice(15, 0).zeroExtend(32)]),
-            CaseItem(Const(1, width: 1), [rfWData < memPortBRData.slice(31, 16).zeroExtend(32)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.ld16PostInc, width: 8), [
-          outMemBREn < inExec,
-          rfWEn < inExec,
-          Case(rf.rDataB.slice(1, 1), [
-            CaseItem(Const(0, width: 1), [rfWData < memPortBRData.slice(15, 0).zeroExtend(32)]),
-            CaseItem(Const(1, width: 1), [rfWData < memPortBRData.slice(31, 16).zeroExtend(32)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.ld32, width: 8), [
-          outMemBREn < inExec,
-          rfWData < memPortBRData,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.ld32PostInc, width: 8), [
-          outMemBREn < inExec,
-          rfWData < memPortBRData,
-          rfWEn < inExec,
-        ]),
-
-        // Memory Stores (Port B: Address in Rr/rDataA, Data in Rl/rDataB matching pasm/psim)
-        CaseItem(Const(ParticleOpcodes.st8, width: 8), [
-          outMemBWEn < inExec,
-          outMemBAddr < rf.rDataA,
-          outMemBWData < [rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0)].rswizzle(),
-          Case(rf.rDataA.slice(1, 0), [
-            CaseItem(Const(0, width: 2), [outMemBBEn < Const(0x1, width: 4)]),
-            CaseItem(Const(1, width: 2), [outMemBBEn < Const(0x2, width: 4)]),
-            CaseItem(Const(2, width: 2), [outMemBBEn < Const(0x4, width: 4)]),
-            CaseItem(Const(3, width: 2), [outMemBBEn < Const(0x8, width: 4)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.st8PostInc, width: 8), [
-          outMemBWEn < inExec,
-          outMemBAddr < rf.rDataA,
-          outMemBWData < [rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0), rf.rDataB.slice(7, 0)].rswizzle(),
-          Case(rf.rDataA.slice(1, 0), [
-            CaseItem(Const(0, width: 2), [outMemBBEn < Const(0x1, width: 4)]),
-            CaseItem(Const(1, width: 2), [outMemBBEn < Const(0x2, width: 4)]),
-            CaseItem(Const(2, width: 2), [outMemBBEn < Const(0x4, width: 4)]),
-            CaseItem(Const(3, width: 2), [outMemBBEn < Const(0x8, width: 4)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.st16, width: 8), [
-          outMemBWEn < inExec,
-          outMemBAddr < rf.rDataA,
-          outMemBWData < [rf.rDataB.slice(15, 0), rf.rDataB.slice(15, 0)].rswizzle(),
-          Case(rf.rDataA.slice(1, 1), [
-            CaseItem(Const(0, width: 1), [outMemBBEn < Const(0x3, width: 4)]),
-            CaseItem(Const(1, width: 1), [outMemBBEn < Const(0xC, width: 4)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.st16PostInc, width: 8), [
-          outMemBWEn < inExec,
-          outMemBAddr < rf.rDataA,
-          outMemBWData < [rf.rDataB.slice(15, 0), rf.rDataB.slice(15, 0)].rswizzle(),
-          Case(rf.rDataA.slice(1, 1), [
-            CaseItem(Const(0, width: 1), [outMemBBEn < Const(0x3, width: 4)]),
-            CaseItem(Const(1, width: 1), [outMemBBEn < Const(0xC, width: 4)]),
-          ]),
-        ]),
-        CaseItem(Const(ParticleOpcodes.st32, width: 8), [
-          outMemBWEn < inExec,
-          outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          outMemBBEn < Const(0xF, width: 4),
-        ]),
-        // Atomic Test-And-Set / Swap: Old <- Mem32[Rr]; Mem32[Rr] <- Rl; Rl <- Old
-        CaseItem(Const(ParticleOpcodes.tas, width: 8), [
-          outMemBREn < inExec,
-          outMemBWEn < inExec,
-          outMemBBEn < Const(0xF, width: 4),
-          outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          rfWData < memPortBRData,
-          rfWEn < inExec,
-        ]),
-
-        CaseItem(Const(ParticleOpcodes.st32PostInc, width: 8), [
-          outMemBWEn < inExec,
-          outMemBAddr < rf.rDataA,
-          outMemBWData < rf.rDataB,
-          outMemBBEn < Const(0xF, width: 4),
-        ]),
-
-        // Hardware Streaming FIFOs & Mailbox
-        CaseItem(Const(ParticleOpcodes.fifoR, width: 8), [
-          rfWData < fifoPopData,
-          rfWEn < inExec & ~fifoEmpty,
-          outFifoPopEn < inExec & ~fifoEmpty,
-        ]),
-        CaseItem(Const(ParticleOpcodes.fifoTryR, width: 8), [
-          rfWData <
-              mux(fifoEmpty, Const(0, width: ParticleWidths.word), fifoPopData),
-          rfWEn < inExec,
-          outFifoPopEn < inExec & ~fifoEmpty,
-        ]),
-        CaseItem(Const(ParticleOpcodes.fifoW, width: 8), [
-          outFifoPushEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.fifoTryW, width: 8), [
-          outFifoPushEn < inExec & ~fifoFull,
-          rfWData < mux(fifoFull, Const(0, width: ParticleWidths.word), Const(1, width: ParticleWidths.word)),
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.fifoStat, width: 8), [
-          rfWData < fifoStatus,
-          rfWEn < inExec,
-        ]),
-        CaseItem(Const(ParticleOpcodes.mbox, width: 8), [
-          outMboxStrobe < inExec,
-        ]),
-      ]),
-      If(inFetchImm, then: [
+      // Port 1: an instruction's result
+      rfWEn < Const(0),
+      rfWAddr < rr,
+      rfWData < aluUnit.result,
+      If(inImm, then: [
         rfWEn < Const(1),
+        rfWAddr < immDestReg,
         rfWData < imm16Extended,
       ]),
-    ]);
+      If(inLoadWB, then: [
+        rfWEn < Const(1),
+        rfWAddr < ldDest,
+        rfWData < ldData,
+      ]),
+      If(inDivWait & divDone & ~mboxTake, then: [
+        rfWEn < Const(1),
+        rfWAddr < rr,
+        rfWData < divResult,
+      ]),
+      If(doExec, then: [
+        If(aluWritesRr, then: [rfWEn < Const(1)]),
+        If(aluWritesR14, then: [rfWEn < Const(1), rfWAddr < Const(14, width: 4)]),
+        Case(opcode, [
+          CaseItem(Const(ParticleOpcodes.ld, width: 8),
+              [rfWEn < Const(1), rfWData < valB]),
+          CaseItem(Const(ParticleOpcodes.ldImm4, width: 8),
+              [rfWEn < Const(1), rfWData < imm4Val]),
+          CaseItem(Const(ParticleOpcodes.ldNegImm4, width: 8),
+              [rfWEn < Const(1), rfWData < negImm4Val]),
+          CaseItem(Const(ParticleOpcodes.ldImm8, width: 8), [
+            rfWEn < Const(1),
+            rfWAddr < Const(14, width: 4),
+            rfWData < imm8Val,
+          ]),
+          CaseItem(Const(ParticleOpcodes.ldNegImm8, width: 8), [
+            rfWEn < Const(1),
+            rfWAddr < Const(14, width: 4),
+            rfWData < negImm8Val,
+          ]),
+          CaseItem(Const(ParticleOpcodes.push4, width: 8), [
+            rfWEn < Const(1),
+            rfWData < ((valA << 4) | imm4Val),
+          ]),
+          CaseItem(Const(ParticleOpcodes.push8, width: 8), [
+            rfWEn < Const(1),
+            rfWAddr < Const(14, width: 4),
+            rfWData < ((valA << 8) | imm8Val),
+          ]),
+          // Jump and link: Rl <- PC + 2 (Rr was read first)
+          CaseItem(Const(ParticleOpcodes.jmp, width: 8),
+              [rfWEn < Const(1), rfWAddr < rl, rfWData < pcPlus2]),
+          CaseItem(Const(ParticleOpcodes.rjump, width: 8),
+              [rfWEn < Const(1), rfWAddr < rl, rfWData < pcPlus2]),
+          CaseItem(Const(ParticleOpcodes.fifoR, width: 8),
+              [rfWEn < ~fifoEmpty, rfWData < fifoPopData]),
+          CaseItem(Const(ParticleOpcodes.fifoTryR, width: 8),
+              [rfWEn < ~fifoEmpty, rfWData < fifoPopData]),
+          CaseItem(Const(ParticleOpcodes.fifoTryW, width: 8), [
+            rfWEn < Const(1),
+            rfWAddr < Const(14, width: 4),
+            rfWData < mux(fifoFull, Const(0, width: 32), Const(1, width: 32)),
+          ]),
+          CaseItem(Const(ParticleOpcodes.fifoStat, width: 8),
+              [rfWEn < Const(1), rfWData < fifoStatus]),
+        ]),
+        If(isMulOp, then: [rfWEn < Const(1), rfWData < mulResult]),
+      ]),
 
-    // Next PC & Branch / Table Jump Calculation
-    final rValA = rf.rDataA;
-    final isZero = rValA.eq(0);
-    final isNegative = rValA.slice(31, 31).eq(1);
-    final isPositive = (~isNegative) & (~isZero);
-    final isNotZero = ~isZero;
-
-    final dispImm4 = imm4.zeroExtend(32) << 1;
-    final dispImm8 = imm8.zeroExtend(32) << 1;
-    final signedRegDisp = (rValA.signExtend(32)) << 1;
-
-    final branchNextPc = Logic(name: 'branchNextPc', width: 32);
-
-    Combinational([
-      Case(opcode, [
-        CaseItem(Const(ParticleOpcodes.jtbl, width: 8), [
-          branchNextPc < (pc + Const(2, width: 32) + (rValA << 1)),
-        ]),
-        CaseItem(Const(ParticleOpcodes.branch, width: 8), [
-          branchNextPc < (pc + signedRegDisp),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraImm8, width: 8), [
-          branchNextPc < (pc + dispImm8),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraImm8, width: 8), [
-          branchNextPc < (pc - dispImm8),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraZImm4, width: 8), [
-          branchNextPc < mux(isZero, pc + dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraNImm4, width: 8), [
-          branchNextPc < mux(isNegative, pc + dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraPImm4, width: 8), [
-          branchNextPc < mux(isPositive, pc + dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraNZImm4, width: 8), [
-          branchNextPc < mux(isNotZero, pc + dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraZImm8, width: 8), [
-          branchNextPc < mux(isZero, pc + dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraNImm8, width: 8), [
-          branchNextPc < mux(isNegative, pc + dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraPImm8, width: 8), [
-          branchNextPc < mux(isPositive, pc + dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.fbraNZImm8, width: 8), [
-          branchNextPc < mux(isNotZero, pc + dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraZImm4, width: 8), [
-          branchNextPc < mux(isZero, pc - dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraNImm4, width: 8), [
-          branchNextPc < mux(isNegative, pc - dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraPImm4, width: 8), [
-          branchNextPc < mux(isPositive, pc - dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraNZImm4, width: 8), [
-          branchNextPc < mux(isNotZero, pc - dispImm4, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraZImm8, width: 8), [
-          branchNextPc < mux(isZero, pc - dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraNImm8, width: 8), [
-          branchNextPc < mux(isNegative, pc - dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraPImm8, width: 8), [
-          branchNextPc < mux(isPositive, pc - dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.bbraNZImm8, width: 8), [
-          branchNextPc < mux(isNotZero, pc - dispImm8, pc + 2),
-        ]),
-        CaseItem(Const(ParticleOpcodes.jmp, width: 8), [
-          branchNextPc < rValA,
-        ]),
-        CaseItem(Const(ParticleOpcodes.rjump, width: 8), [
-          branchNextPc < (pc + signedRegDisp),
-        ]),
-      ], defaultItem: [
-        branchNextPc < pc + 2,
+      // Port 2: pointer updates, TRYR's status, and R14 on trap entry. Port 2
+      // wins when both write the same register.
+      rfWEn2 < Const(0),
+      rfWAddr2 < Const(14, width: 4),
+      rfWData2 < pc,
+      If(doExec & ptrMode, then: [
+        rfWEn2 < Const(1),
+        rfWAddr2 < ptrReg,
+        rfWData2 < newPtr,
+      ]),
+      If(doExec & op(ParticleOpcodes.fifoTryR), then: [
+        rfWEn2 < Const(1),
+        rfWAddr2 < Const(14, width: 4),
+        rfWData2 < mux(fifoEmpty, Const(0, width: 32), Const(1, width: 32)),
+      ]),
+      If(oddTarget, then: [
+        rfWEn2 < Const(1),
+        rfWAddr2 < Const(14, width: 4),
+        rfWData2 < branchNextPc,
+      ]),
+      If(trapInstr, then: [
+        rfWEn2 < Const(1),
+        rfWAddr2 < Const(14, width: 4),
+        rfWData2 < pcPlus2,
+      ]),
+      If(faultIllegal | faultAlign | mboxTake, then: [
+        rfWEn2 < Const(1),
+        rfWAddr2 < Const(14, width: 4),
+        rfWData2 < pc,
       ]),
     ]);
 
-    // Trap 14 Alignment Error Detection
-    final is16BitMemOp = opcode.eq(Const(ParticleOpcodes.ld16, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.ld16PostInc, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st16, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st16PostInc, width: 8));
+    Combinational([
+      rfXchgEn < doExec & op(ParticleOpcodes.xchg),
+      rfXchgAllEn < doExec & op(ParticleOpcodes.xchgAll),
+      rfXchgMostEn < doExec & op(ParticleOpcodes.xchgMost),
+      rfRbaseEn < doExec &
+          (op(ParticleOpcodes.rbaseImm4) | op(ParticleOpcodes.rbaseR)),
+      rfRbaseIn < mux(op(ParticleOpcodes.rbaseR), valA.slice(4, 0),
+          imm8.slice(4, 0)),
+    ]);
 
-    final is32BitMemOp = opcode.eq(Const(ParticleOpcodes.ld32, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.ld32PostInc, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st32, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st32PostInc, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.tas, width: 8));
+    // -------------------------------------------------------------------------
+    // Memory port B, FIFOs, MBOX and SARF outputs
+    // -------------------------------------------------------------------------
+    memPortBAddr <= effAddr;
+    memPortBWData <= storeWData;
+    memPortBBEn <= storeBEn;
+    memPortBWEn <= doExec & (isStoreOp | isTas);
+    memPortBREn <= doExec & (isLoadOp | isTas);
 
-    final isStoreOp = opcode.eq(Const(ParticleOpcodes.st8, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st8PostInc, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st16, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st16PostInc, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st32, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.st32PostInc, width: 8)) |
-        opcode.eq(Const(ParticleOpcodes.tas, width: 8));
+    fifoChanSelect <= valB.slice(1, 0);
+    fifoPushData <= valA;
+    fifoPushEn <= doExec &
+        (op(ParticleOpcodes.fifoW) |
+            (op(ParticleOpcodes.fifoTryW) & ~fifoFull));
+    fifoPopEn <= doExec &
+        (op(ParticleOpcodes.fifoR) | op(ParticleOpcodes.fifoTryR)) &
+        ~fifoEmpty;
 
-    final memTargetAddr = mux(isStoreOp, rf.rDataA, rf.rDataB);
-    final unaligned16 = is16BitMemOp & memTargetAddr.slice(0, 0).eq(1);
-    final unaligned32 = is32BitMemOp & (memTargetAddr.slice(0, 0).eq(1) | memTargetAddr.slice(1, 1).eq(1));
-    final alignMemTrap = unaligned16 | unaligned32;
-    final unalignedPcTrap = branchNextPc.slice(0, 0).eq(1);
+    mboxStrobeOut <= doExec & op(ParticleOpcodes.mbox);
+    mboxVectorOut <= rl;
 
-    trap14Strobe <= inExec & (alignMemTrap | unalignedPcTrap);
+    sarfRs1Addr <= rr.zeroExtend(5);
+    sarfRs2Addr <= rl.zeroExtend(5);
+    sarfRdAddr <= rr.zeroExtend(5);
+    sarfRdData <= valA;
+    sarfRdWe <= Const(0);
 
-    final trap14TargetAddr = Const(config.trapTableBase + 0x0380, width: 32);
+    divStart <= doExec & isDivOp;
+    divAbort <= inDivWait & mboxTake;
 
-    final mboxTargetAddr = Const(config.trapTableBase, width: 32) +
-        (mboxVectorIn.zeroExtend(32) << 6);
-    final mboxAccepted = mboxStrobeIn & ~inFetchImm;
-
-    nextPc <= mux(
-      mboxAccepted,
-      mboxTargetAddr,
-      mux(trap14Strobe, trap14TargetAddr, branchNextPc),
-    );
-
-    Sequential(clk, reset: reset, resetValues: {
-      pc: Const(config.trapTableBase, width: 32),
-      state: Const(stateFetch, width: 2),
-      immDestReg: Const(0, width: 4),
-      immIsSigned: Const(0),
-    }, [
-      If(mboxAccepted, then: [
-        pc < mboxTargetAddr,
-        state < Const(stateFetch, width: 2),
+    // -------------------------------------------------------------------------
+    // Next PC, next state, and the instruction fetch address
+    // -------------------------------------------------------------------------
+    final execNextPc = Logic(name: 'execNextPc', width: 32);
+    final execNextState = Logic(name: 'execNextState', width: 3);
+    final execFetchAddr = Logic(name: 'execFetchAddr', width: 32);
+    Combinational([
+      execNextPc < branchNextPc,
+      execNextState < Const(sExec, width: 3),
+      execFetchAddr < branchNextPc,
+      If(mboxTake, then: [
+        execNextPc < mboxTarget,
+        execFetchAddr < mboxTarget,
       ], orElse: [
-        Case(state, [
-          CaseItem(Const(stateFetch, width: 2), [
-            state < Const(stateExec, width: 2),
-          ]),
-          CaseItem(Const(stateExec, width: 2), [
-            If(fifoReadStall, then: [
-              pc < pc,
-              state < Const(stateExec, width: 2),
+        If(illegal, then: [
+          execNextPc < vec15,
+          execFetchAddr < vec15,
+        ], orElse: [
+          If(misaligned, then: [
+            execNextPc < vec14,
+            execFetchAddr < vec14,
+          ], orElse: [
+            If(isTrapInstr, then: [
+              execNextPc < vectorAddr(trapVec),
+              execFetchAddr < vectorAddr(trapVec),
             ], orElse: [
-              If(isLoadImm16, then: [
-                immDestReg < rl,
-                immIsSigned < opcode.eq(Const(ParticleOpcodes.ldis, width: 8)),
-                pc < pc,
-                state < Const(stateFetchImm, width: 2),
+              If(fifoReadStall, then: [
+                execNextPc < pc,
+                execFetchAddr < pc,
               ], orElse: [
-                pc < nextPc,
-                state < Const(stateFetch, width: 2),
+                If(isDivOp, then: [
+                  execNextPc < pc,
+                  execNextState < Const(sDivWait, width: 3),
+                  execFetchAddr < pc,
+                ], orElse: [
+                  If(isLdi, then: [
+                    execNextPc < pc,
+                    execNextState < Const(sImm, width: 3),
+                    execFetchAddr < pcPlus2,
+                  ], orElse: [
+                    If(branchNextPc.slice(0, 0).eq(1), then: [
+                      execNextPc < vec14,
+                      execFetchAddr < vec14,
+                    ], orElse: [
+                      If(isLoadOp | isTas, then: [
+                        execNextState < Const(sLoadWB, width: 3),
+                      ]),
+                    ]),
+                  ]),
+                ]),
               ]),
             ]),
           ]),
-          CaseItem(Const(stateFetchImm, width: 2), [
-            pc < pc + 4,
-            state < Const(stateFetch, width: 2),
-          ]),
-          CaseItem(Const(stateWait, width: 2), []),
         ]),
+      ]),
+    ]);
+
+    final fetchAddr = Logic(name: 'fetchAddr', width: 32);
+    Combinational([
+      fetchAddr < pc,
+      If(inExec, then: [fetchAddr < execFetchAddr]),
+      If(inImm, then: [fetchAddr < pc + Const(4, width: 32)]),
+      If(inDivWait, then: [
+        If(mboxTake, then: [
+          fetchAddr < mboxTarget,
+        ], orElse: [
+          If(divDone, then: [fetchAddr < pcPlus2]),
+        ]),
+      ]),
+    ]);
+    memPortAAddr <= fetchAddr;
+
+    Sequential(clk, reset: reset, resetValues: {
+      pc: Const(trapBase, width: 32),
+      state: Const(sBoot, width: 3),
+      immDestReg: Const(0, width: 4),
+      immIsSigned: Const(0),
+      ldDest: Const(0, width: 4),
+      ldSizeCode: Const(0, width: 2),
+      ldLow: Const(0, width: 2),
+      mboxPending: Const(0),
+      mboxPendingVec: Const(0, width: 4),
+    }, [
+      // MBOX: a new strobe is remembered; a taken one is cleared
+      If(mboxStrobeIn, then: [
+        mboxPending < Const(1),
+        mboxPendingVec < mboxVectorIn,
+      ], orElse: [
+        If(mboxTake, then: [mboxPending < Const(0)]),
+      ]),
+
+      Case(state, [
+        CaseItem(Const(sBoot, width: 3), [
+          state < Const(sExec, width: 3),
+        ]),
+        CaseItem(Const(sExec, width: 3), [
+          pc < execNextPc,
+          state < execNextState,
+          If(isLdi, then: [
+            immDestReg < rl,
+            immIsSigned < op(ParticleOpcodes.ldis),
+          ]),
+          If(isLoadOp | isTas, then: [
+            ldDest < mux(isTas, rl, rr),
+            ldSizeCode < mux(isSize4, Const(2, width: 2),
+                mux(isSize2, Const(1, width: 2), Const(0, width: 2))),
+            ldLow < effAddr.slice(1, 0),
+          ]),
+        ]),
+        CaseItem(Const(sImm, width: 3), [
+          pc < pc + Const(4, width: 32),
+          state < Const(sExec, width: 3),
+        ]),
+        CaseItem(Const(sLoadWB, width: 3), [
+          state < Const(sExec, width: 3),
+        ]),
+        CaseItem(Const(sDivWait, width: 3), [
+          If(mboxTake, then: [
+            pc < mboxTarget,
+            state < Const(sExec, width: 3),
+          ], orElse: [
+            If(divDone, then: [
+              pc < pcPlus2,
+              state < Const(sExec, width: 3),
+            ]),
+          ]),
+        ]),
+      ], defaultItem: [
+        state < Const(sExec, width: 3),
       ]),
     ]);
   }

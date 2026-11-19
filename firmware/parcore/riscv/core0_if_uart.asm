@@ -16,8 +16,8 @@ _reset_vector:
 ; ==============================================================================
 _if_main_loop:
     ; 1. Service UART RX (Non-Blocking Console Pass-Through on Channel 0)
-    FIFO.TRYR R3, R0
-    FBRA.Z    R3, ._check_fifo_space
+    FIFO.TRYR R3, R0            ; R14 = 1 if a byte was read into R3
+    FBRA.Z    R14, ._check_fifo_space
 
     ; Character received: Echo character back to UART TX (Channel 0)
     FIFO.W    R3, R0

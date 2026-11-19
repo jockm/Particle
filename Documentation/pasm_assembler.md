@@ -56,6 +56,18 @@ Where an instruction or directive takes a value, it may be a number, a label, a 
 
 Register names cannot appear in a value. Each instruction's range of values is checked (see *Errors*).
 
+### Branch operands
+
+A conditional branch's second operand is its target or, for `.Z`, `.N` and `.P`, a register holding the displacement:
+
+| Written | Encodes |
+|---|---|
+| `FBRA.Z R3, label` | The Imm4 form (`0xB4`): up to 15 halfwords. When the register is `R14` and the target is 16 to 255 halfwords away, the R14 Imm8 form (`0xB7`) |
+| `FBRA.Z R3, R5` | The register form (`0xB1`): branch to PC + `R5` × 2 when `R3` is zero |
+| `BBRA.N R3, R5` | The register form (`0xC2`): branch to PC − `R5` × 2 when `R3` is negative |
+
+`FBRA.NZ` and `BBRA.NZ` have no register form.
+
 ---
 
 ## Directives Reference

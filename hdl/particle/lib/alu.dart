@@ -170,6 +170,10 @@ class ParticleAlu extends Module {
         CaseItem(Const(24, width: 5), [aluRes < sleVal]),
         // 25: SSLE
         CaseItem(Const(25, width: 5), [aluRes < ssleVal]),
+        // 26: SEXT8
+        CaseItem(Const(26, width: 5), [aluRes < operandA.slice(7, 0).signExtend(32)]),
+        // 27: SEXT16
+        CaseItem(Const(27, width: 5), [aluRes < operandA.slice(15, 0).signExtend(32)]),
       ], defaultItem: [
         aluRes < Const(0, width: ParticleWidths.word),
       ]),

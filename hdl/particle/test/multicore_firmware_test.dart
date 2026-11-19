@@ -1,11 +1,20 @@
+// =============================================================================
+// File: hdl/particle/test/multicore_firmware_test.dart
+// Description: ParticleMultiCore running real programs from synchronous block
+//              RAM: core 1 runs firmware/parcore/riscv/core1_dispatch.asm and
+//              core 0 runs apps/asm/c0_stimulus.asm, which sends it a taken
+//              BEQ token. Needs `make firmware` and `make apps`.
+// =============================================================================
+
 import "dart:async";
 import "dart:io";
 import "dart:typed_data";
+
+import "package:particle_rohd/block_ram_tdp.dart";
+import "package:particle_rohd/cpu_config.dart";
+import "package:particle_rohd/particle_multi_core.dart";
 import "package:rohd/rohd.dart";
 import "package:test/test.dart";
-import "../lib/constants.dart";
-import "../lib/cpu_config.dart";
-import "../lib/particle_multi_core.dart";
 
 Uint8List _loadBinary(List<String> candidatePaths) {
   for (final path in candidatePaths) {
@@ -17,117 +26,109 @@ Uint8List _loadBinary(List<String> candidatePaths) {
   throw Exception('Unable to locate binary in candidates: $candidatePaths');
 }
 
-void main() {
-  tearDown(() async {
-    await Simulator.reset();
-  });
+/// ParticleMultiCore with 64 KiB of block RAM per core, each loaded with its
+/// program at 0x100.
+class _MultiCoreBoard extends Module {
+  late final ParticleMultiCore multiCore;
 
+  _MultiCoreBoard(Logic clk, Logic reset, List<int> c0Program,
+      List<int> c1Program)
+      : super(name: 'multicore_board') {
+    clk = addInput('clk', clk);
+    reset = addInput('reset', reset);
+
+    final c0A = Logic(name: 'c0A', width: 16);
+    final c0B = Logic(name: 'c0B', width: 32);
+    final c1A = Logic(name: 'c1A', width: 16);
+    final c1B = Logic(name: 'c1B', width: 32);
+    multiCore = ParticleMultiCore(
+      clk: clk,
+      reset: reset,
+      c0MemPortARData: c0A,
+      c0MemPortBRData: c0B,
+      c1MemPortARData: c1A,
+      c1MemPortBRData: c1B,
+      configCore0: const CpuConfig(trapTableBase: 0x00000100),
+      configCore1: const CpuConfig(trapTableBase: 0x00000100),
+    );
+    final ram0 = ParticleBlockRamTdp(
+      clk: clk,
+      addrA: multiCore.c0MemPortAAddr.slice(15, 1),
+      addrB: multiCore.c0MemPortBAddr.slice(15, 2),
+      wDataB: multiCore.c0MemPortBWData,
+      bEnB: multiCore.c0MemPortBBEn,
+      wEnB: multiCore.c0MemPortBWEn,
+      rEnB: multiCore.c0MemPortBREn,
+      initialBytes: c0Program,
+      loadOffset: 0x100,
+      name: 'ram0',
+    );
+    final ram1 = ParticleBlockRamTdp(
+      clk: clk,
+      addrA: multiCore.c1MemPortAAddr.slice(15, 1),
+      addrB: multiCore.c1MemPortBAddr.slice(15, 2),
+      wDataB: multiCore.c1MemPortBWData,
+      bEnB: multiCore.c1MemPortBBEn,
+      wEnB: multiCore.c1MemPortBWEn,
+      rEnB: multiCore.c1MemPortBREn,
+      initialBytes: c1Program,
+      loadOffset: 0x100,
+      name: 'ram1',
+    );
+    c0A <= ram0.rDataA;
+    c0B <= ram0.rDataB;
+    c1A <= ram1.rDataA;
+    c1B <= ram1.rDataB;
+  }
+}
+
+void main() {
   group("Core 1 Firmware Dispatch Verification", () {
     late Logic clk;
     late Logic reset;
-    late Logic c0MemARData;
-    late Logic c0MemBRData;
-    late Logic c1MemARData;
-    late Logic c1MemBRData;
     late ParticleMultiCore multiCore;
 
-    late Uint8List c1FirmwareBytes;
-    late Uint8List c0StimulusBytes;
-
-    int currentTimestamp = 0;
-
-    void stepClock() {
-      // Feed memory half-cycle before posedge
-      Simulator.registerAction(currentTimestamp + 2, () {
-        if (multiCore.c0MemPortAAddr.value.isValid) {
-          final pc0 = multiCore.c0MemPortAAddr.value.toInt();
-          final off0 = pc0 - 0x00000100;
-          if (off0 >= 0 && off0 + 1 < c0StimulusBytes.length) {
-            c0MemARData
-                .put((c0StimulusBytes[off0 + 1] << 8) | c0StimulusBytes[off0]);
-          } else {
-            c0MemARData.put(0);
-          }
-        }
-
-        if (multiCore.c1MemPortAAddr.value.isValid) {
-          final pc1 = multiCore.c1MemPortAAddr.value.toInt();
-          final off1 = pc1 - 0x00000100;
-          if (off1 >= 0 && off1 + 1 < c1FirmwareBytes.length) {
-            c1MemARData
-                .put((c1FirmwareBytes[off1 + 1] << 8) | c1FirmwareBytes[off1]);
-          } else {
-            c1MemARData.put(0);
-          }
-        }
-      });
-
-      // Rising clock edge
-      Simulator.registerAction(currentTimestamp + 5, () => clk.put(1));
-
-      // Falling clock edge
-      Simulator.registerAction(currentTimestamp + 10, () => clk.put(0));
-
-      currentTimestamp += 10;
+    Future<void> step(int n) async {
+      for (var i = 0; i < n; i++) {
+        await clk.nextPosedge;
+      }
     }
 
     setUp(() async {
-      clk = Logic(name: 'clk');
+      clk = SimpleClockGenerator(10).clk;
       reset = Logic(name: 'reset');
-      c0MemARData = Logic(name: 'c0MemARData', width: ParticleWidths.halfWord);
-      c0MemBRData = Logic(name: 'c0MemBRData', width: ParticleWidths.word);
-      c1MemARData = Logic(name: 'c1MemARData', width: ParticleWidths.halfWord);
-      c1MemBRData = Logic(name: 'c1MemBRData', width: ParticleWidths.word);
 
-      c1FirmwareBytes = _loadBinary([
+      final c1FirmwareBytes = _loadBinary([
         '../../build/parcore/riscv/core1_dispatch.bin',
         'build/parcore/riscv/core1_dispatch.bin',
-        '../../firmware/parcore/riscv/core1_dispatch.bin',
-        'firmware/parcore/riscv/core1_dispatch.bin',
       ]);
-
-      c0StimulusBytes = _loadBinary([
-        'build/c0_stimulus.bin',
+      final c0StimulusBytes = _loadBinary([
         '../../build/c0_stimulus.bin',
-        'hdl/particle/build/c0_stimulus.bin',
+        'build/c0_stimulus.bin',
       ]);
 
-      multiCore = ParticleMultiCore(
-        clk: clk,
-        reset: reset,
-        c0MemPortARData: c0MemARData,
-        c0MemPortBRData: c0MemBRData,
-        c1MemPortARData: c1MemARData,
-        c1MemPortBRData: c1MemBRData,
-        configCore0: const CpuConfig(trapTableBase: 0x00000100),
-        configCore1: const CpuConfig(trapTableBase: 0x00000100),
-      );
+      final board =
+          _MultiCoreBoard(clk, reset, c0StimulusBytes, c1FirmwareBytes);
+      await board.build();
+      multiCore = board.multiCore;
 
-      await multiCore.build();
+      reset.inject(1);
+      Simulator.setMaxSimTime(1 << 30);
+      unawaited(Simulator.run());
+      await step(4);
+      reset.inject(0);
+    });
 
-      currentTimestamp = 0;
-      clk.put(0);
-      reset.put(1);
-      c0MemARData.put(0);
-      c0MemBRData.put(0);
-      c1MemARData.put(0);
-      c1MemBRData.put(0);
-
-      // Reset for 4 clock cycles
-      for (int i = 0; i < 4; i++) {
-        stepClock();
-      }
-
-      Simulator.registerAction(currentTimestamp + 2, () => reset.put(0));
+    tearDown(() async {
+      await Simulator.endSimulation();
+      await Simulator.simulationEnded;
+      await Simulator.reset();
     });
 
     test("Core 1 boots and stalls on FIFO.R waiting for token", () async {
-      for (int i = 0; i < 8; i++) {
-        stepClock();
-      }
-
-      await Simulator.run();
-
+      // Core 0's stimulus sends tokens, so look before it has run far: core 1
+      // reaches its FIFO.R (0x102) and waits there for the first token
+      await step(3);
       expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000102));
     });
 
@@ -145,11 +146,7 @@ void main() {
         }
       });
 
-      for (int i = 0; i < 100; i++) {
-        stepClock();
-      }
-
-      await Simulator.run();
+      await step(200);
 
       expect(mboxStrobeSeen, isTrue, reason: "Taken branch must strobe Core 0 MBOX");
       expect(mboxVector, equals(1), reason: "Branch redirect vector is 1");

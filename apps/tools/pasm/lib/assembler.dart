@@ -694,9 +694,18 @@ class ParticleAssembler {
         final condIdx = {'.Z': 1, '.N': 2, '.P': 3, '.NZ': 4}[cond]!;
         if (ops.length != 2)
           throw AssemblerError(
-              '$mnem expects 2 operands: $mnem Rr, <label>', fname, lno);
+              '$mnem expects 2 operands: $mnem Rr, <label>'
+              '${cond == '.NZ' ? '' : ' or $mnem Rr, Rl'}', fname, lno);
 
         final r = getR(0);
+
+        // Register displacement (.Z, .N, .P only): PC +/- Rl * 2
+        if (cond != '.NZ' && regMap.containsKey(ops[1].trim().toLowerCase())) {
+          final rl = getR(1);
+          final op = (isBackward ? 0xC0 : 0xB0) + condIdx;
+          return (op << 8) | (r << 4) | rl;
+        }
+
         final tgt = getV(1);
         final diff = isBackward ? (curPc - tgt) : (tgt - curPc);
         final offset = diff ~/ 2;

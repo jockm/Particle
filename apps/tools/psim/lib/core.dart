@@ -282,6 +282,13 @@ class ParticleCore {
 
     var nextPc = (pc + 2) & mask32;
 
+    // A load, store or TAS that takes vector 14 (misaligned) changes no
+    // register, as on hardware: save them, and put them back if it traps
+    final instPc = pc;
+    final savedRegs = ((opcode >= 0x10 && opcode <= 0x39) || opcode == 0x8B)
+        ? Uint32List.fromList(r.raw)
+        : null;
+
     // ---------------- Register Loads & Immediates (0x00 - 0x08) ----------------
     if (opcode == 0x00) {
       r[rr] = r[rl];
@@ -781,6 +788,10 @@ class ParticleCore {
     // vector
     if (_trapTaken) {
       _trapTaken = false;
+      if (savedRegs != null) {
+        r.raw.setAll(0, savedRegs);
+        r[14] = instPc; // the trap's link: the faulting instruction
+      }
     } else {
       pc = nextPc;
     }

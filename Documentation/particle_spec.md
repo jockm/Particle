@@ -16,10 +16,10 @@ This revision of the specification is aligned with the reference simulator `psim
   - `R14`: Subroutine link register (`JMP`/`RJUMP` link, `RCALL`/`RRET` aliases), immediate accumulator, trap link register, and FIFO try-status register.
   - `R15` (`SP`): Stack pointer by convention (full-descending, 4-byte aligned).
 - **Hardware Shadow Register Bank**:
-  - 16 duplicate 32-bit shadow registers (`S0`–`S15`).
-  - Single-cycle exchange operations:
+  - One 32-bit shadow register for each of the 32 physical registers (`S0`–`S31`; `S0`, like physical register 0, is always zero).
+  - Single-cycle exchange operations. `Sr` below is the shadow of the physical register that `Rr` maps to through `RBASE`:
     - `XCHG Rr`: Swaps active `Rr` with `Sr` (`XCHG R0` is a no-op).
-    - `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
+    - `XCHGALL`: Swaps all 31 physical registers (1–31) with their shadows, whatever `RBASE` is.
     - `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
 - **RBASE Register Windowing**:
   - Shifts logical register index decoding into a 32-register physical file (`R0` remains fixed at physical 0; `R1`–`R15` map to physical `(index + rbase) mod 32`).
@@ -244,7 +244,7 @@ Displacements are unsigned halfword counts added to (forward) or subtracted from
 
 ### 4.10 Context, Register Windowing & Interconnect Operations (0xD0 - 0xE7)
 - `0xD0`: `XCHG Rr` — Exchange active $Rr$ with shadow register $Sr$
-- `0xD1`: `XCHGALL` — Swap $R1$–$R15$ with $S1$–$S15$
+- `0xD1`: `XCHGALL` — Swap all 31 physical registers (1–31) with their shadow registers
 - `0xD2`: `XCHGMOST` — Fast interrupt context swap: swap $R1$–$R14$ with $S1$–$S14$ (preserving $SP$)
 - `0xD3`: `RBASE Imm8` — Set register bank window offset ($rbase \leftarrow Imm8[4:0]$)
 - `0xD4`: `RBASE Rr` — Set register bank window offset dynamically ($rbase \leftarrow Rr[4:0]$)

@@ -278,9 +278,16 @@ To run just one part:
 
 ```sh
 make test-particle
+make test-particle-isa
 make test-parcore
 make test-sim
 ```
+
+`make test-particle-isa` runs only the differential test: each program in
+`hdl/particle/test/isa`, and a set of random programs, runs on both psim and
+the ROHD core, and their registers and memory must match at the end. Pick the
+random programs with `ISA_RANDOM_SEEDS`, for example
+`make test-particle-isa ISA_RANDOM_SEEDS=1,2,3`.
 
 ### Action compiler and language-server tests
 

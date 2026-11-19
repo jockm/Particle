@@ -128,7 +128,7 @@ class ParticleUlx3sTop extends Module {
     );
 
     // -------------------------------------------------------------------------
-    // Memory: 64 KiB block RAM (tcmSizeBytes), falling-edge registered
+    // Memory: 64 KiB of synchronous block RAM (tcmSizeBytes)
     // -------------------------------------------------------------------------
     final memBytes = config.tcmSizeBytes;
     final addrBits = (memBytes - 1).bitLength; // 16 for 64 KiB

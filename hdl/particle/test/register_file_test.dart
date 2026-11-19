@@ -145,7 +145,11 @@ void main() {
       expect(rf.rDataA.value.toInt(), equals(0x000000AA));
       expect(rf.rDataB.value.toInt(), equals(0x00010000));
     });
-  
+  });
+
+  // Builds its own register file and runs its own simulation (not the
+  // group's setUp one, which would already be running while this is built)
+  group('RegisterFile RBASE window', () {
     test('Option 2 RBASE windowing shifts R1-R15 while keeping R0 zero', () async {
       final clk = SimpleClockGenerator(10).clk;
       final reset = Logic(name: 'reset');
@@ -174,6 +178,8 @@ void main() {
       );
 
       await rf.build();
+      Simulator.setMaxSimTime(100000);
+      unawaited(Simulator.run());
 
       // Reset
       rAddrA.inject(0);

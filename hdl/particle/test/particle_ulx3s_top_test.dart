@@ -1,7 +1,7 @@
 // =============================================================================
 // File: hdl/particle/test/particle_ulx3s_top_test.dart
 // Description: Runs apps/asm/ulx3s_echo.asm on ParticleUlx3sTop: the program
-//              is fetched from the falling-edge block RAM model, prints its
+//              is fetched from the synchronous block RAM model, prints its
 //              banner on both UARTs and echoes bytes sent to each UART.
 //              Needs build/ulx3s_echo.bin (`make apps`, or `make test-particle`
 //              builds it).
@@ -140,7 +140,7 @@ void main() {
     await Simulator.simulationEnded;
   }, timeout: const Timeout(Duration(minutes: 5)));
 
-  test('ParticleBlockRamTdp: falling-edge reads, byte-enable writes', () async {
+  test('ParticleBlockRamTdp: synchronous reads, byte-enable writes', () async {
     final clk = SimpleClockGenerator(10).clk;
     final addrA = Logic(name: 'addrA', width: 9);
     final addrB = Logic(name: 'addrB', width: 8);
@@ -169,11 +169,9 @@ void main() {
     Simulator.setMaxSimTime(1000);
     unawaited(Simulator.run());
 
-    // Addresses set after a rising edge are read at the falling edge, so the
-    // data is there before the next rising edge
+    // An address set before a rising edge gives its data after that edge
     await clk.nextPosedge;
     addrA.inject((0x10 >> 1) + 1);
-    await clk.nextNegedge;
     await clk.nextPosedge;
     expect(ram.rDataA.value.toInt(), equals(0x4433));
     expect(ram.rDataB.value.toInt(), equals(0x44332211));
@@ -182,11 +180,9 @@ void main() {
     wData.inject(0xAABBCCDD);
     bEn.inject(0xA);
     wEn.inject(1);
-    await clk.nextNegedge;
     await clk.nextPosedge;
     expect(ram.rDataB.value.toInt(), equals(0x44332211));
     wEn.inject(0);
-    await clk.nextNegedge;
     await clk.nextPosedge;
     expect(ram.rDataB.value.toInt(), equals(0xAA33CC11));
     expect(ram.peekWord(0x10), equals(0xAA33CC11));

@@ -15,6 +15,12 @@ import 'package:parcore_rohd/parcore_tcm.dart';
 import 'package:parcore_rohd/spi_controller.dart';
 
 class ParcoreTop extends Module {
+  /// When set, the generated SystemVerilog loads each TCM from
+  /// `<tcmInitDir>/<name>_tcm_bank0.hex` and `..._bank1.hex` ($readmemh)
+  /// instead of from the binaries, so a test can change programs without
+  /// rebuilding its Verilator model. Simulation always uses the binaries.
+  final String? tcmInitDir;
+
   Logic get clk => input('clk');
   Logic get reset => input('reset');
 
@@ -47,6 +53,7 @@ class ParcoreTop extends Module {
     List<int>? core1Binary,
     List<int>? core2Binary,
     List<int>? core3Binary,
+    this.tcmInitDir,
     super.name = 'parcore_top',
   }) {
     addInput('clk', clk);
@@ -116,6 +123,8 @@ class ParcoreTop extends Module {
       rEnB: condMemREn & condLocalSelect,
       depthWords: ParcoreConfig.conductorConfig.tcmSizeBytes ~/ 4,
       initialBytes: conductorBinary,
+      initFileBank0: tcmInitDir == null ? null : '$tcmInitDir/conductor_tcm_bank0.hex',
+      initFileBank1: tcmInitDir == null ? null : '$tcmInitDir/conductor_tcm_bank1.hex',
       name: 'conductor_tcm',
     );
     condMemARData <= condTcm.rDataA;
@@ -157,11 +166,23 @@ class ParcoreTop extends Module {
 
     final isSpiSel = condMemAddr.slice(31, 4).eq(Const(0xF000001, width: 28));
 
-    // Conductor Port B Readback Multiplexer
+    // Conductor Port B Readback Multiplexer. Memory is synchronous: a load's
+    // data is used in the cycle after its address, so the source selection
+    // and the register values are captured at the clock edge, like the TCM.
+    final readSelRst = Logic(name: 'cond_read_sel_rst');
+    final readSelSpi = Logic(name: 'cond_read_sel_spi');
+    final readRstVal = Logic(name: 'cond_read_rst_val', width: 32);
+    final readSpiVal = Logic(name: 'cond_read_spi_val', width: 32);
+    Sequential(clk, [
+      readSelRst < isRstCtrlSel,
+      readSelSpi < isSpiSel,
+      readRstVal < regRstCtrl,
+      readSpiVal < spiCtrl.rData,
+    ]);
     condMemBRData <= mux(
-      isRstCtrlSel,
-      regRstCtrl,
-      mux(isSpiSel, spiCtrl.rData, condTcm.rDataB),
+      readSelRst,
+      readRstVal,
+      mux(readSelSpi, readSpiVal, condTcm.rDataB),
     );
 
     // -------------------------------------------------------------------------
@@ -209,6 +230,8 @@ class ParcoreTop extends Module {
         rEnB: muxedREnB,
         depthWords: sizeBytes ~/ 4,
         initialBytes: initialBytes,
+        initFileBank0: tcmInitDir == null ? null : '$tcmInitDir/${name}_tcm_bank0.hex',
+        initFileBank1: tcmInitDir == null ? null : '$tcmInitDir/${name}_tcm_bank1.hex',
         name: '${name}_tcm',
       );
 

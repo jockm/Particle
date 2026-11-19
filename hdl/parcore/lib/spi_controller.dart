@@ -62,6 +62,9 @@ class SpiController extends Module {
     final busy = Logic(name: 'spi_busy');
     final sckReg = Logic(name: 'sck_reg');
     final shiftReg = Logic(name: 'shift_reg', width: 8);
+    // MISO sampled on the rising SCK edge; shifted in on the falling edge so
+    // MOSI only changes while SCK is low (SPI mode 0).
+    final misoSample = Logic(name: 'miso_sample');
 
     final isCtrlSel = addr.eq(Const(0xF0000010, width: 32));
     final isDataSel = addr.eq(Const(0xF0000014, width: 32));
@@ -75,6 +78,7 @@ class SpiController extends Module {
       busy: Const(0),
       sckReg: Const(0),
       shiftReg: Const(0, width: 8),
+      misoSample: Const(0),
     }, [
       // Control & Divider Writes
       If(wEn & isCtrlSel, then: [
@@ -103,12 +107,14 @@ class SpiController extends Module {
         If(divCnt.eq(Const(0, width: 16)), then: [
           divCnt < regDiv,
           If(~sckReg, then: [
-            // Rising edge of SCK: sample MISO into LSB
+            // Rising edge of SCK: sample MISO (MOSI is held stable)
             sckReg < Const(1),
-            shiftReg < [shiftReg.slice(6, 0), spiMiso].swizzle(),
+            misoSample < spiMiso,
           ], orElse: [
-            // Falling edge of SCK: advance bit counter
+            // Falling edge of SCK: shift (next MOSI bit out, sampled MISO in)
+            // and advance the bit counter
             sckReg < Const(0),
+            shiftReg < [shiftReg.slice(6, 0), misoSample].swizzle(),
             If(bitCnt.eq(Const(1, width: 4)), then: [
               busy < Const(0),
               bitCnt < Const(0, width: 4),

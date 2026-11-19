@@ -65,9 +65,11 @@ void main() {
     });
 
     test('Initial boot vectors for Core 0 and Core 1', () async {
-      // Core 0 starts at 0x100, Core 1 starts at 0x200
-      expect(multiCore.c0MemPortAAddr.value.toInt(), equals(0x00000100));
-      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000200));
+      // Core 0 starts at 0x100, Core 1 at 0x200. One cycle after reset each
+      // is executing its first instruction (a NOP) and already fetching the
+      // next one.
+      expect(multiCore.c0MemPortAAddr.value.toInt(), equals(0x00000102));
+      expect(multiCore.c1MemPortAAddr.value.toInt(), equals(0x00000202));
     });
 
     test('Core 0 strobing MBOX interrupts Core 1 to designated vector slot', () async {

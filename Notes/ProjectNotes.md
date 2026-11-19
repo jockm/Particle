@@ -19,17 +19,6 @@
 - Parcore
     - RISC-V Extensions to Add:
         - 32 Bit
-            - A (Atomic Instructions) — or Zalrsc + Zaamo
-            - C compressed
-                - Zcb (Additional 16-bit Compressed Instructions):
-            - Zicsr (Control and Status Registers) + Zicntr (Base Counters/Timers)
-            - Zifencei (Instruction-Fetch Fence)
-            - Zba (Address Generation):
-            - Zbs (Single-Bit Manipulation):
-            - Zicond (Integer Conditional Operations
-            - Floating-Point Without FP Registers (Zfinx / Zdinx)
-            - F floating point
-                - Requires adding additional 32 bit floating point registers
         - 64 Bit
             - R64 support
             - D double precision floating point
@@ -47,17 +36,28 @@
     - Proposals:
         - "The Plan"
             1. Parcore Architecture Proposal 01: The Parcore Conductor
-            2. Parcore Architecture Proposal 02: Parcore Cluster Performance Optimization
-            3. Parcore Architecture Proposal 03: Verification & Golden Trace Co-Simulation Suite
-            4. Parcore Architecture Proposal 04: Parcore Multi-EX & Dynamic Out-of-Order Architecture
-            5. Parcore Architecture Proposal 05: Parcore Architecture Proposal 05: Autonomous Accelerator & Functional Extension Subsystem
-            6. Parcore Architecture Proposal 06: Parcore Architecture Proposal 06: Unified Memory Hierarchy, Multi-Master L1/L2 Cache Coherency, and SDRAM DMA Fabric
-            7. Parcore Architecture Proposal 07: Unified Interrupt Architecture, Real-Time Timer & Inter-Processor Interrupt (IPI) Subsystem
-            8. Parcore Architecture Proposal 08: Parcore Architecture Proposal 08: Tiered Execution Model — Interpreted Cold Paths & Hotspot JIT
-            9. Parcore Architecture Proposal 09: Parcore Architecture Proposal 09: Dynamic Code Cache Management, On-Stack Replacement (OSR), and Configurable Software-Assisted MMU
-            10. Parcore Architecture Proposal 10: Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration
-            11. Parcore Architecture Proposal 11: High-Speed Host Debug Engine, GDB Remote Serial Bridge & Non-Intrusive Trace Architecture
-            12. Parcore Architecture Proposal 12: Particle 64-Bit Architecture Extension
+            2. Parcore Architecture Proposal 02: Parcore Cluster Performance Optimization and:
+                1. Zba (Address Generation):
+                2. Zbs (Single-Bit Manipulation):
+                3. Zicond (Integer Conditional Operations
+            3. Add ISAs:
+                1. Add C (Compact) Instruction Set extension
+                2. Zcb (Additional 16-bit Compressed Instructions):
+                3. Zicsr (Control and Status Registers) + Zicntr (Base Counters/Timers)
+                4. Zifencei (Instruction-Fetch Fence)
+            4. Parcore Architecture Proposal 03: Verification & Golden Trace Co-Simulation Suite
+            5. Parcore Architecture Proposal 04: Parcore Multi-EX & Dynamic Out-of-Order Architecture
+            6. Add ISAs:
+                1. F (32-Bit Floating Point)
+            6. Parcore Architecture Proposal 05: Parcore Architecture Proposal 05: Autonomous Accelerator & Functional Extension Subsystem
+            7. Parcore Architecture Proposal 06: Parcore Architecture Proposal 06: Unified Memory Hierarchy, Multi-Master L1/L2 Cache Coherency, and SDRAM DMA Fabric
+                1. Add A (Atomics) Instruction Set Extension
+            8. Parcore Architecture Proposal 07: Unified Interrupt Architecture, Real-Time Timer & Inter-Processor Interrupt (IPI) Subsystem
+            9. Parcore Architecture Proposal 08: Parcore Architecture Proposal 08: Tiered Execution Model — Interpreted Cold Paths & Hotspot JIT
+            10. Parcore Architecture Proposal 09: Parcore Architecture Proposal 09: Dynamic Code Cache Management, On-Stack Replacement (OSR), and Configurable Software-Assisted MMU
+            11. Parcore Architecture Proposal 10: Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration
+            12. Parcore Architecture Proposal 11: High-Speed Host Debug Engine, GDB Remote Serial Bridge & Non-Intrusive Trace Architecture
+            13. Parcore Architecture Proposal 12: Particle 64-Bit Architecture Extension
         - Addenda
             1. Addendum A: CPU Hinting (`HINT` / `0xFE`)
 

@@ -185,8 +185,11 @@ void main() {
       await waitCycles(5);
       reset.put(0);
 
-      for (int cycle = 0; cycle < 6000; cycle++) {
+      // The conductor finishes in about 10000 cycles at SPI_DIV = 1.
+      final rstCtrl = top.internalSignals.firstWhere((s) => s.name == 'reg_rst_ctrl');
+      for (int cycle = 0; cycle < 20000; cycle++) {
         await waitCycles(1);
+        if (rstCtrl.value.isValid && rstCtrl.value.toInt() == 0x80000000) break;
         final csN = top.spiCsN.value.isValid ? top.spiCsN.value.toInt() : 1;
         final sck = top.spiSck.value.isValid ? top.spiSck.value.toInt() : 0;
         final mosi = top.spiMosi.value.isValid ? top.spiMosi.value.toInt() : 0;
@@ -195,8 +198,8 @@ void main() {
 
 
       // Verify Core 0 TCM received its 4 staged words at 0x0100 (word offset 0x40)
-      final c0Tcm = top.subModules.firstWhere((m) => m.name == 'core0_tcm');
-      final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm');
+      final c0Tcm = top.subModules.firstWhere((m) => m.name == 'core0_tcm') as dynamic;
+      final c1Tcm = top.subModules.firstWhere((m) => m.name == 'core1_tcm') as dynamic;
 
       // Verify RST_CTRL released all cores (bits [5:0] == 0) and set bit 31 (0x80000000)
       final rstCtrlVal = top.internalSignals
@@ -205,11 +208,16 @@ void main() {
           .toInt();
       expect(rstCtrlVal, equals(0x80000000),
           reason: 'Conductor should release reset and set boot-complete bit 31');
-      expect(c0Tcm, isNotNull);
-      expect(c1Tcm, isNotNull);
+      expect(
+          [0x100, 0x104, 0x108, 0x10C].map((a) => c0Tcm.readWord(a) as int).toList(),
+          equals([0x11223344, 0x55667788, 0x99AABBCC, 0xDDEEFF00]),
+          reason: 'core 0 TCM should hold its section at 0x0100');
+      expect([0x100, 0x104].map((a) => c1Tcm.readWord(a) as int).toList(),
+          equals([0xCAFEBABE, 0xDEADBEEF]),
+          reason: 'core 1 TCM should hold its section at 0x0100');
 
       await Simulator.endSimulation();
       await Simulator.simulationEnded;
-    }, skip: 'needs SEQ, pre-decrement and post-increment in the core (Phase 1)');
+    }, timeout: const Timeout(Duration(minutes: 20)));
   });
 }

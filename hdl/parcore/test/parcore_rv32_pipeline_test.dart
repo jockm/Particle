@@ -17,7 +17,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:parcore_rohd/parcore_config.dart';
 import 'package:parcore_rohd/parcore_tcm.dart';
+import 'package:particle_rohd/block_ram_tdp.dart';
 import 'package:parcore_rohd/parcore_top.dart';
 import 'package:rohd/rohd.dart';
 import 'package:test/test.dart';
@@ -125,8 +127,9 @@ Future<PipelineResult> runRohdPipeline({
 
 const _verilatorDir = '/tmp/parcore_pipeline_verilator';
 
-/// The generated SystemVerilog with each ParcoreTcm replaced by a memory that
-/// loads its contents from a hex file at start-up.
+/// The generated SystemVerilog. Each TCM loads its contents with $readmemh
+/// from `$_verilatorDir/<name>_tcm_bank0.hex` / `_bank1.hex`, which each run
+/// writes, so the model is built once for every program.
 Future<String> _pipelineSystemVerilog() async {
   final top = ParcoreTop(
     clk: Logic(name: 'clk'),
@@ -136,46 +139,12 @@ Future<String> _pipelineSystemVerilog() async {
     core1Binary: Uint8List(4096),
     core2Binary: Uint8List(4096),
     core3Binary: Uint8List(4096),
+    tcmInitDir: _verilatorDir,
   );
   await top.build();
-  var sv = top.generateSynth();
+  final sv = top.generateSynth();
   await Simulator.reset();
-
-  final tcmRegex = RegExp(
-    r'(module\s+ParcoreTcm(?:_\d+)?\s*\([^;]*\);)[\s\S]*?endmodule',
-  );
-  return sv.replaceAllMapped(tcmRegex, (m) {
-    final header = m.group(1)!;
-    return """
-$header
-  logic [7:0] mem [0:16383];
-  string hexfile;
-  initial begin
-    for (int i = 0; i < 16384; i++) mem[i] = 8'h00;
-    \$sformat(hexfile, "$_verilatorDir/%m.hex");
-    \$readmemh(hexfile, mem);
-  end
-  wire [13:0] bAddrA = {13'(addrA), 1'b0};
-  assign rDataA = {mem[bAddrA + 14'd1], mem[bAddrA]};
-  wire [13:0] bAddrB = {12'(addrB), 2'b00};
-  always_ff @(posedge clk) begin
-    if (wEnB) begin
-      if (bEnB[0]) mem[bAddrB] <= wDataB[7:0];
-      if (bEnB[1]) mem[bAddrB + 14'd1] <= wDataB[15:8];
-      if (bEnB[2]) mem[bAddrB + 14'd2] <= wDataB[23:16];
-      if (bEnB[3]) mem[bAddrB + 14'd3] <= wDataB[31:24];
-    end
-  end
-  always_comb begin
-    if (rEnB) begin
-      rDataB = {mem[bAddrB + 14'd3], mem[bAddrB + 14'd2], mem[bAddrB + 14'd1], mem[bAddrB]};
-    end else begin
-      rDataB = 32'h0;
-    end
-  end
-endmodule
-""";
-  });
+  return sv;
 }
 
 const _simMain = r"""
@@ -197,11 +166,14 @@ int main(int argc, char** argv) {
     top->guest_text_end = 0x00000800;
     top->eval();
 
-    auto& c0_mem = top->rootp->ParcoreTop__DOT__core0_tcm__DOT__mem;
-    auto& c1_mem = top->rootp->ParcoreTop__DOT__core1_tcm__DOT__mem;
-    auto word = [](auto& mem, int a) {
-        return uint32_t(mem[a]) | (uint32_t(mem[a + 1]) << 8) |
-               (uint32_t(mem[a + 2]) << 16) | (uint32_t(mem[a + 3]) << 24);
+    // Each TCM is two 16-bit banks: bank 0 holds bits 15:0 of each word,
+    // bank 1 bits 31:16
+    auto& c0_b0 = top->rootp->ParcoreTop__DOT__core0_tcm__DOT__ram_bank0;
+    auto& c0_b1 = top->rootp->ParcoreTop__DOT__core0_tcm__DOT__ram_bank1;
+    auto& c1_b0 = top->rootp->ParcoreTop__DOT__core1_tcm__DOT__ram_bank0;
+    auto& c1_b1 = top->rootp->ParcoreTop__DOT__core1_tcm__DOT__ram_bank1;
+    auto word = [](auto& b0, auto& b1, int a) {
+        return uint32_t(b0[a >> 2]) | (uint32_t(b1[a >> 2]) << 16);
     };
 
     // Every run lasts exactly max_cycles cycles
@@ -213,9 +185,9 @@ int main(int argc, char** argv) {
     }
     cyc--;
 
-    std::printf("C0_500=0x%08x\n", word(c0_mem, 0x500));
+    std::printf("C0_500=0x%08x\n", word(c0_b0, c0_b1, 0x500));
     for (int a = 0; a < 0x100; a += 4) {
-        uint32_t v = word(c1_mem, a);
+        uint32_t v = word(c1_b0, c1_b1, a);
         if (v != 0) std::printf("C1_MEM[0x%04x]=0x%08x\n", a, v);
     }
     std::printf("CYCLES=%d C0_PC=0x%04x C1_PC=0x%04x C2_PC=0x%04x C3_PC=0x%04x\n",
@@ -224,9 +196,9 @@ int main(int argc, char** argv) {
                 top->rootp->ParcoreTop__DOT__core1_id__DOT__pc,
                 top->rootp->ParcoreTop__DOT__core2_ex__DOT__pc,
                 top->rootp->ParcoreTop__DOT__core3_mem__DOT__pc);
-    std::printf("SCOREBOARD=0x%08x\n", word(c1_mem, 0x80));
+    std::printf("SCOREBOARD=0x%08x\n", word(c1_b0, c1_b1, 0x80));
     for (int r = 0; r < 32; r++) {
-        std::printf("R%d=0x%08x\n", r, word(c1_mem, r * 4));
+        std::printf("R%d=0x%08x\n", r, word(c1_b0, c1_b1, r * 4));
     }
     delete top;
     return 0;
@@ -297,30 +269,20 @@ Future<PipelineResult> runVerilatorPipeline({
 }) async {
   final binFile = await (_verilatorBuild ??= _buildVerilatorModel());
 
-  void writeHex(String path, List<int> bytes) {
-    final mem = Uint8List(16384);
-    for (int i = 0; i < bytes.length && (0x0100 + i) < 16384; i++) {
-      mem[0x0100 + i] = bytes[i];
-    }
-    final sb = StringBuffer();
-    for (int i = 0; i < 16384; i++) {
-      sb.writeln(mem[i].toRadixString(16).padLeft(2, '0'));
-    }
-    File(path).writeAsStringSync(sb.toString());
-  }
-
-  // The hex file name is the memory's hierarchical name (%m), which differs
-  // between Verilator versions, so write both forms
-  final images = <String, List<int>>{
-    'conductor_tcm': const [],
-    'core0_tcm': c0Merged,
-    'core1_tcm': c1Kernel,
-    'core2_tcm': c2Kernel,
-    'core3_tcm': c3Kernel,
+  // Each TCM's two bank files, as ParcoreTop(tcmInitDir:) expects
+  final images = <String, (List<int>, int)>{
+    'conductor_tcm': (const [], ParcoreConfig.conductorConfig.tcmSizeBytes),
+    'core0_tcm': (c0Merged, ParcoreConfig.core0If.tcmSizeBytes),
+    'core1_tcm': (c1Kernel, ParcoreConfig.core1Id.tcmSizeBytes),
+    'core2_tcm': (c2Kernel, ParcoreConfig.core2Ex.tcmSizeBytes),
+    'core3_tcm': (c3Kernel, ParcoreConfig.core3Mem.tcmSizeBytes),
   };
   for (final e in images.entries) {
-    writeHex('$_verilatorDir/TOP.ParcoreTop.${e.key}.hex', e.value);
-    writeHex('$_verilatorDir/ParcoreTop.${e.key}.hex', e.value);
+    final (bytes, size) = e.value;
+    final (bank0, bank1) = ParticleBlockRamTdp.bankFiles(bytes,
+        loadOffset: 0x100, depthWords: size ~/ 4);
+    File('$_verilatorDir/${e.key}_bank0.hex').writeAsStringSync(bank0);
+    File('$_verilatorDir/${e.key}_bank1.hex').writeAsStringSync(bank1);
   }
 
   final runRes = Process.runSync(

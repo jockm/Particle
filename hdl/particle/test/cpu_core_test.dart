@@ -1,338 +1,269 @@
 // =============================================================================
 // File: hdl/particle/test/cpu_core_test.dart
-// Architecture: Particle 32-bit RISC
-// Description: Integrated testbench verifying instruction fetch, reset vector,
-//              and Direct Stride vector dispatch.
+// Description: Core behaviour the differential ISA test can't check against
+//              psim: reset, cycle counts, MBOX interrupts (including during a
+//              FIFO stall and a divide), vector 15, misaligned loads, and a
+//              core built without its divider.
+//
+// Programs are assembled with build/tools/pasm (`make tools`).
 // =============================================================================
 
+import 'dart:io';
+
+import 'package:particle_rohd/cpu_config.dart';
 import 'package:rohd/rohd.dart';
 import 'package:test/test.dart';
-import '../lib/constants.dart';
-import '../lib/cpu_config.dart';
-import '../lib/cpu_core.dart';
+
+import 'core_harness.dart';
+
+final _work = Directory.systemTemp.createTempSync('particle_core_test_');
+var _count = 0;
+
+/// Assembles [source] (origin 0x100) and returns its bytes.
+List<int> asm(String source) {
+  final n = _count++;
+  final src = File('${_work.path}/p$n.asm')..writeAsStringSync(source);
+  final out = '${_work.path}/p$n.bin';
+  final res = Process.runSync(
+      '../../build/tools/pasm', [src.path, '-I', '../../lib', '-o', out]);
+  if (res.exitCode != 0) {
+    throw StateError('pasm failed:\n${res.stdout}${res.stderr}\n$source');
+  }
+  return File(out).readAsBytesSync();
+}
+
+/// Steps until the PC is [addr] (fails after [limit] cycles).
+Future<void> runTo(CoreHarness h, int addr, {int limit = 2000}) async {
+  for (var i = 0; i < limit; i++) {
+    if (h.pc == addr) return;
+    await h.step();
+  }
+  fail('PC never reached 0x${addr.toRadixString(16)} (at 0x${h.pc.toRadixString(16)})');
+}
+
+Future<void> strobeMbox(CoreHarness h, int vector) async {
+  h.mboxVector.inject(vector);
+  h.mboxStrobe.inject(1);
+  await h.step();
+  h.mboxStrobe.inject(0);
+}
 
 void main() {
   tearDown(() async {
-    await Simulator.reset();
+    // A failed test may leave its simulation running
+    await CoreHarness.stopActive();
   });
 
-  group('Particle CPU Core Integration Tests', () {
-    late Logic clk;
-    late Logic reset;
-    late Logic memARData;
-    late Logic memBRData;
-    late Logic mboxStrobe;
-    late Logic mboxVector;
-    late ParticleCpuCore core;
+  test('Reset: the first instruction is fetched from 0x100', () async {
+    final h = CoreHarness(asm('.org 0x100\n    LD R1, 5\n_h: BBRA _h\n'));
+    await h.start();
+    expect(h.pc, equals(0x100));
+    expect(h.core.memPortAAddr.value.toInt(), equals(0x100));
+    await h.runToHalt();
+    expect(h.snapshot().reg(1), equals(5));
+    await h.stop();
+  });
 
-    setUp(() async {
-      clk = Logic(name: 'clk');
-      reset = Logic(name: 'reset');
-      memARData = Logic(name: 'memARData', width: ParticleWidths.halfWord);
-      memBRData = Logic(name: 'memBRData', width: ParticleWidths.word);
-      mboxStrobe = Logic(name: 'mboxStrobe');
-      mboxVector = Logic(name: 'mboxVector', width: ParticleWidths.trapVector);
+  test('Cycle counts: ALU and taken branches 1, LDI 2, loads 2, stores 1',
+      () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    ADD     R1, 1           ; 0x100
+    ADD     R1, 1           ; 0x102
+    LDI     R2, 0x8000      ; 0x104 (2 cycles)
+    ST32    (R2), R1        ; 0x108
+    LD32    R3, (R2)        ; 0x10A (2 cycles)
+    FBRA    _t              ; 0x10C (taken)
+    ADD     R4, 1
+_t: ADD     R5, 1           ; 0x110
+_h: BBRA    _h              ; 0x112
+'''));
+    await h.start();
+    // The cycle the core enters Exec at each PC
+    final seen = <int, int>{};
+    for (var c = 0; c < 20; c++) {
+      if (h.inExec) seen.putIfAbsent(h.pc, () => c);
+      await h.step();
+    }
+    expect(seen[0x102]! - seen[0x100]!, equals(1), reason: 'ADD');
+    expect(seen[0x104]! - seen[0x102]!, equals(1), reason: 'ADD');
+    expect(seen[0x108]! - seen[0x104]!, equals(2), reason: 'LDI');
+    expect(seen[0x10A]! - seen[0x108]!, equals(1), reason: 'ST32');
+    expect(seen[0x10C]! - seen[0x10A]!, equals(2), reason: 'LD32');
+    expect(seen[0x110]! - seen[0x10C]!, equals(1), reason: 'taken FBRA');
+    final st = h.snapshot();
+    expect(st.reg(3), equals(2));
+    expect(st.reg(4), equals(0));
+    expect(st.reg(5), equals(1));
+    await h.stop();
+  });
 
-      core = ParticleCpuCore(
-        clk: clk,
-        reset: reset,
-        memPortARData: memARData,
-        memPortBRData: memBRData,
-        mboxStrobeIn: mboxStrobe,
-        mboxVectorIn: mboxVector,
-        config: const CpuConfig(trapTableBase: 0x0100, trapStrideBytes: 64),
-      );
-      await core.build();
-    });
+  // Vector 1 handler: count in R2, keep the return address in R3, return
+  const mboxHandler = '''
+.org 0x140
+    ADD     R2, 1
+    LD      R3, R14
+    JMP     R14, R0
+''';
 
-    test('Core Reset Vector Fetch at 0x0100', () async {
-      // Clock 1 cycle in reset
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
+  test('MBOX: taken between instructions, R14 = the next instruction',
+      () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+$mboxHandler
+.org 0x500
+_main:
+    ADD     R1, 1
+    BBRA    _main
+'''));
+    await h.start();
+    await h.step(40);
+    final before = h.snapshot().reg(1);
+    await strobeMbox(h, 1);
+    await h.step(40);
+    final st = h.snapshot();
+    expect(st.reg(2), equals(1), reason: 'the handler ran once');
+    expect(st.reg(3), anyOf(equals(0x500), equals(0x502)),
+        reason: 'R14 is an instruction in the loop');
+    expect(st.reg(1), greaterThan(before), reason: 'the loop resumed');
+    await h.stop();
+  });
 
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
+  test('MBOX interrupts a FIFO.R stall, which runs again after the handler',
+      () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x140
+    ADD     R2, 1
+    LD      R3, R14
+    LDI     R5, 0x77
+    FIFO.W  R5, R4          ; feed the channel the main code waits on
+    JMP     R14, R0
+.org 0x500
+_main:
+    LD      R4, 1
+    FIFO.R  R6, R4          ; 0x502: stalls (empty)
+    LD      R7, 9
+_h: BBRA    _h
+'''));
+    await h.start();
+    await h.step(30);
+    expect(h.pc, equals(0x502), reason: 'stalled on FIFO.R');
+    await strobeMbox(h, 1);
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(2), equals(1));
+    expect(st.reg(3), equals(0x502), reason: 'R14 = the stalled FIFO.R');
+    expect(st.reg(6), equals(0x77), reason: 'FIFO.R ran again and got data');
+    expect(st.reg(7), equals(9));
+    await h.stop();
+  });
 
-      await Simulator.run();
+  test('MBOX abandons a divide, which runs again after the handler', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x140
+    ADD     R2, 1
+    LD      R3, R14
+    LDI     R8, 1000
+    DIV     R8, R9          ; the handler divides too
+    JMP     R14, R0
+.org 0x500
+_main:
+    LDI     R5, 12345
+    LD      R9, 10
+    DIV     R5, R9          ; 0x506
+    LD      R7, 9
+_h: BBRA    _h
+'''));
+    await h.start();
+    await runTo(h, 0x506);
+    await h.step(6); // part-way through the divide
+    expect(h.pc, equals(0x506));
+    await strobeMbox(h, 1);
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(2), equals(1));
+    expect(st.reg(3), equals(0x506), reason: 'R14 = the DIV');
+    expect(st.reg(8), equals(100), reason: "the handler's divide");
+    expect(st.reg(5), equals(1234), reason: 'the DIV ran again');
+    expect(st.reg(7), equals(9));
+    await h.stop();
+  });
 
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000100));
-    });
+  test('An illegal opcode takes vector 15 with R14 = its address', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x4C0
+    LD      R6, R14
+_h15: BBRA  _h15
+.org 0x500
+_main:
+    LD      R1, 1
+    .half   0xFF12          ; not an opcode
+    LD      R2, 2
+'''));
+    await h.start();
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(6), equals(0x502));
+    expect(st.reg(1), equals(1));
+    expect(st.reg(2), equals(0), reason: 'execution did not continue');
+    await h.stop();
+  });
 
-    test('Inbound MBOX Strobe Interruption to Vector 1 (0x0140)', () async {
-      // Cycle 1: Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
+  test('A misaligned load takes vector 14 and changes nothing', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x480
+    LD      R6, R14
+_h14: BBRA  _h14
+.org 0x500
+_main:
+    LDI     R1, 0x8002
+    LD      R2, 5
+    LD32    R2, (R1++)      ; 0x506: misaligned
+'''));
+    await h.start();
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(6), equals(0x506));
+    expect(st.reg(1), equals(0x8002), reason: 'pointer unchanged');
+    expect(st.reg(2), equals(5), reason: 'destination unchanged');
+    await h.stop();
+  });
 
-      // Cycle 2: Deassert reset, assert MBOX strobe for Vector 1
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        mboxVector.put(1);
-        mboxStrobe.put(1);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      // Vector 1 target: TRAP_TABLE_BASE (0x0100) + (1 * 64) = 0x0140 (320)
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000140));
-    });
-  
-    test('ParticleCpuCore executes RBASE instructions correctly', () async {
-      // Cycle 1: Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
-
-      // Cycle 2: Release reset -> State Fetch (Fetch 0xD310: RBASE Imm4 = 16 or 0xD30F: RBASE Imm4 = 15)
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        // Opcode 0xD3, Imm4 = 15 (0xD30F)
-        memARData.put((ParticleOpcodes.rbaseImm4 << 8) | 0x0F);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      // Cycle 3: State Exec -> RBASE updates on this clock edge
-      Simulator.registerAction(25, () => clk.put(1));
-      Simulator.registerAction(30, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
-    });    test('Trap 14 is triggered on unaligned LD32 address', () async {
-      // Pulse 1 (t=5): Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
-
-      // Pulse 2 (t=15): Fetch ADD_IMM4 R2, 1 (0x0621)
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        memARData.put((ParticleOpcodes.addImm4 << 8) | 0x21);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      // Pulse 3 (t=25): Exec ADD_IMM4 (R2 becomes 1) -> PC latches 0x0102, transitions to stateFetch
-      Simulator.registerAction(25, () => clk.put(1));
-      Simulator.registerAction(30, () => clk.put(0));
-
-      // Pulse 4 (t=35): Fetch LD32 R1, (R2) -> transitions to stateExec
-      Simulator.registerAction(32, () {
-        memARData.put((ParticleOpcodes.ld32 << 8) | 0x12);
-      });
-      Simulator.registerAction(35, () => clk.put(1));
-      Simulator.registerAction(40, () => clk.put(0));
-
-      // Pulse 5 (t=45): Exec LD32 -> Trap 14 fires, next PC latches 0x0480
-      Simulator.registerAction(45, () => clk.put(1));
-      Simulator.registerAction(50, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      // Trap 14 target: 0x0100 + (14 * 64) = 0x0480 (1152)
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
-
-      // Memory Read/Write strobes must be suppressed during alignment trap
-      expect(core.memPortBREn.value.toInt(), equals(0));
-      expect(core.memPortBWEn.value.toInt(), equals(0));
-    });
-
-    test('Trap 14 is triggered on unaligned LD16 address', () async {
-      // Pulse 1 (t=5): Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
-
-      // Pulse 2 (t=15): Fetch ADD_IMM4 R2, 1 (0x0621)
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        memARData.put((ParticleOpcodes.addImm4 << 8) | 0x21);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      // Pulse 3 (t=25): Exec ADD_IMM4 (R2 becomes 1) -> PC latches 0x0102
-      Simulator.registerAction(25, () => clk.put(1));
-      Simulator.registerAction(30, () => clk.put(0));
-
-      // Pulse 4 (t=35): Fetch LD16 R1, (R2) -> opcode 0x20, Rr = 1, Rl = 2
-      Simulator.registerAction(32, () {
-        memARData.put((ParticleOpcodes.ld16 << 8) | 0x12);
-      });
-      Simulator.registerAction(35, () => clk.put(1));
-      Simulator.registerAction(40, () => clk.put(0));
-
-      // Pulse 5 (t=45): Exec LD16 -> Trap 14 fires due to odd address (1)
-      Simulator.registerAction(45, () => clk.put(1));
-      Simulator.registerAction(50, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
-      expect(core.memPortBREn.value.toInt(), equals(0));
-    });
-
-    test('Trap 14 is triggered on unaligned branch/jump target', () async {
-      // Pulse 1 (t=5): Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
-
-      // Pulse 2 (t=15): Fetch ADD_IMM4 R1, 1 (0x0611) -> R1 becomes 1 (odd jump target)
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        memARData.put((ParticleOpcodes.addImm4 << 8) | 0x11);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      // Pulse 3 (t=25): Exec ADD_IMM4 -> R1 becomes 1, PC latches 0x0102
-      Simulator.registerAction(25, () => clk.put(1));
-      Simulator.registerAction(30, () => clk.put(0));
-
-      // Pulse 4 (t=35): Fetch JMP R1, R0 -> opcode 0xA0, Rr = 1, Rl = 0
-      Simulator.registerAction(32, () {
-        memARData.put((ParticleOpcodes.jmp << 8) | 0x10);
-      });
-      Simulator.registerAction(35, () => clk.put(1));
-      Simulator.registerAction(40, () => clk.put(0));
-
-      // Pulse 5 (t=45): Exec JMP -> branch target bit 0 is set -> Trap 14 fires
-      Simulator.registerAction(45, () => clk.put(1));
-      Simulator.registerAction(50, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000480));
-    });
-
-    test('LDI zero-extends 16-bit immediate and advances PC by 4', () async {
-      // Pulse 1 (t=5): Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
-
-      // Pulse 2 (t=15): Fetch LDI R5, 0xBEEF (Word 0 = 0x0705)
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        memARData.put((ParticleOpcodes.ldi << 8) | 0x05);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      // Pulse 3 (t=25): Exec LDI -> transitions to stateFetchImm (memPortAAddr -> 0x0102)
-      Simulator.registerAction(25, () => clk.put(1));
-      Simulator.registerAction(30, () => clk.put(0));
-
-      // Pulse 4 (t=35): FetchImm latches 0xBEEF into R5 and advances PC to 0x0104
-      Simulator.registerAction(32, () {
-        expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
-        memARData.put(0xBEEF);
-      });
-      Simulator.registerAction(35, () => clk.put(1));
-      Simulator.registerAction(40, () => clk.put(0));
-
-      // Pulse 5 (t=45): Fetch next instruction ST32 (R0), R5 (0x3505) to observe R5 on memPortBWData
-      Simulator.registerAction(42, () {
-        expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
-        memARData.put((ParticleOpcodes.st32 << 8) | 0x05);
-      });
-      Simulator.registerAction(45, () => clk.put(1));
-      Simulator.registerAction(50, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      expect(core.memPortBWData.value.toInt(), equals(0x0000BEEF));
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
-    });
-
-    test('LDIS sign-extends 16-bit immediate and advances PC by 4', () async {
-      // Pulse 1 (t=5): Reset active
-      Simulator.registerAction(0, () => clk.put(0));
-      Simulator.registerAction(5, () => clk.put(1));
-      Simulator.registerAction(10, () => clk.put(0));
-
-      // Pulse 2 (t=15): Fetch LDIS R6, -4096 (0xF000 -> Word 0 = 0x0806)
-      Simulator.registerAction(12, () {
-        reset.put(0);
-        memARData.put((ParticleOpcodes.ldis << 8) | 0x06);
-      });
-      Simulator.registerAction(15, () => clk.put(1));
-      Simulator.registerAction(20, () => clk.put(0));
-
-      // Pulse 3 (t=25): Exec LDIS -> transitions to stateFetchImm (memPortAAddr -> 0x0102)
-      Simulator.registerAction(25, () => clk.put(1));
-      Simulator.registerAction(30, () => clk.put(0));
-
-      // Pulse 4 (t=35): FetchImm latches 0xFFFFF000 into R6 and advances PC to 0x0104
-      Simulator.registerAction(32, () {
-        expect(core.memPortAAddr.value.toInt(), equals(0x00000102));
-        memARData.put(0xF000);
-      });
-      Simulator.registerAction(35, () => clk.put(1));
-      Simulator.registerAction(40, () => clk.put(0));
-
-      // Pulse 5 (t=45): Fetch ST32 (R0), R6 (0x3506) to observe R6 on memPortBWData
-      Simulator.registerAction(42, () {
-        expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
-        memARData.put((ParticleOpcodes.st32 << 8) | 0x06);
-      });
-      Simulator.registerAction(45, () => clk.put(1));
-      Simulator.registerAction(50, () => clk.put(0));
-
-      reset.put(1);
-      memARData.put(0);
-      memBRData.put(0);
-      mboxStrobe.put(0);
-      mboxVector.put(0);
-
-      await Simulator.run();
-
-      expect(core.memPortBWData.value.toInt(), equals(0xFFFFF000));
-      expect(core.memPortAAddr.value.toInt(), equals(0x00000104));
-    });
+  test('Without a divider, DIV takes vector 15', () async {
+    final h = CoreHarness(
+        asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x4C0
+    LD      R6, R14
+_h15: BBRA  _h15
+.org 0x500
+_main:
+    LD      R1, 8
+    LD      R2, 2
+    DIV     R1, R2          ; 0x504
+'''),
+        config: const CpuConfig(enableDivider: false));
+    await h.start();
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(6), equals(0x504));
+    expect(st.reg(1), equals(8));
+    await h.stop();
   });
 }

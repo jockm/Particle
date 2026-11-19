@@ -39,7 +39,7 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 |---|---|
 | `lib/parcore_top.dart` | `ParcoreTop`: the conductor, the four stage cores, their TCMs, the interconnect, the FTDI UART, and the SPI controller |
 | `lib/parcore_interconnect.dart` | `ParcoreInterconnect`: the four stage-to-stage FIFOs and the flush logic |
-| `lib/parcore_tcm.dart` | `ParcoreTcm`: dual-port TCM, optionally preloaded with a binary |
+| `lib/parcore_tcm.dart` | `ParcoreTcm`: a core's TCM, a synchronous `ParticleBlockRamTdp` (16-bit fetch port, 32-bit data port with byte enables), preloaded with a binary at `0x100` |
 | `lib/parcore_config.dart` | The `CpuConfig` of each core |
 | `lib/spi_controller.dart` | `SpiController`: the conductor's SPI master |
 | `lib/cpu_config.dart` | Parcore's copy of `CpuConfig` |
@@ -82,11 +82,11 @@ Core 0's channel 0 is the FTDI UART, not a FIFO: `FIFO.W` on channel 0 sends the
 
 Each stage runs a loop that reads its input FIFO, does its part of the RISC-V instruction, and writes the result to the next FIFO.
 
-**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`). Each pass it echoes any byte waiting on the UART, checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC, instruction]` on channel 1. A zero word is not pushed. Its trap vector 1 (`0x140`) is the branch-redirect handler: it loads a new PC from `0x13C` and goes back to the loop.
+**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`). Each pass it echoes any byte waiting on the UART (`FIFO.TRYR`, which reports in R14 whether a byte was read), checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC, instruction]` on channel 1. A zero word is not pushed. Its trap vector 1 (`0x140`) is the branch-redirect handler: it loads a new PC from `0x13C` and goes back to the loop.
 
 **Core 1 (ID)** keeps the 32 RISC-V registers in its zero page (`x0`–`x31` at `0x00`–`0x7F`), a scoreboard of registers with results in flight at `0x80`, and a copy of the scoreboard taken at the last branch at `0x84`. It first drains any writeback on channel 2 into the register file and clears that register's scoreboard bit, then decodes the next instruction from channel 0, waits while its source registers are in flight, and sends a 4-word packet to core 2 on channel 1. Its trap vector 1 restores the scoreboard from the branch copy.
 
-**Core 2 (EX)** does the ALU work, RV32M multiply, divide and remainder, the Zbb instructions, CSRs, and branches. Division is done in software (`_udiv_calc`), because the Particle core doesn't decode `DIV`. For a taken branch or jump it executes `MBOX R14, 1` (see [Branches](#branches)) and, if the instruction has a destination register (JAL/JALR), forwards the link value to core 3.
+**Core 2 (EX)** does the ALU work, RV32M multiply, divide and remainder, the Zbb instructions, CSRs, and branches. Division is done in software (`_udiv_calc`); the firmware was written before the Particle core had `DIV`, which it now has. For a taken branch or jump it executes `MBOX R14, 1` (see [Branches](#branches)) and, if the instruction has a destination register (JAL/JALR), forwards the link value to core 3.
 
 **Core 3 (MEM)** reads a control word whose bits [19:16] give the memory operation (1–5 loads LB, LH, LW, LBU, LHU; 8–10 stores SB, SH, SW; anything else is an ALU result), performs the access with sign or zero extension, and sends `[rd, value]` back to core 1 on channel 1.
 
@@ -107,6 +107,8 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 2 KiB
 | `0xF000_0014` | `SPI_DATA`: bits 7:0, transmit and receive |
 | `0xF000_0018` | `SPI_DIV`: bits 15:0, SPI clock divider |
 
+The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START) while idle starts an 8-bit transfer, most significant bit first. SCK changes once every `SPI_DIV + 1` cycles. MISO is sampled on each rising SCK edge and shifted in on the next falling edge, which is also when the next MOSI bit appears, so MOSI never changes while SCK is high.
+
 `RST_CTRL` bits:
 
 | Bits | Use |
@@ -114,6 +116,8 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 2 KiB
 | 5:0 | Per-core reset/hold (1 = held in reset, and its TCM port B is connected to the conductor). Only bits 3:0 have cores. |
 | 6 | Flush `ifToId` and `idToEx` |
 | 31 | Boot complete |
+
+Reads of `RST_CTRL`, the SPI registers and the conductor's TCM all answer like memory: the value is captured at the clock edge after the address, and arrives in the next cycle.
 
 At reset `RST_CTRL` is `0x3F` (every core held) when a conductor binary is given, and `0` otherwise, so without a conductor the stage cores start immediately from their preloaded TCMs.
 
@@ -131,7 +135,7 @@ At reset `RST_CTRL` is `0x3F` (every core held) when a conductor binary is given
 
 The payloads follow the section table. The conductor holds every core in reset and pulses the flush bit, copies each payload into its core's TCM through the window, then writes `0x80000000` to `RST_CTRL`, releasing the cores and setting boot complete.
 
-There is no make target that builds this flash image yet. On the current Particle core `SEQ` is not decoded (see [hdl_architecture.md](hdl_architecture.md)), so the conductor's magic and checksum comparisons don't stop a bad image.
+There is no make target that builds this flash image yet.
 
 ## Building and Generating
 
@@ -149,7 +153,7 @@ There is no make target that builds this flash image yet. On the current Particl
 |---|---|
 | `parcore_top_test.dart` | `ParcoreTop` elaborates and generates SystemVerilog; the UART line idles while in reset; a byte sent on `uart_rx` is echoed on `uart_tx` |
 | `parcore_pipeline_trace_test.dart` | The same UART echo with the real stage firmware loaded |
-| `conductor_boot_test.dart` | The conductor and SPI controller elaborate; the conductor copies firmware from a simulated SPI flash into the core TCMs and releases reset (skipped for now: see below) |
+| `conductor_boot_test.dart` | The conductor and SPI controller elaborate; the conductor copies firmware from a simulated SPI flash into the core TCMs and releases reset, and core 0 and core 1's TCMs hold their sections (about 10,000 cycles) |
 | `parcore_rv32_pipeline_test.dart` | Guest RV32 programs run on the four-stage pipeline, and core 1's registers at the end must match the RV32 reference model: register writes, signed division, multiply high, sub-word loads and stores, branches and jumps, CSRs |
 | `rv32_reference.dart` | Not a test: the RV32 reference interpreter the pipeline tests compare against (RV32I, RV32M, the Zbb instructions core 1 decodes, and the CSRs core 2 keeps) |
 | `parcore_riscv_isa_test.dart` | The official rv32ui, rv32um and rv32uzbb tests |
@@ -169,7 +173,7 @@ make test-parcore PARCORE_FAST_SIM=0    # ROHD simulator
 make test-parcore VERILATOR=/path/to/verilator
 ```
 
-Each guest program runs for exactly its test's cycle count, with no early exit, so a slow instruction can't end a run before its result is written. The Verilator model is built in `/tmp/parcore_pipeline_verilator` (`/tmp/parcore_verilator` for the ISA test) and rebuilt whenever the generated SystemVerilog or the test's C++ harness changes. In the Verilator runs, each `ParcoreTcm` in the generated SystemVerilog is replaced by a memory that loads a hex file, because `ParcoreTcm`'s own memory exists only in the Dart simulation (see `hdl_architecture.md`).
+Each guest program runs for exactly its test's cycle count, with no early exit, so a slow instruction can't end a run before its result is written. The Verilator model is built in `/tmp/parcore_pipeline_verilator` (`/tmp/parcore_verilator` for the ISA test) and rebuilt whenever the generated SystemVerilog or the test's C++ harness changes. The Verilator runs simulate the generated SystemVerilog as it is: `ParcoreTop(tcmInitDir:)` makes each TCM load its two bank files with `$readmemh`, and each run writes those files, so one model serves every program.
 
 `test_pipeline.sh` runs each pipeline test on its own, runs them all even when one fails, and lists the failures at the end.
 
@@ -178,6 +182,6 @@ Each guest program runs for exactly its test's cycle count, with no early exit, 
 | Test | Skipped until |
 |---|---|
 | Architectural registers, Control transfer (`parcore_rv32_pipeline_test.dart`) | Branch redirect: taken branches don't yet reach core 0, and wrong-path instructions aren't dropped |
-| Conductor boot (`conductor_boot_test.dart`) | The core implements `SEQ`, pre-decrement and post-increment, which the conductor firmware uses |
+| Official ISA tests except `rv32ui/simple` (`parcore_riscv_isa_test.dart`, `make test-parcore-isa`) | Branch redirect: every other test takes a branch (a loop, or a jump to its first case) |
 
 Skipped tests are listed in the test output with their reason.

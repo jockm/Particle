@@ -45,7 +45,7 @@ In a cluster, the exit code is 0 when every core ended with `TRAP 0`; otherwise 
 These are specific to the simulator (see also §5 of `particle_spec.md`):
 
 * **Console**: Channel 0 is the console. `FIFO.W` to channel 0 prints `Rr[7:0]` to stdout (unless a cluster routes channel 0 to another core).
-* **Ending a run**: `TRAP 0` ends the run on that core, printing `R1` (unless `--no-exit-on-reset`). `TRAP 15` ends it as an out-of-bounds or sentinel trap. Every other trap, including a misaligned access (vector 14), goes to its vector as on hardware.
+* **Ending a run**: `TRAP 0` ends the run on that core, printing `R1` (unless `--no-exit-on-reset`). `TRAP 15` ends it as an out-of-bounds or sentinel trap. Every other trap, including a misaligned access (vector 14), goes to its vector as on hardware. A misaligned load, store or `TAS` changes no register and no memory (not even a pointer update) before taking vector 14, whose R14 is the faulting instruction's address.
 * **FIFOs**: Each core has 4 channels of 256 entries; a channel number is taken modulo 4. `FIFO.R` on an empty channel stalls: the PC stays on the instruction, and the stalled cycles count. A write to a full channel is dropped (`FIFO.TRYW` reports it in `R14`).
 * **Memory**: 128 KiB per core by default; data addresses wrap within it.
 * **Unlisted opcodes** execute as no-ops (hardware raises vector 15).

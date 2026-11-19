@@ -15,8 +15,8 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | `fifoChannels` | `4` | Number of point-to-point streaming FIFO channels |
 | `fifoDepth` | `256` | Depth of each FIFO channel, in 32-bit words |
 | `coreId` | `0` | The core's identifier in multi-core topologies |
-| `enableMultiplier` | `true` | Include the single-cycle DSP multiplier |
-| `enableDivider` | `true` | Include the multi-cycle divider |
+| `enableMultiplier` | `true` | Include the single-cycle DSP multiplier. When `false`, the multiply opcodes take the illegal-opcode trap (vector 15) |
+| `enableDivider` | `true` | Include the divider (34 cycles per divide). When `false`, the divide and remainder opcodes take the illegal-opcode trap (vector 15) |
 | `tcmSizeBytes` | `65536` | On-chip tightly coupled block RAM, in bytes (64 KiB) |
 | `mmioBaseAddr` | `0xF0000000` | Base address of the memory-mapped I/O and external memory window |
 | `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleUlx3sTop`, which always has it) |

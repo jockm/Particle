@@ -301,8 +301,8 @@ _spi_xfer_byte:
     BBRA.NZ R3, ._rx_wait           ; 2-instruction backward loop (offset = 2)
 
     LD32    R1, (R2)                ; Read RX byte from SPI_DATA
-    LD      R14, 0xFF
-    AND     R1, R14
+    LDI     R3, 0xFF                ; (not R14: it holds the return address)
+    AND     R1, R3
     RRET
 
 ; _spi_read_word_le: Reads 4 bytes from SPI and packs into 32-bit little-endian R1

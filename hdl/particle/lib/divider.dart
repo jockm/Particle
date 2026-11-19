@@ -10,6 +10,8 @@ class ParticleDivider extends Module {
   Logic get clk => input('clk');
   Logic get reset => input('reset');
   Logic get start => input('start');
+  /// Abandons a division in progress (the core takes an MBOX trap).
+  Logic get abort => input('abort');
   Logic get isSigned => input('isSigned');
   Logic get dividend => input('dividend');
   Logic get divisor => input('divisor');
@@ -25,11 +27,13 @@ class ParticleDivider extends Module {
     required Logic isSigned,
     required Logic dividend,
     required Logic divisor,
+    Logic? abort,
     super.name = 'particle_divider',
   }) {
     addInput('clk', clk);
     addInput('reset', reset);
     addInput('start', start);
+    addInput('abort', abort ?? Const(0));
     addInput('isSigned', isSigned);
     addInput('dividend', dividend, width: ParticleWidths.word);
     addInput('divisor', divisor, width: ParticleWidths.word);
@@ -96,6 +100,10 @@ class ParticleDivider extends Module {
       acc: Const(0, width: 64),
       regDivisor: Const(0, width: 32),
     }, [
+      If(abort, then: [
+        busy < Const(0),
+        done < Const(0),
+      ], orElse: [
       If(start & ~busy, then: [
         busy < Const(1),
         done < Const(0),
@@ -134,6 +142,7 @@ class ParticleDivider extends Module {
         ], orElse: [
           done < Const(0),
         ]),
+      ]),
       ]),
     ]);
   }

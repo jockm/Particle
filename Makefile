@@ -54,25 +54,26 @@ VERILATOR        ?= verilator
 export VERILATOR
 
 # Recursive wildcard across firmware/parcore
-FIRMWARE_SRCS := $(shell find firmware/parcore -name '*.asm' 2>/dev/null)
+# (._* files are macOS metadata on drives without extended attributes)
+FIRMWARE_SRCS := $(shell find firmware/parcore -name '*.asm' ! -name '._*' 2>/dev/null)
 FIRMWARE_BINS := $(patsubst firmware/parcore/%.asm,$(PARCORE_BLD)/%.bin,$(FIRMWARE_SRCS))
 
-APP_ASM_SRCS  := $(wildcard apps/asm/*.asm)
+APP_ASM_SRCS  := $(filter-out apps/asm/._%,$(wildcard apps/asm/*.asm))
 APP_ASM_BINS  := $(patsubst apps/asm/%.asm,$(BUILD_DIR)/%.bin,$(APP_ASM_SRCS))
 
 # Files with the line "//act:build llvm" are for the LLVM compiler only
-APP_ACT_SRCS  := $(shell grep -L '^//act:build llvm$$' apps/act/*.act)
+APP_ACT_SRCS  := $(filter-out apps/act/._%,$(shell grep -L '^//act:build llvm$$' apps/act/*.act))
 APP_ACT_BINS  := $(patsubst apps/act/%.act,$(BUILD_DIR)/%.bin,$(APP_ACT_SRCS))
 
 # Multi-file programs: each folder in apps/act/multi is one program. Every
 # .act and .asm file in it is built together into build/<folder>.bin, and a
 # folder whose name starts with test_ is also run by compiler-tests.
 MULTI_ROOT    := apps/act/multi
-MULTI_NAMES   := $(notdir $(patsubst %/,%,$(wildcard $(MULTI_ROOT)/*/)))
+MULTI_NAMES   := $(filter-out ._%,$(notdir $(patsubst %/,%,$(wildcard $(MULTI_ROOT)/*/))))
 MULTI_BINS    := $(patsubst %,$(BUILD_DIR)/%.bin,$(MULTI_NAMES))
 MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
-.PHONY: all setup test test-all test-particle test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
+.PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         generate-ulx3s ulx3s-bit ulx3s-prog firmware apps clean help
 
@@ -90,7 +91,8 @@ help:
 	@echo "  make lint-asm         - Statically lint all assembly files"
 	@echo "  make build            - Build firmware, apps, and generate all HDL"
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"
-	@echo "  make test-particle    - Run Particle single-core ROHD tests"
+	@echo "  make test-particle    - Run Particle single-core ROHD tests (includes the differential ISA test)"
+	@echo "  make test-particle-isa - Compare the core with psim: test/isa programs and random programs (ISA_RANDOM_SEEDS=...)"
 	@echo "  make test-parcore     - Run Parcore multi-core tests (Verilator; PARCORE_FAST_SIM=0 for the ROHD simulator)"
 	@echo "  make test-parcore-isa - Build and run official RISC-V ISA tests (rv32ui, rv32um, rv32uzbb)"
 	@echo "  make test-sim         - Run instruction simulator verification"
@@ -201,9 +203,21 @@ ulx3s-prog:
 test: test-particle test-parcore test-sim test-sim-cluster
 	@$(DOT_CLEAN_CMD)
 
-test-particle: setup $(BUILD_DIR)/ulx3s_echo.bin
+# The tests assemble programs with pasm, compare the core with psim, and run
+# firmware and app binaries
+PARTICLE_TEST_DEPS := setup $(PASM_BIN) $(PSIM) $(BUILD_DIR)/ulx3s_echo.bin \
+	$(BUILD_DIR)/c0_stimulus.bin $(PARCORE_BLD)/riscv/core1_dispatch.bin
+
+test-particle: $(PARTICLE_TEST_DEPS)
 	@echo "==> Running Particle single-core ROHD tests..."
 	@cd $(ROHD_DIR) && $(DART) test
+
+# Differential ISA test only: test/isa/*.asm and seeded random programs, run in
+# psim and on the ROHD core. ISA_RANDOM_SEEDS=1,2,3 picks the random seeds
+# (default 1..8; empty for none).
+test-particle-isa: $(PARTICLE_TEST_DEPS)
+	@echo "==> Running the differential ISA test (psim vs ROHD core)..."
+	@cd $(ROHD_DIR) && $(if $(filter undefined,$(origin ISA_RANDOM_SEEDS)),,ISA_RANDOM_SEEDS="$(ISA_RANDOM_SEEDS)") $(DART) test test/isa_diff_test.dart
 
 test-parcore: setup firmware guest-tests
 	@echo "==> Running Parcore unit tests..."
@@ -261,7 +275,7 @@ ACT_TRAP_TESTS := apps/act/test_dyn_bounds_fail.act \
                   apps/act/test_global_heap_bounds_fail.act \
                   apps/act/test_field_bounds_fail.act \
                   apps/act/test_field_null_fail.act
-ACT_TEST_SRCS := $(filter-out $(ACT_TRAP_TESTS),$(wildcard apps/act/test_*.act))
+ACT_TEST_SRCS := $(filter-out $(ACT_TRAP_TESTS) apps/act/._%,$(wildcard apps/act/test_*.act))
 # A test with the line "//act:build llvm" uses what only the LLVM compiler
 # has (such as f32 and f64), and is skipped here. The test programs use only
 # the plain forms "//act:build llvm" and "//act:build particle".
@@ -396,8 +410,8 @@ llvm-tests: $(ACTION_LLVM_BIN)
 # ------------------------------------------------------------------------------
 # Linter Test Suite (pasm_lint)
 # ------------------------------------------------------------------------------
-LINT_FAIL_SRCS := $(wildcard apps/asm/lint_failures/*.asm)
-LINT_PASS_SRCS := $(wildcard apps/asm/lint_passes/*.asm)
+LINT_FAIL_SRCS := $(filter-out %/._%,$(wildcard apps/asm/lint_failures/*.asm))
+LINT_PASS_SRCS := $(filter-out %/._%,$(wildcard apps/asm/lint_passes/*.asm))
 
 test-lint: pasm-lint
 	@echo "==> Running pasm_lint test suite..."
@@ -447,7 +461,7 @@ $(BUILD_DIR)/%.bin: apps/act/%.act $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN)
 
 # A multi-file program: everything in its folder, rebuilt when any file changes
 .SECONDEXPANSION:
-$(MULTI_BINS): $(BUILD_DIR)/%.bin: $$(wildcard $(MULTI_ROOT)/$$*/*.act $(MULTI_ROOT)/$$*/*.asm) $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN)
+$(MULTI_BINS): $(BUILD_DIR)/%.bin: $$(filter-out %/._%,$$(wildcard $(MULTI_ROOT)/$$*/*.act $(MULTI_ROOT)/$$*/*.asm)) $(ACTION_BIN) $(PASM_BIN) $(PASM_LINT_BIN)
 	@mkdir -p $(BUILD_DIR)
 	@$(PBUILD) $(filter %.act %.asm,$^) -o "$@"
 

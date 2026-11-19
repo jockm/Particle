@@ -74,9 +74,10 @@ _all_passed:
     LD      R14, 0xCA           ; Imm8 load to R14
     PUSH8   R14, 0xFE           ; Shift left 8 and OR 0xFE -> R14 = 0xCAFE
     LD      R10, R14            ; Sentinel for overall suite success
-_spin_done:
-    BBRA    _spin_done          ; Terminal halt loop (backward branch)
+    LD      R1, R14             ; psim prints R1 when the run ends
+    TRAP    0                   ; End the run: exit code 0
 
 _fail_halt:
-    BBRA    _fail_halt          ; Terminal fail loop (backward branch)
+    LD      R1, R10             ; R1 = number of the failed test
+    TRAP    15                  ; End the run: exit code 15
     
