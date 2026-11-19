@@ -7,42 +7,59 @@
     - something is wrong with how action generates the vector table, there are two xchngmost in a row
     - move code start to 0? we don't seem to be using the pseudo zero page much/at all
 
-- Add R14 shifts to allow for IMM5 shifts
-
-- Comprehensive Tests for
-    - Assembler
 
 - Particle
+    - Add R14 shifts to allow for IMM5 shifts?
     - Fix errors in monitor
     - Monitor needs way to load files
     - Simulator needs way to load files
-    - 64 bit Particle
-        - Configuration option?
-    - Floating Point?
-    - XTRA instruction/Coprocessor interface
     - HINT Instruction
+    - We need a decompiler
 
 - Parcore
+    - RISC-V Extensions to Add:
+        - 32 Bit
+            - A (Atomic Instructions) — or Zalrsc + Zaamo
+            - C compressed
+                - Zcb (Additional 16-bit Compressed Instructions):
+            - Zicsr (Control and Status Registers) + Zicntr (Base Counters/Timers)
+            - Zifencei (Instruction-Fetch Fence)
+            - Zba (Address Generation):
+            - Zbs (Single-Bit Manipulation):
+            - Zicond (Integer Conditional Operations
+            - Floating-Point Without FP Registers (Zfinx / Zdinx)
+            - F floating point
+                - Requires adding additional 32 bit floating point registers
+        - 64 Bit
+            - R64 support
+            - D double precision floating point
+                - At this point we would have R64G
+        - Down the line:
+            - Vector (Zv...)
+            - Cryptography (Zk.../Zv...)
+            - Privileged, Security & Debug (S...)
     - System Bringup (aka the conductor)
         - MR4/Particle/PicoRISCV
         - Loads firmware into cores
         - RTOS?
         - Signing/Security?
+
     - Proposals:
         - "The Plan"
-            1. Architecture Proposal: The Parcore Conductor
-            2. Parcore Cluster Performance Optimization Proposal
-            3. Parcore Multi-EX & Dynamic Out-of-Order Architecture Proposal
-            4. Parcore Tiered Execution Architecture Proposal: Interpreted Cold Paths & Hotspot JIT
-            5. Parcore Architecture Proposal 05: Dynamic Code Cache Management, On-Stack Replacement (OSR), and Configurable Software-Assisted MMU
-            6. Parcore Architecture Proposal 06: Verification & Golden Trace Co-Simulation Suite
+            1. Parcore Architecture Proposal 01: The Parcore Conductor
+            2. Parcore Architecture Proposal 02: Parcore Cluster Performance Optimization
+            3. Parcore Architecture Proposal 03: Verification & Golden Trace Co-Simulation Suite
+            4. Parcore Architecture Proposal 04: Parcore Multi-EX & Dynamic Out-of-Order Architecture
+            5. Parcore Architecture Proposal 05: Parcore Architecture Proposal 05: Autonomous Accelerator & Functional Extension Subsystem
+            6. Parcore Architecture Proposal 06: Parcore Architecture Proposal 06: Unified Memory Hierarchy, Multi-Master L1/L2 Cache Coherency, and SDRAM DMA Fabric
             7. Parcore Architecture Proposal 07: Unified Interrupt Architecture, Real-Time Timer & Inter-Processor Interrupt (IPI) Subsystem
-            8. Parcore Architecture Proposal 08: Unified Memory Hierarchy, Multi-Master L1/L2 Cache Coherency, and SDRAM DMA Fabric
-            9. Parcore Architecture Proposal 09: Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration
-            10. Parcore Architecture Proposal 10: High-Speed Host Debug Engine, GDB Remote Serial Bridge & Non-Intrusive Trace Architecture
+            8. Parcore Architecture Proposal 08: Parcore Architecture Proposal 08: Tiered Execution Model — Interpreted Cold Paths & Hotspot JIT
+            9. Parcore Architecture Proposal 09: Parcore Architecture Proposal 09: Dynamic Code Cache Management, On-Stack Replacement (OSR), and Configurable Software-Assisted MMU
+            10. Parcore Architecture Proposal 10: Dynamic Multi-ISA Personality Overlays and Runtime Reconfiguration
+            11. Parcore Architecture Proposal 11: High-Speed Host Debug Engine, GDB Remote Serial Bridge & Non-Intrusive Trace Architecture
+            12. Parcore Architecture Proposal 12: Particle 64-Bit Architecture Extension
         - Addenda
-            1. Architectural Proposal: Autonomous Accelerator & Functional Extension Subsystem in Parcore
-            2. Addendum 02: Particle 64-Bit Architecture Extension Proposal
+            1. Addendum A: CPU Hinting (`HINT` / `0xFE`)
 
 # Things to remember:
 
