@@ -187,19 +187,20 @@ void main() {
       final suiteDir = Directory('${testsRoot.path}/$suite');
       if (!suiteDir.existsSync()) continue;
 
-      final textFiles = suiteDir
+      // One image per test, loaded at 0x500: .text, then .data (link.ld)
+      final imageFiles = suiteDir
           .listSync()
           .whereType<File>()
-          .where((f) => f.path.endsWith('.text.bin'))
+          .where((f) => f.path.endsWith('.image.bin'))
           .toList()
         ..sort((a, b) => a.path.compareTo(b.path));
 
       group(suite, () {
-        for (final textFile in textFiles) {
-          final fileName = textFile.uri.pathSegments.last;
+        for (final imageFile in imageFiles) {
+          final fileName = imageFile.uri.pathSegments.last;
           final testName = fileName.substring(
             0,
-            fileName.length - '.text.bin'.length,
+            fileName.length - '.image.bin'.length,
           );
           final fullId = '$suite/$testName';
           if (filter.isNotEmpty) {
@@ -208,8 +209,6 @@ void main() {
                 : (suite == filter || testName == filter);
             if (!matches) continue;
           }
-
-          final dataPath = '${suiteDir.path}/$testName.data.bin';
 
           test(fullId, () async {
             await Simulator.reset();
@@ -225,43 +224,29 @@ void main() {
                 _loadBinary('../../build/parcore/riscv/core2_ex.bin');
             final c3Kernel =
                 _loadBinary('../../build/parcore/riscv/core3_mem.bin');
-            final textBytes = textFile.readAsBytesSync();
-            final dataBytes = File(dataPath).existsSync()
-                ? File(dataPath).readAsBytesSync()
-                : const <int>[];
+            final imageBytes = imageFile.readAsBytesSync();
 
-            // Merge Core 0 kernel (0x0100) + guest .text (0x0500) + non-overlapping .data (0x0800)
-            const c0TcmOffset = 0x0500 - 0x0100;
-            const c0DataOffset = 0x0800 - 0x0100;
-            final c0Size = (c0TcmOffset + textBytes.length + 64) < 0x2000
-                ? 0x2000
-                : (c0TcmOffset + textBytes.length + 64);
-            final c0Merged = Uint8List(c0Size);
-            for (int i = 0; i < c0Kernel.length; i++) {
-              c0Merged[i] = c0Kernel[i];
-            }
-            for (int i = 0; i < textBytes.length; i++) {
-              c0Merged[c0TcmOffset + i] = textBytes[i];
-            }
-            for (int i = 0;
-                i < dataBytes.length && (c0DataOffset + i) < c0Merged.length;
-                i++) {
-              if ((c0DataOffset + i) >= (c0TcmOffset + textBytes.length)) {
-                c0Merged[c0DataOffset + i] = dataBytes[i];
+            // Core 0 and core 3 both get their kernel (at 0x100) and the guest
+            // image (at 0x500): one guest memory, kept the same in both by
+            // core 3's store mirror. Arrays start at 0x100.
+            Uint8List withGuest(List<int> kernel, int tcmSize) {
+              const guestOffset = 0x0500 - 0x0100;
+              if (0x0500 + imageBytes.length > tcmSize) {
+                throw StateError('$fullId: the guest image ends at 0x'
+                    '${(0x500 + imageBytes.length).toRadixString(16)}, past '
+                    'the ${tcmSize ~/ 1024} KiB TCM');
               }
+              final merged = Uint8List(tcmSize - 0x0100);
+              merged.setRange(0, kernel.length, kernel);
+              merged.setRange(
+                  guestOffset, guestOffset + imageBytes.length, imageBytes);
+              return merged;
             }
 
-            // Merge Core 3 kernel (0x0100) + guest .data (0x0800)
-            const c3DataOffset = 0x0800 - 0x0100;
-            final c3Merged = Uint8List(0x0F00);
-            for (int i = 0; i < c3Kernel.length; i++) {
-              c3Merged[i] = c3Kernel[i];
-            }
-            for (int i = 0;
-                i < dataBytes.length && (c3DataOffset + i) < c3Merged.length;
-                i++) {
-              c3Merged[c3DataOffset + i] = dataBytes[i];
-            }
+            final c0Merged =
+                withGuest(c0Kernel, ParcoreConfig.core0If.tcmSizeBytes);
+            final c3Merged =
+                withGuest(c3Kernel, ParcoreConfig.core3Mem.tcmSizeBytes);
 
             final top = ParcoreTop(
               clk: clk,

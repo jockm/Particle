@@ -138,7 +138,7 @@ Future<String> _pipelineSystemVerilog() async {
     core0Binary: Uint8List(8192),
     core1Binary: Uint8List(4096),
     core2Binary: Uint8List(4096),
-    core3Binary: Uint8List(4096),
+    core3Binary: Uint8List(8192),
     tcmInitDir: _verilatorDir,
   );
   await top.build();
@@ -304,9 +304,12 @@ Future<PipelineResult> runVerilatorPipeline({
 }
 
 /// Checks x1..x31 against the RV32 reference model running the same guest
-/// program (with core 3's image as the data memory, as on the hardware).
+/// program (with core 3's image, its kernel and the guest program, as the data
+/// memory, as on the hardware).
 void expectMatchesReference(PipelineResult res, List<int> guestProg, List<int> c3Kernel) {
-  final ref = runRv32Reference(guestProg, dataImage: c3Kernel);
+  final ref = runRv32Reference(guestProg,
+      dataImage: mergeCore3WithGuest(c3Kernel, guestProg),
+      dataBytes: ParcoreConfig.core3Mem.tcmSizeBytes);
   for (var r = 1; r < 32; r++) {
     expect(res.regs[r]! & 0xFFFFFFFF, equals(ref.regs[r]),
         reason: 'x$r differs from the RV32 reference '
@@ -314,17 +317,26 @@ void expectMatchesReference(PipelineResult res, List<int> guestProg, List<int> c
   }
 }
 
-Uint8List mergeCore0WithGuest(List<int> c0Kernel, List<int> guestProg) {
-  final c0Merged = Uint8List(0x2000);
-  for (int i = 0; i < c0Kernel.length; i++) {
-    c0Merged[i] = c0Kernel[i];
+/// A core's kernel (at 0x100) with the guest program at 0x500; the array
+/// starts at 0x100. Core 0 and core 3 both hold the guest program: one guest
+/// memory, kept the same in both by core 3's store mirror.
+Uint8List _mergeWithGuest(List<int> kernel, List<int> guestProg, int tcmSize) {
+  final merged = Uint8List(tcmSize - 0x0100);
+  for (int i = 0; i < kernel.length; i++) {
+    merged[i] = kernel[i];
   }
   const guestOffsetInTcm = 0x0500 - 0x0100;
   for (int i = 0; i < guestProg.length; i++) {
-    c0Merged[guestOffsetInTcm + i] = guestProg[i];
+    merged[guestOffsetInTcm + i] = guestProg[i];
   }
-  return c0Merged;
+  return merged;
 }
+
+Uint8List mergeCore0WithGuest(List<int> c0Kernel, List<int> guestProg) =>
+    _mergeWithGuest(c0Kernel, guestProg, ParcoreConfig.core0If.tcmSizeBytes);
+
+Uint8List mergeCore3WithGuest(List<int> c3Kernel, List<int> guestProg) =>
+    _mergeWithGuest(c3Kernel, guestProg, ParcoreConfig.core3Mem.tcmSizeBytes);
 
 Uint8List encodeWords(List<int> words) {
   final bytes = Uint8List(words.length * 4);
@@ -358,7 +370,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 35000,
       );
       print('Completed in ${res.cycles} cycles | stdout:\n${res.stdout}');
@@ -373,7 +385,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 20000,
       );
       final regs = res.regs;
@@ -400,7 +412,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 15000,
       );
       final regs = res.regs;
@@ -415,7 +427,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 15000,
       );
       final regs = res.regs;
@@ -431,7 +443,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 15000,
       );
       final regs = res.regs;
@@ -485,7 +497,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 15000,
       );
       final regs = res.regs;
@@ -540,7 +552,7 @@ void main() {
         c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
         c1Kernel: c1Kernel,
         c2Kernel: c2Kernel,
-        c3Kernel: c3Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
         maxCycles: 20000,
       );
       final regs = res.regs;

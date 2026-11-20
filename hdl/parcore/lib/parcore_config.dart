@@ -53,7 +53,8 @@ class ParcoreConfig {
   /// Core 3: Memory Access Stage (MEM)
   static const CpuConfig core3Mem = CpuConfig(
     coreId: 3,
-    tcmSizeBytes: 4 * 1024, // 4 KB local TCM
+    // 8 KB, like core 0: both hold the guest image at 0x500-0x1FFF
+    tcmSizeBytes: 8 * 1024,
     fifoChannels: 2,
     fifoDepth: 256,
     enableMultiplier: false,

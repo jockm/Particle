@@ -60,12 +60,12 @@ for suite in "${SUITES[@]}"; do
     fi
 
     elf="$OUT_DIR/$suite/$name.elf"
-    text_bin="$OUT_DIR/$suite/$name.text.bin"
-    data_bin="$OUT_DIR/$suite/$name.data.bin"
+    image_bin="$OUT_DIR/$suite/$name.image.bin"
 
+    # One image from 0x500: .text, then .data (see link.ld)
     "$CC" "${CFLAGS[@]}" "$src" -o "$elf"
-    "$OBJCOPY" -O binary --only-section=.text "$elf" "$text_bin"
-    "$OBJCOPY" -O binary --only-section=.data "$elf" "$data_bin"
+    "$OBJCOPY" -O binary --only-section=.text --only-section=.data "$elf" "$image_bin"
+    rm -f "$OUT_DIR/$suite/$name.text.bin" "$OUT_DIR/$suite/$name.data.bin"
     total=$((total + 1))
   done
 done

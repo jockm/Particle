@@ -5,7 +5,7 @@ SECTIONS
 {
   /* Core 0 (IF) fetches guest instructions starting at 0x00000500 */
   . = 0x00000500;
-  .text : AT(0x00000500) {
+  .text : {
     *(.text.init)
     *(.text)
     *(.text.*)
@@ -15,9 +15,11 @@ SECTIONS
     LONG(0x00000000);
   }
 
-  /* Core 3 (MEM) accesses guest data in Core 3 TCM starting at VMA 0x00000800.
-     Distinct LMA (0x00010000) prevents ELF overlap with .text in Core 0 TCM. */
-  .data 0x00000800 : AT(0x00010000) {
+  /* One guest memory, as RISC-V expects: .data follows .text, and the whole
+     image (.text and .data) is loaded at 0x500 into both core 0 (which
+     fetches from it) and core 3 (which loads and stores). Core 3 mirrors
+     stores in 0x500-0x1FFF to core 0, for FENCE.I. */
+  .data ALIGN(16) : {
     *(.data)
     *(.data.*)
     *(.sdata)
@@ -25,13 +27,16 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  .bss : AT(0x00018000) {
+  .bss (NOLOAD) : {
     *(.bss)
     *(.bss.*)
     *(.sbss)
     *(.sbss.*)
     . = ALIGN(4);
   }
+
+  /* Core 0 and core 3 have 8 KiB TCMs */
+  ASSERT(. <= 0x2000, "guest image does not fit below 0x2000")
 
   /DISCARD/ : {
     *(.comment)

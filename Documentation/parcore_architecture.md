@@ -27,7 +27,7 @@ This document describes the design as it is in `hdl/parcore` and `firmware/parco
 | Core 0, IF | `core0_if` | `firmware/parcore/riscv/core0_if_uart.asm` | 8 KiB | no / no |
 | Core 1, ID | `core1_id` | `firmware/parcore/riscv/core1_id.asm` | 4 KiB | no / no |
 | Core 2, EX | `core2_ex` | `firmware/parcore/riscv/core2_ex.asm` | 4 KiB | yes / configured, see below |
-| Core 3, MEM | `core3_mem` | `firmware/parcore/riscv/core3_mem.asm` | 4 KiB | no / no |
+| Core 3, MEM | `core3_mem` | `firmware/parcore/riscv/core3_mem.asm` | 8 KiB | no / no |
 
 The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.conductorConfig`, `core0If`, `core1Id`, `core2Ex`, `core3Mem`). Every stage core has its trap table at `0x100`, so it starts at `0x100` after reset.
 
@@ -100,7 +100,9 @@ Instructions core 1 decoded after the branch, before the redirect, carry the old
 
 ### FENCE.I
 
-Core 0 fetches guest instructions from its own TCM, and guest stores go to core 3's TCM. The guest address is the TCM address in both: the program is at `0x500` and its `.data` at `0x800`, in both cores. So core 3 also sends every store into core 0's guest area, `0x500` up to `0x2000` (the end of core 0's 8 KiB TCM), to core 0 on `memToIf`, and core 0 writes it into its TCM. Code can be written anywhere in that area, `.data` included; the official `fence_i` test writes and runs code in `.data`.
+The guest has one memory, as RISC-V expects, and core 0 and core 3 each hold a copy of it: core 0 fetches instructions from its TCM, and core 3 does the loads and stores in its own. The guest address is the TCM address in both. A guest image (`.text`, then `.data`) is loaded at `0x500` into both cores, which have 8 KiB TCMs, so it must end by `0x2000`; the official tests are linked that way (`test/riscv_tests/link.ld`).
+
+To keep the two copies the same, core 3 also sends every store into the guest area, `0x500` up to `0x2000`, to core 0 on `memToIf`, and core 0 writes it into its TCM. Code can be written anywhere in that area, `.data` included; the official `fence_i` test writes and runs code in `.data`.
 
 An entry is one word, so an `MBOX` can't arrive halfway through one: bits [31:16] the data, [14:13] the kind (1 byte, 2 halfword, 3 FENCE.I marker), [12:0] the address. A word store is sent as two halfword entries. Core 0 keeps the entry it is applying in R11 until it has written it, and both of its handlers write that entry again before anything else; writing an entry twice gives the same result.
 
