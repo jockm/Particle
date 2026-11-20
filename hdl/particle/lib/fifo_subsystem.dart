@@ -6,6 +6,7 @@
 // =============================================================================
 
 import 'package:rohd/rohd.dart';
+import 'block_ram_sdp.dart';
 import 'constants.dart';
 
 class ParticleFifoSubsystem extends Module {
@@ -64,27 +65,32 @@ class ParticleFifoSubsystem extends Module {
       final doPush = pushEn & isCur & ~fifoFull[c];
       final doPop = popEn & isCur & ~fifoEmpty[c];
 
-      // 256-word FIFO storage per channel
-      final mem = List.generate(
-        256,
-        (i) => Logic(name: 'fifo_${c}_ram_$i', width: ParticleWidths.word),
+      // 256-word storage per channel in block RAM. Its reads are
+      // registered, so it is read every cycle at the address the head will
+      // have after this cycle's pop; the head is then the RAM's output,
+      // except when the word it reads was written at the same edge: that
+      // word is taken from bypassData instead.
+      final rdNext = mux(doPop, rdPtr + Const(1, width: 8), rdPtr);
+      final ram = ParticleBlockRamSdp(
+        clk: clk,
+        wAddr: wrPtr,
+        wData: pushData,
+        wEn: doPush,
+        rAddr: rdNext,
+        depth: 256,
+        width: ParticleWidths.word,
+        name: 'fifo_${c}_ram',
       );
-
-      final memWriteStatements = <Conditional>[];
-      for (int m = 0; m < 256; m++) {
-        memWriteStatements.add(
-          If(wrPtr.eq(m), then: [
-            mem[m] < pushData,
-          ]),
-        );
-      }
+      final bypassValid = Logic(name: 'bypassValid_$c');
+      final bypassData =
+          Logic(name: 'bypassData_$c', width: ParticleWidths.word);
 
       Sequential(clk, reset: reset, resetValues: {
         wrPtr: Const(0, width: 8),
         rdPtr: Const(0, width: 8),
         count: Const(0, width: 9),
-        for (int m = 0; m < 256; m++)
-          mem[m]: Const(0, width: ParticleWidths.word),
+        bypassValid: Const(0),
+        bypassData: Const(0, width: ParticleWidths.word),
       }, [
         If(doPush & ~doPop, then: [
           count < count + Const(1, width: 9),
@@ -100,22 +106,14 @@ class ParticleFifoSubsystem extends Module {
             ]),
           ]),
         ]),
-        If(doPush, then: memWriteStatements),
+        bypassValid < doPush & wrPtr.eq(rdNext),
+        bypassData < pushData,
       ]);
 
       fifoEmpty[c] <= count.eq(0);
       fifoFull[c] <= count.eq(256);
       fifoDepth[c] <= count;
-
-      // Combinational multiplexer for FIFO head based on rdPtr
-      Combinational([
-        Case(rdPtr, [
-          for (int m = 0; m < 256; m++)
-            CaseItem(Const(m, width: 8), [fifoHead[c] < mem[m]]),
-        ], defaultItem: [
-          fifoHead[c] < Const(0, width: ParticleWidths.word),
-        ]),
-      ]);
+      fifoHead[c] <= mux(bypassValid, bypassData, ram.rData);
     }
 
     final curPopData = Logic(name: 'curPopData', width: ParticleWidths.word);

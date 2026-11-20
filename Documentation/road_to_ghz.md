@@ -17,6 +17,8 @@ The project's goal is a fast, flexible multi-core design that could run at sever
 | Before the pipeline | 16.9 MHz, single cycle |
 | What limits it now | several paths at about 40 MHz each: D's decode and register read into the fetch address, E's ALU, forwarding and redirect, and the multiplier's output into write-back. Fixing any one alone doesn't help. |
 | Parcore | four stage cores (IF, ID, EX, MEM) and a conductor, connected by FIFOs; every RISC-V instruction is many Particle instructions in each stage |
+| Parcore on the ECP5-85F | about 65% of the LUTs, with the FIFOs in block RAM (107% with the FIFOs in flip-flops, which didn't fit) |
+| Biggest block in each core | the register file, about 4,900 LUTs and 2,000 flip-flops, mostly for the shadow banks |
 
 ## What FPGA numbers tell us
 
@@ -77,6 +79,7 @@ The open-source OpenROAD flow can synthesise, place and route the Particle core 
 * Execute split from the forwarding and redirect logic.
 * A memory stage, with 2-cycle loads.
 * Write-back.
+* Make the register file smaller: about 4,900 LUTs per core now, mostly for the shadow banks. Block or LUT RAM, or fewer banks, would help both area and the read path.
 * Branch prediction alongside: backward-taken/forward-not-taken first, then a small branch target buffer. A CPU hint instruction may also help here.
 * Decide what to do about `RBASE` and the exchanges: keep them as slow serialising instructions, or rename registers instead of remapping them.
 * Use the block RAMs' output registers on the FPGA. This adds a cycle to fetch and loads, so it needs measuring.
@@ -90,6 +93,15 @@ Roughly in order of effort:
 * More than one core per slow stage, such as two EX cores taking alternate instructions (proposal 04 points this way).
 * Hardware decode for the common RISC-V formats, with firmware handling the rest. This is the biggest step and trades away some flexibility.
 * Or a different Parcore design altogether, if one serves the goal better.
+
+**Measure first.** Before choosing, instrument the Verilator runs to count, for each stage core, the cycles spent working versus waiting on a FIFO, and how long dependent instructions wait. That shows which stage limits Parcore and whether the dependency round trip matters.
+
+**SARF (proposal 02).** A hardware register file holding the guest's `x0`–`x31`, shared by the stage cores through dedicated ports, with a busy bit per register. It would replace core 1's software register file, in-flight counts and writeback handling.
+
+* It could help with core 1's per-instruction bookkeeping, and with the dependency round trip: today a result goes core 2 → core 3 → `memToWb` → core 1 before a dependent instruction can use it, ALU results included.
+* It doesn't help the conductor: the guest registers are already in core 1's TCM (`0x00`–`0x7F`), which the conductor can reach through its window.
+* It's shared state between cores, against the CSP/transputer model Particles are meant for (cores coordinate over channels, with no shared memory), and it ties cores 1, 2 and 3 together. A register file shared by cores spread across a die is also hard to time at GHz.
+* Cheaper options in the same spirit: send ALU results from core 2 straight to core 1 on a FIFO of their own instead of through core 3; add Particle instructions that make core 1's bookkeeping cheaper.
 
 ### Step 4: design the multi-core system for scale
 
@@ -120,5 +132,8 @@ Roughly in order of effort:
 | 6 | Caches, interconnect and memory controller for many cores | Not started |
 | 7 | Portable hardware description (resets, SRAM wrappers, no FPGA primitives) | Not started |
 | 8 | ROHD 0.7 migration (after the conductor work) | Planned |
+| 9 | Measure each Parcore stage's busy and waiting cycles, and dependency waits | Not started |
+| 10 | SARF, or a cheaper alternative (such as an EX-to-ID result FIFO), decided from 9's numbers | Not decided |
+| 11 | Smaller register file (shadow banks) | Not started |
 
-Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, and conditional branches moved to E.
+Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, conditional branches moved to E, and the FIFOs moved into block RAM.

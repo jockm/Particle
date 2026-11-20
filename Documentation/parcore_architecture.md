@@ -60,7 +60,7 @@ The constructor takes `clkFreqMhz` (default 25) and optional binaries for each c
 
 ## Interconnect
 
-`ParcoreInterconnect` holds five `ParticleFifoSubsystem` instances, each with one channel of 256 32-bit words:
+`ParcoreInterconnect` holds five `ParticleFifoSubsystem` instances, each with one channel of 256 32-bit words in one block RAM:
 
 | FIFO | Writer (channel) | Reader (channel) | Contents |
 |---|---|---|---|

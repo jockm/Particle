@@ -4,6 +4,7 @@
 // Description: Primary library export barrel for Particle ROHD package.
 // =============================================================================
 
+export 'block_ram_sdp.dart';
 export 'block_ram_tdp.dart';
 export 'cpu_config.dart';
 export 'cpu_core.dart';
