@@ -29,6 +29,7 @@ particle/
 │   ├── cluster_config_example.json    # Example psim multi-core cluster file
 │   ├── hdl_architecture.md            # ROHD hardware: the core, modules and designs
 │   ├── parcore_architecture.md        # Parcore: RISC-V emulation on a Particle cluster
+│   ├── road_to_ghz.md                 # What stands between the design and multi-GHz, to return to
 │   ├── configuration_guide.md         # CpuConfig, SystemVerilog generation, synthesis, VS Code tasks
 │   └── memory_map_and_conventions.md  # Memory map, vector layout and calling convention
 ├── Makefile                           # Build, test and tool targets ('make help')
