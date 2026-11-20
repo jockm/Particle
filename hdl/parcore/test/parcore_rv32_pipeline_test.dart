@@ -575,6 +575,86 @@ void main() {
       expect(x(15), equals(0x554), reason: '0xFFFFFFFF: mepc');
     });
 
+    test('Guest instructions - invalid encodings within known opcodes trap', () async {
+      // Each ILLEGAL word below has a known opcode but an invalid funct3,
+      // funct7 or rs2: it must trap (mcause 2). The handler at 0x504 counts
+      // the traps in x20, adds up their mtval in x21, and resumes after the
+      // instruction. The valid encodings beside them must not trap.
+      final guestInstructions = <int>[
+        0x0240006f, // jal x0, +0x24          ; to 0x524 (start)
+        0x34302373, // csrrs x6, mtval, x0    ; 0x504: handler
+        0x006a8ab3, // add x21, x21, x6       ; sum of mtvals
+        0x001a0a13, // addi x20, x20, 1       ; count
+        0x341022f3, // csrrs x5, mepc, x0
+        0x00428293, // addi x5, x5, 4
+        0x34129073, // csrrw x0, mepc, x5
+        0x30200073, // mret                   ; resume after the illegal instruction
+        0x00000000, // (never reached)
+        0x00000297, // auipc x5, 0            ; 0x524
+        0xfe028293, // addi x5, x5, -0x20     ; 0x504
+        0x30529073, // csrrw x0, mtvec, x5
+        0x000014b7, // lui x9, 0x1
+        0x90048493, // addi x9, x9, -0x700    ; x9 = 0x900, a data address
+        0x00301393, // valid:   slli x7, x0, 3
+        0x02301393, // ILLEGAL: OP-IMM funct3 1, funct7 0x01
+        0x00305393, // valid:   srli x7, x0, 3
+        0x40305393, // valid:   srai x7, x0, 3
+        0x60305393, // valid:   rori x7, x0, 3
+        0x20305393, // ILLEGAL: OP-IMM funct3 5, funct7 0x10
+        0x400003b3, // valid:   sub x7, x0, x0
+        0x400053b3, // valid:   sra x7, x0, x0
+        0x400073b3, // valid:   andn x7, x0, x0
+        0x400013b3, // ILLEGAL: OP funct7 0x20, funct3 1
+        0x600013b3, // valid:   rol x7, x0, x0
+        0x600053b3, // valid:   ror x7, x0, x0
+        0x600023b3, // ILLEGAL: OP funct7 0x30, funct3 2
+        0x0a0043b3, // valid:   min x7, x0, x0
+        0x0a0073b3, // valid:   maxu x7, x0, x0
+        0x0a0003b3, // ILLEGAL: OP funct7 0x05, funct3 0
+        0x080043b3, // valid:   zext.h x7, x0
+        0x081043b3, // ILLEGAL: OP funct7 0x04, funct3 4, rs2 1
+        0x080003b3, // ILLEGAL: OP funct7 0x04, funct3 0
+        0x020003b3, // valid:   mul x7, x0, x0
+        0x000003b3, // valid:   add x7, x0, x0
+        0x040003b3, // ILLEGAL: OP funct7 0x02
+        0x00048383, // valid:   lb x7, 0(x9)
+        0x00049383, // valid:   lh x7, 0(x9)
+        0x0004a383, // valid:   lw x7, 0(x9)
+        0x0004c383, // valid:   lbu x7, 0(x9)
+        0x0004d383, // valid:   lhu x7, 0(x9)
+        0x0004b383, // ILLEGAL: LOAD funct3 3
+        0x0004e383, // ILLEGAL: LOAD funct3 6
+        0x0004f383, // ILLEGAL: LOAD funct3 7
+        0x00048023, // valid:   sb x0, 0(x9)
+        0x00049023, // valid:   sh x0, 0(x9)
+        0x0004a023, // valid:   sw x0, 0(x9)
+        0x0004b023, // ILLEGAL: STORE funct3 3
+        0x00000263, // valid:   beq x0, x0, +4
+        0x00001263, // valid:   bne x0, x0, +4
+        0x00004263, // valid:   blt x0, x0, +4
+        0x00005263, // valid:   bge x0, x0, +4
+        0x00006263, // valid:   bltu x0, x0, +4
+        0x00007263, // valid:   bgeu x0, x0, +4
+        0x00002263, // ILLEGAL: BRANCH funct3 2
+        0x00003263, // ILLEGAL: BRANCH funct3 3
+        0x00001067, // ILLEGAL: JALR funct3 1
+        0x07700b13, // addi x22, x0, 0x77     ; reached the end
+      ];
+      final guestProg = encodeWords(guestInstructions);
+      final res = await runPipeline(
+        c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
+        c1Kernel: c1Kernel,
+        c2Kernel: c2Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
+        maxCycles: 60000,
+      );
+      final regs = res.regs;
+      int x(int n) => regs[n]! & 0xFFFFFFFF;
+      expect(x(22), equals(0x77), reason: 'reached the end');
+      expect(x(20), equals(15), reason: 'one trap per ILLEGAL word, none for the valid ones');
+      expect(x(21), equals(0xE0848D31), reason: 'the sum of the ILLEGAL words (mtval)');
+    });
+
     test('Guest instructions - FENCE.I (code written with SW and SB, then run)', () async {
       // Writes a routine at 0x900 (addi x5, x0, 0x123 with SW; addi x6, x0,
       // 0x456 with four SBs; jalr x0, 0(x1) with SW), runs it after FENCE.I,

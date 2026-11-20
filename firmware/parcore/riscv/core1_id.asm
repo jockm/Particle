@@ -504,8 +504,17 @@ _emit_op_imm:
 ._imm_f1_sexth:
     LOAD16  R8, 0x605
     SUB     R8, R7
-    FBRA.NZ R8, ._imm_to_pack
+    FBRA.NZ R8, ._imm_f1_slli
     LOAD16  R4, 0x5B            ; SEXT.H
+    LOAD16  R14, _pack_imm_ctrl
+    JMP     R14, R0
+._imm_f1_slli:
+    ; SLLI: funct7 (imm[11:5]) must be 0
+    LD      R8, R7
+    SHIFTR  R8, 5
+    FBRA.Z  R8, ._imm_to_pack
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
 ._imm_to_pack:
     LOAD16  R14, _pack_imm_ctrl
     JMP     R14, R0
@@ -541,11 +550,16 @@ _emit_op_imm:
     LOAD16  R14, _pack_imm_ctrl
     JMP     R14, R0
 ._imm_f5_srai:
-    LD      R8, R11
-    SHIFTR  R8, 15
-    SHIFTR  R8, 15              ; R8 = inst[31:30]
-    AND     R8, 1               ; bit 30
-    FBRA.Z  R8, _pack_imm_ctrl
+    ; SRLI: funct7 0; SRAI: funct7 0x20; anything else is illegal
+    LD      R8, R7
+    SHIFTR  R8, 5               ; funct7
+    FBRA.Z  R8, _pack_imm_ctrl  ; SRLI
+    LOAD16  R14, 0x20
+    SUB     R8, R14
+    FBRA.Z  R8, ._imm_f5_is_srai
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._imm_f5_is_srai:
     LOAD16  R8, 0x10            ; SRAI: uop = 0x15
     OR      R4, R8
 
@@ -620,6 +634,14 @@ _std_op:
     LOAD16  R9, _pack_reg_ctrl
     JMP     R9, R0
 ._reg_20_sub_sra:
+    ; SUB (funct3 0) or SRA (funct3 5); funct3 1-3 are illegal
+    LD      R9, R4
+    FBRA.Z  R9, ._reg_20_ok
+    SUB     R9, 5
+    FBRA.Z  R9, ._reg_20_ok
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._reg_20_ok:
     LOAD16  R9, 0x10            ; SUB / SRA
     OR      R4, R9
     LOAD16  R9, _pack_reg_ctrl
@@ -641,6 +663,12 @@ _std_op:
     LOAD16  R9, _pack_reg_ctrl
     JMP     R9, R0
 ._reg_30_ror:
+    LD      R9, R4
+    SUB     R9, 5
+    FBRA.Z  R9, ._reg_30_is_ror
+    LOAD16  R14, _emit_illegal  ; funct7 0x30 needs funct3 1 or 5
+    JMP     R14, R0
+._reg_30_is_ror:
     LOAD16  R4, 0x5E            ; ROR
     LOAD16  R9, _pack_reg_ctrl
     JMP     R9, R0
@@ -674,19 +702,39 @@ _std_op:
     LOAD16  R9, _pack_reg_ctrl
     JMP     R9, R0
 ._reg_05_maxu:
+    LD      R9, R4
+    SUB     R9, 7
+    FBRA.Z  R9, ._reg_05_is_maxu
+    LOAD16  R14, _emit_illegal  ; funct7 0x05 needs funct3 4-7
+    JMP     R14, R0
+._reg_05_is_maxu:
     LOAD16  R4, 0x57            ; MAXU
     LOAD16  R9, _pack_reg_ctrl
     JMP     R9, R0
 
 ._reg_chk_04:
-    ; Check funct7 == 0x04 && funct3 == 4 (ZEXT.H)
+    ; Check funct7 == 0x04: ZEXT.H (funct3 4, rs2 0) or illegal
     LD      R9, R8
     SUB     R9, 4
-    FBRA.NZ R9, _pack_reg_ctrl
+    FBRA.NZ R9, ._reg_chk_00
     LD      R9, R4
     SUB     R9, 4
-    FBRA.NZ R9, _pack_reg_ctrl
+    FBRA.NZ R9, ._reg_illegal
+    LD      R9, R11
+    SHIFTR  R9, 15
+    SHIFTR  R9, 5               ; inst[31:20]
+    SHIFTL  R9, 15
+    SHIFTL  R9, 12              ; rs2 (inst[24:20]) left in [31:27]
+    FBRA.NZ R9, ._reg_illegal
     LOAD16  R4, 0x5C            ; ZEXT.H
+    FBRA    _pack_reg_ctrl
+._reg_chk_00:
+    ; funct7 0: ADD, SLL, SLT, SLTU, XOR, SRL, OR, AND. Any other funct7 is
+    ; illegal.
+    FBRA.Z  R8, _pack_reg_ctrl
+._reg_illegal:
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
 _pack_reg_ctrl:
     SHIFTL  R4, 12
     SHIFTL  R4, 12              ; R4 = uop << 24
@@ -699,6 +747,17 @@ _pack_reg_ctrl:
     JMP     R14, R0
 
 _emit_load:
+    ; Valid funct3 values for loads (LB, LH, LW, LBU, LHU): bit funct3 of 0x37
+    LD      R8, R11
+    SHIFTR  R8, 12
+    AND     R8, 7               ; R8 = funct3
+    LOAD16  R14, 0x37
+    SHIFTR  R14, R8
+    AND     R14, 1
+    FBRA.NZ R14, ._load_ok
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._load_ok:
     ; Re-extract I-Type signed immediate offset: inst[31:20] into R9
     LD      R9, R11
     ASHIFTR R9, 15
@@ -722,6 +781,17 @@ _emit_load:
     JMP     R14, R0
 
 _emit_store:
+    ; Valid funct3 values for stores (SB, SH, SW): bit funct3 of 0x07
+    LD      R8, R11
+    SHIFTR  R8, 12
+    AND     R8, 7               ; R8 = funct3
+    LOAD16  R14, 0x07
+    SHIFTR  R14, R8
+    AND     R14, 1
+    FBRA.NZ R14, ._store_ok
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._store_ok:
     ; S-Type immediate: {inst[31:25], inst[11:7]}
     LD      R9, R11
     ASHIFTR R9, 15
@@ -751,6 +821,17 @@ _emit_store:
     JMP     R14, R0
 
 _emit_branch:
+    ; Valid funct3 values for branches (BEQ, BNE, BLT, BGE, BLTU, BGEU): bit funct3 of 0xf3
+    LD      R8, R11
+    SHIFTR  R8, 12
+    AND     R8, 7               ; R8 = funct3
+    LOAD16  R14, 0xf3
+    SHIFTR  R14, R8
+    AND     R14, 1
+    FBRA.NZ R14, ._branch_ok
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._branch_ok:
     ; 1. B-Type immediate: {inst[31], inst[7], inst[30:25], inst[11:8], 0}
     ; Sign-extend inst[31] shifted to bit 12
     LD      R4, R11
@@ -997,6 +1078,17 @@ _emit_jal:
     JMP     R14, R0
 
 _emit_jalr:
+    ; Valid funct3 values for JALR (0 only): bit funct3 of 0x01
+    LD      R8, R11
+    SHIFTR  R8, 12
+    AND     R8, 7               ; R8 = funct3
+    LOAD16  R14, 0x01
+    SHIFTR  R14, R8
+    AND     R14, 1
+    FBRA.NZ R14, ._jalr_ok
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._jalr_ok:
     FBRA.Z  R13, ._jalr_no_sb
     MARK_IN_FLIGHT
 ._jalr_no_sb:

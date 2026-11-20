@@ -11,6 +11,7 @@ TESTS=(
   "System & CSR"
   "FENCE.I"
   "illegal instructions trap"
+  "invalid encodings within known opcodes"
 )
 
 echo "===================================================="
