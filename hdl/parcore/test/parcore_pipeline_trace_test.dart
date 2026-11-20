@@ -4,6 +4,7 @@ import "package:rohd/rohd.dart";
 import "package:test/test.dart";
 import "../../particle/test/test_helpers.dart";
 import "../lib/parcore_top.dart";
+import "guest_echo.dart";
 
 List<int> loadFirmware(String relativePath) {
   final candidates = [
@@ -45,16 +46,16 @@ void main() {
         clk: clk.clk,
         reset: reset,
         uartRx: uartRx,
-        core0Binary: c0Bin,
+        core0Binary: kernelWithGuest(c0Bin, guestEchoProgram),
         core1Binary: c1Bin,
         core2Binary: c2Bin,
-        core3Binary: c3Bin,
+        core3Binary: kernelWithGuest(c3Bin, guestEchoProgram),
       );
 
       await top.build();
     });
 
-    test("Host drives serial character into uartRx and Core 0 echoes to uartTx", () async {
+    test("Host drives a character into uartRx and the guest echo program sends it back on uartTx", () async {
       reset.put(1);
       uartRx.put(1);
 
@@ -85,14 +86,14 @@ void main() {
 
       // Detect falling edge (Start bit arrival)
       bool sawTxStart = false;
-      for (int i = 0; i < 200; i++) {
+      for (int i = 0; i < 20000; i++) {
         if (top.uartTx.value.toInt() == 0) {
           sawTxStart = true;
           break;
         }
         await clk.waitCycles(1);
       }
-      expect(sawTxStart, isTrue, reason: "Core 0 should echo received character back over uartTx");
+      expect(sawTxStart, isTrue, reason: "the guest did not echo: no start bit on uartTx");
 
       // Advance to center of first data bit
       await clk.waitCycles(baudDivisor + (baudDivisor ~/ 2) - 1);

@@ -81,7 +81,7 @@ The open-source OpenROAD flow can synthesise, place and route the Particle core 
 * Write-back.
 * Make the register file smaller: about 4,900 LUTs per core now, mostly for the shadow banks. Block or LUT RAM, or fewer banks, would help both area and the read path.
 * Branch prediction alongside: backward-taken/forward-not-taken first, then a small branch target buffer. A CPU hint instruction may also help here.
-* Decide what to do about `RBASE` and the exchanges: keep them as slow serialising instructions, or rename registers instead of remapping them.
+* Remove `RBASE` (decided): nothing uses it, and a 15-register window can't show three arbitrary guest registers at once, so it doesn't help emulate 32-register architectures. Guest registers live in memory (core 1's zero page), as emulators usually keep them. If more fast storage is ever needed, Thumb-style high registers reachable only through moves would avoid remapping every read.
 * Use the block RAMs' output registers on the FPGA. This adds a cycle to fetch and loads, so it needs measuring.
 
 ### Step 3: cut Parcore's per-instruction cost (or change Parcore)
@@ -127,7 +127,7 @@ Roughly in order of effort:
 | 1 | End-to-end Parcore running on the ULX3S | In progress: comes before everything below |
 | 2 | ASIC measurement with OpenROAD (Nangate45, SKY130 or ASAP7) | Not started |
 | 3 | Deeper Particle pipeline and branch prediction | Not started |
-| 4 | `RBASE` and exchange instructions: keep serialising, or rename | Not decided |
+| 4 | Remove `RBASE`: 16 registers plus 16 shadows, keeping `XCHG`/`XCHGALL`/`XCHGMOST`; `0xD3`/`0xD4` become illegal. Touches the spec, the core, psim, pasm and its linter, and the tests. Thumb-style high-register moves (`MOVHI`/`MOVLO`) only if a need is shown | Decided (334); after end-to-end Parcore |
 | 5 | Parcore per-instruction cost, or a different Parcore design | Not started |
 | 6 | Caches, interconnect and memory controller for many cores | Not started |
 | 7 | Portable hardware description (resets, SRAM wrappers, no FPGA primitives) | Not started |

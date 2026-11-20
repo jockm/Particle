@@ -330,41 +330,19 @@ class ParcoreTop extends Module {
     ifToIdPush <= core0.fifoPushEn & core0.fifoChanSelect.eq(Const(1, width: 2));
     ifToIdData <= core0.fifoPushData;
 
-    final uartTxValid = core0.fifoPushEn & core0.fifoChanSelect.eq(Const(0, width: 2));
-    c0FifoPopEn <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(0, width: 2));
     // Channel 2: the stores core 3 mirrors into core 0's guest area
-    memToIfPop <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(2, width: 2));
+    c0FifoPopEn <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(2, width: 2));
+    memToIfPop <= c0FifoPopEn;
 
-    final ftdiUart = ParticleUartTransceiver(
-      clk: clk,
-      reset: reset,
-      rxPin: uartRx,
-      txData: core0.fifoPushData.slice(7, 0),
-      txValid: uartTxValid,
-      rxReady: c0FifoPopEn,
-      baudDivisor: Const(ftdiDivisor, width: 16),
-      name: 'parcore_ftdi_uart',
-    );
-    uartTx <= ftdiUart.output('txPin');
-
-    // FIFO.STAT: channel 0 the UART (bit 0: nothing received), channel 1
-    // ifToId (core 0 checks for room before pushing a packet), channel 2
-    // memToIf
+    // FIFO.STAT: channel 1 ifToId (core 0 checks for room before pushing a
+    // packet), channel 2 memToIf
     c0FifoStatus <= mux(
-      core0.fifoChanSelect.eq(Const(0, width: 2)),
-      [Const(0, width: 31), ~ftdiUart.output('rxValid')].swizzle(),
-      mux(
-          core0.fifoChanSelect.eq(Const(1, width: 2)),
-          interconnect.ifToIdStatus,
-          mux(core0.fifoChanSelect.eq(Const(2, width: 2)),
-              interconnect.memToIfStatus, Const(0, width: ParticleWidths.word))),
+      core0.fifoChanSelect.eq(Const(1, width: 2)),
+      interconnect.ifToIdStatus,
+      mux(core0.fifoChanSelect.eq(Const(2, width: 2)),
+          interconnect.memToIfStatus, Const(0, width: ParticleWidths.word)),
     );
-
-    c0FifoPopData <= mux(
-      core0.fifoChanSelect.eq(Const(2, width: 2)),
-      interconnect.memToIfOut,
-      [Const(0, width: 24), ftdiUart.output('rxData')].swizzle(),
-    );
+    c0FifoPopData <= interconnect.memToIfOut;
 
     // -------------------------------------------------------------------------
     // Core 1: ID & Register Scoreboard
@@ -482,8 +460,9 @@ class ParcoreTop extends Module {
     final c3MemBRData = Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
 
     // FIFO.STAT: channel 2 memToIf (core 3 waits for room before mirroring
-    // a store), any other channel exToMem
+    // a store), channel 3 the FTDI UART, any other channel exToMem
     final c3FifoStatus = Logic(name: 'c3_fifo_status', width: ParticleWidths.word);
+    final c3FifoPopData = Logic(name: 'c3_fifo_pop_data', width: ParticleWidths.word);
     final core3 = ParticleCpuCore(
       clk: clk,
       reset: reset | condCoreReset.slice(3, 3),
@@ -491,13 +470,14 @@ class ParcoreTop extends Module {
       memPortBRData: c3MemBRData,
       mboxStrobeIn: Const(0),
       mboxVectorIn: Const(0, width: 4),
-      fifoPopData: interconnect.exToMemOut,
+      fifoPopData: c3FifoPopData,
       fifoStatus: c3FifoStatus,
       config: ParcoreConfig.core3Mem,
       name: 'core3_mem',
     );
 
-    exToMemPop <= core3.fifoPopEn;
+    final c3UartChannel = core3.fifoChanSelect.eq(Const(3, width: 2));
+    exToMemPop <= core3.fifoPopEn & ~c3UartChannel;
 
     buildTcm(
       coreIndex: 3,
@@ -518,7 +498,34 @@ class ParcoreTop extends Module {
     memToWbData <= core3.fifoPushData;
     memToIfPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(2, width: 2));
     memToIfData <= core3.fifoPushData;
-    c3FifoStatus <= mux(core3.fifoChanSelect.eq(Const(2, width: 2)),
-        interconnect.memToIfStatus, interconnect.exToMemStatus);
+
+    // Core 3's channel 3 is the FTDI UART: the guest's memory-mapped UART
+    // (core 3 does every guest load and store). FIFO.W/FIFO.TRYW send the
+    // low byte, FIFO.TRYR receives one; FIFO.STAT gives bit 0 = nothing
+    // received and bit 1 = the transmitter is busy, so FIFO.TRYW only sends
+    // when it can.
+    final ftdiUart = ParticleUartTransceiver(
+      clk: clk,
+      reset: reset,
+      rxPin: uartRx,
+      txData: core3.fifoPushData.slice(7, 0),
+      txValid: core3.fifoPushEn & c3UartChannel,
+      rxReady: core3.fifoPopEn & c3UartChannel,
+      baudDivisor: Const(ftdiDivisor, width: 16),
+      name: 'parcore_ftdi_uart',
+    );
+    uartTx <= ftdiUart.output('txPin');
+
+    c3FifoStatus <= mux(
+      c3UartChannel,
+      [Const(0, width: 30), ~ftdiUart.output('txReady'), ~ftdiUart.output('rxValid')].swizzle(),
+      mux(core3.fifoChanSelect.eq(Const(2, width: 2)),
+          interconnect.memToIfStatus, interconnect.exToMemStatus),
+    );
+    c3FifoPopData <= mux(
+      c3UartChannel,
+      [Const(0, width: 24), ftdiUart.output('rxData')].swizzle(),
+      interconnect.exToMemOut,
+    );
   }
 }

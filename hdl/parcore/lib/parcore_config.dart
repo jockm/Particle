@@ -18,7 +18,7 @@ class ParcoreConfig {
     trapTableBase: 0x00000100,
   );
 
-  /// Core 0: Instruction Fetch Stage (IF) + FTDI Console UART
+  /// Core 0: Instruction Fetch Stage (IF)
   static const CpuConfig core0If = CpuConfig(
     coreId: 0,
     tcmSizeBytes: 8 * 1024, // 8 KB local TCM
@@ -26,8 +26,7 @@ class ParcoreConfig {
     fifoDepth: 256,
     enableMultiplier: false,
     enableDivider: false,
-    enableUlx3sFtdiUart: true,
-    ulx3sUartFifoChannel: 0,
+    enableUlx3sFtdiUart: false,
   );
 
   /// Core 1: Instruction Decode Stage (ID) & Register Scoreboard
@@ -50,15 +49,18 @@ class ParcoreConfig {
     enableDivider: true,
   );
 
-  /// Core 3: Memory Access Stage (MEM)
+  /// Core 3: Memory Access Stage (MEM) + FTDI Console UART (guest I/O)
   static const CpuConfig core3Mem = CpuConfig(
     coreId: 3,
     // 8 KB, like core 0: both hold the guest image at 0x500-0x1FFF
     tcmSizeBytes: 8 * 1024,
-    fifoChannels: 2,
+    // 0 exToMem in, 1 memToWb, 2 memToIf (store mirror), 3 the FTDI UART
+    fifoChannels: 4,
     fifoDepth: 256,
     enableMultiplier: false,
     enableDivider: false,
+    enableUlx3sFtdiUart: true,
+    ulx3sUartFifoChannel: 3,
   );
 
   /// Core 4: Writeback Stage (WB)

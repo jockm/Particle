@@ -1,5 +1,6 @@
 ; ==============================================================================
-; Parcore RV32IM: Core 0 (Instruction Fetch & FTDI Console Gateway)
+; Parcore RV32IM: Core 0 (Instruction Fetch)
+; The FTDI console UART is core 3's: guests reach it as memory-mapped I/O.
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core0_if_uart.asm
 ; ==============================================================================
@@ -25,25 +26,15 @@
 
 _reset_vector:
     LOAD16  R10, 0x0500         ; Guest RV32 PC (Base at 0x00000500)
-    ; LD      R0, 0               ; R0 = 0 (Channel 0: FTDI Console UART)
     LD      R1, 1               ; R1 = 1 (Channel 1: Core 1 ID Stage Queue)
     LD      R9, 0               ; R9 = epoch, sent in PC bit 0; flips on every redirect
     LD      R8, 2               ; R8 = 2 (Channel 2: stores mirrored by Core 3, memToIf)
     LD      R11, 0              ; R11 = the mirror entry being applied, 0 when none
 
 ; ==============================================================================
-; Main Fetch & Console Loop
+; Main Fetch Loop
 ; ==============================================================================
 _if_main_loop:
-    ; 1. Service UART RX (Non-Blocking Console Pass-Through on Channel 0)
-    FIFO.TRYR R3, R0            ; R14 = 1 if a byte was read into R3
-    FBRA.Z    R14, ._check_fifo_space
-
-    ; Character received: Echo character back to UART TX (Channel 0)
-    FIFO.W    R3, R0
-    BBRA      _if_main_loop     ; Immediately loop back to keep console responsive
-
-._check_fifo_space:
     ; Apply one mirrored store, if core 3 sent any (FENCE.I coherence)
     FIFO.STAT R4, R8
     AND       R4, 1             ; Bit 0: empty

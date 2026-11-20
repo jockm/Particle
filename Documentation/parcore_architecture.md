@@ -7,11 +7,11 @@ This document describes the design as it is in `hdl/parcore` and `firmware/parco
 ## Overview
 
 ```
-              FTDI UART
-                  │ ch 0
-          ┌───────┴───────┐   ch 1    ┌──────────────┐   ch 1    ┌──────────────┐   ch 1    ┌──────────────┐
+                                                                                              FTDI UART
+                                                                                                  │ ch 3
+          ┌───────────────┐   ch 1    ┌──────────────┐   ch 1    ┌──────────────┐   ch 1    ┌───────┴──────┐
           │ Core 0  (IF)  │ ────────▶ │ Core 1  (ID) │ ────────▶ │ Core 2  (EX) │ ────────▶ │ Core 3 (MEM) │
-          │ fetch, UART   │  ifToId   │ decode, regs │  idToEx   │ ALU, branch  │  exToMem  │ loads/stores │
+          │ fetch         │  ifToId   │ decode, regs │  idToEx   │ ALU, branch  │  exToMem  │ loads/stores │
           └───────▲───────┘           └──────▲───────┘           └──────┬───────┘           └──────┬───────┘
                   │ MBOX vector 1            │ ch 2 (memToWb)           │                          │
                   └──────── branch redirect ─┼──────────────────────────┘                          │
@@ -52,7 +52,7 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 | Port | Direction | Width | Use |
 |---|---|---|---|
 | `clk`, `reset` | in | 1 | Clock and active-high reset |
-| `uart_rx`, `uart_tx` | in / out | 1 | FTDI console UART, connected to core 0 |
+| `uart_rx`, `uart_tx` | in / out | 1 | FTDI console UART, connected to core 3: the guest's memory-mapped UART (see [Guest I/O](#guest-io)) |
 | `spi_cs_n`, `spi_sck`, `spi_mosi`, `spi_miso` | out / in | 1 | SPI flash, driven by the conductor |
 | `branch_redirect_strobe`, `branch_redirect_vector` | out | 1, 4 | Copies of core 2's MBOX outputs, for debugging |
 
@@ -74,7 +74,7 @@ Because each FIFO has one channel, the FIFO's own channel number is always 0 (`c
 
 A `FIFO.W` to a full FIFO is dropped, so the writers that can get ahead check for room first with `FIFO.STAT`: core 0 pushes a packet only while `ifToId` holds fewer than 128 words, and core 1 decodes an instruction only while `idToEx` does (it keeps retiring writebacks while it waits). `FIFO.STAT` on core 0's channels 1 and 2 reads `ifToId`'s and `memToIf`'s status, on core 1's channels 0, 1 and 2 reads `ifToId`, `idToEx` and `memToWb`, and on core 3's channel 2 reads `memToIf` (any other channel reads `exToMem`). Core 3 mirrors a store only while `memToIf` holds fewer than 128 words.
 
-Core 0's channel 0 is the FTDI UART, not a FIFO: `FIFO.W` on channel 0 sends the low byte, `FIFO.TRYR`/`FIFO.R` on channel 0 receive a byte, and `FIFO.STAT` on channel 0 gives the empty flag in bit 0. The UART divisor is the clock divided by the baud rate (`ParcoreTop(clkFreqMhz:, ftdiBaud:)`, 25 MHz and 1 Mbps by default, giving 25 cycles per bit; `ParcoreTop.ftdiDivisor`).
+Core 3's channel 3 is the FTDI UART, not a FIFO: `FIFO.W`/`FIFO.TRYW` on channel 3 send the low byte, `FIFO.TRYR`/`FIFO.R` receive a byte, and `FIFO.STAT` gives bit 0 set when nothing has been received and bit 1 set while the transmitter is busy, so `FIFO.TRYW` only sends when it can. The UART divisor is the clock divided by the baud rate (`ParcoreTop(clkFreqMhz:, ftdiBaud:)`, 25 MHz and 1 Mbps by default, giving 25 cycles per bit; `ParcoreTop.ftdiDivisor`).
 
 ### Flush
 
@@ -84,19 +84,31 @@ Core 0's channel 0 is the FTDI UART, not a FIFO: `FIFO.W` on channel 0 sends the
 
 Each stage runs a loop that reads its input FIFO, does its part of the RISC-V instruction, and writes the result to the next FIFO.
 
-**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`), and the epoch in R9. Each pass it echoes any byte waiting on the UART (`FIFO.TRYR`, which reports in R14 whether a byte was read), checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC | epoch, instruction]` on channel 1. A zero word is not pushed: core 0 waits at that PC, reading it again on every pass. That is how a guest program ends: by running into memory that was never written. (RISC-V defines 0x00000000 as an illegal instruction; an illegal-instruction trap is planned with the conductor work.) Its trap vector 1 (`0x110`) branches to the branch-redirect handler, which loads the new PC from `MBOX_VALUE` (`0xFC`), flips the epoch, and goes back to the loop. Each pass also applies one store core 3 mirrored on channel 2, if there is one, before fetching; vector 2 (`0x120`) is FENCE.I (see [FENCE.I](#fencei)).
+**Core 0 (IF)** keeps the guest PC in R10, starting at `0x500` (the guest program is placed in core 0's TCM at `0x500`), and the epoch in R9. Each pass it checks that `ifToId` has room, loads the instruction word at the PC, and pushes `[PC | epoch, instruction]` on channel 1. A zero word is not pushed: core 0 waits at that PC, reading it again on every pass. That is how a guest program ends: by running into memory that was never written. (RISC-V defines 0x00000000 as an illegal instruction; an illegal-instruction trap is planned with the conductor work.) Its trap vector 1 (`0x110`) branches to the branch-redirect handler, which loads the new PC from `MBOX_VALUE` (`0xFC`), flips the epoch, and goes back to the loop. Each pass also applies one store core 3 mirrored on channel 2, if there is one, before fetching; vector 2 (`0x120`) is FENCE.I (see [FENCE.I](#fencei)).
 
 **Core 1 (ID)** keeps the 32 RISC-V registers in its zero page (`x0`–`x31` at `0x00`–`0x7F`), a count of writes in flight for each register (bytes at `0x90`–`0xAF`), and a mask at `0x80` with a bit set for each register whose count isn't zero. It first retires any writeback on channel 2: it writes the value to the register and takes one from its count (a cancel, destination plus `0x20`, only takes one from the count). Then, if `idToEx` has room, it decodes the next instruction from channel 0, waits while its source registers are in flight (retiring writebacks meanwhile), adds one to its destination's count, and sends a 4-word packet to core 2 on channel 1 with the instruction's epoch (PC bit 0) in control-word bit 1. Every RV32 instruction word has bits [1:0] = `11` and a PC has bit 1 = 0, so if the word core 1 pops as an instruction is a PC (the flush emptied `ifToId` between a packet's two words), it starts again with that PC. An instruction core 1 can't decode is dropped, with no trap. Core 1 receives no `MBOX`.
 
 **Core 2 (EX)** does the ALU work, RV32M multiply, divide and remainder, the Zbb instructions, CSRs, and branches. Division is done in software (`_udiv_calc`); the firmware was written before the Particle core had `DIV`, which it now has. For a taken branch or jump it executes `MBOX R14, 1` and flips its epoch (see [Branches](#branches)) and, if the instruction has a destination register (JAL/JALR), forwards the link value to core 3. FENCE.I is the same redirect, to the next instruction, with vector 2, followed by a FENCE.I item for core 3 (memory operation 11).
 
-**Core 3 (MEM)** reads a control word whose bits [19:16] give the memory operation (1–5 loads LB, LH, LW, LBU, LHU; 8–10 stores SB, SH, SW; 11 FENCE.I; 0 an ALU result), performs the access with sign or zero extension, and sends `[rd, value]` back to core 1 on channel 1. It also sends stores into core 0's guest area, and FENCE.I markers, to core 0 on channel 2.
+**Core 3 (MEM)** reads a control word whose bits [19:16] give the memory operation (1–5 loads LB, LH, LW, LBU, LHU; 8–10 stores SB, SH, SW; 11 FENCE.I; 0 an ALU result), performs the access with sign or zero extension, and sends `[rd, value]` back to core 1 on channel 1. It also sends stores into core 0's guest area, and FENCE.I markers, to core 0 on channel 2. Accesses to `0x1000_0000`–`0x1FFF_FFFF` are guest I/O (see [Guest I/O](#guest-io)) and never touch its TCM.
 
 ### Branches
 
 On a taken branch, a jump, `MRET` or a trap, core 2 executes `MBOX R14, 1` with the target PC in R14, and flips its epoch (`0x48` in its zero page). In `ParcoreTop` core 2's MBOX strobe goes to core 0's MBOX input and to `pipelineFlush`. Core 0 stores the target at `MBOX_VALUE` (`0xFC`) as it takes trap vector 1, the cycle after the strobe; its handler loads the new PC from there and flips its own epoch, so everything it sends from then on carries the new epoch. The flush empties `ifToId` in the same cycle as the strobe, including a push in that cycle, so core 0 never leaves half a packet behind.
 
 Instructions core 1 decoded after the branch, before the redirect, carry the old epoch. Core 2 drops every packet whose epoch isn't its own; for one with a destination register it sends a cancel to core 3 (control-word bit 2), which passes it on to core 1 as a writeback of destination plus `0x20`. Core 1 then takes one from that register's in-flight count without writing it. Every destination core 1 counts gets exactly one writeback or cancel, in order, so the counts are always right, and a wrong-path instruction waiting for a wrong-path result is released when the cancel arrives.
+
+### Guest I/O
+
+Core 3 does every guest load and store, so the guest's I/O is there. Addresses from `0x1000_0000` to `0x1FFF_FFFF` are I/O and never touch core 3's TCM:
+
+| Address | Store | Load |
+|---|---|---|
+| `0x1000_0000` | Sends the low byte on the FTDI UART, waiting while the transmitter is busy | The received byte, or `0xFFFFFFFF` if none has arrived |
+| `0x1000_0004` | Ignored | Status: bit 0 set when a byte has been received, bit 1 set when there's room to send |
+| Anything else in the range | Ignored | `0` |
+
+I/O loads aren't sign-extended. A store to `0x1000_0000` waits, so a guest can print without checking the status first; a guest that must not wait checks bit 1. The UART runs at the clock divided by `ParcoreTop.ftdiDivisor` (1 Mbps by default).
 
 ### FENCE.I
 
@@ -169,8 +181,8 @@ There is no make target that builds this flash image yet.
 
 | File | What it checks |
 |---|---|
-| `parcore_top_test.dart` | `ParcoreTop` elaborates and generates SystemVerilog; the UART line idles while in reset; a byte sent on `uart_rx` is echoed on `uart_tx` |
-| `parcore_pipeline_trace_test.dart` | The same UART echo with the real stage firmware loaded |
+| `parcore_top_test.dart` | `ParcoreTop` elaborates and generates SystemVerilog; the UART line idles while in reset; a guest echo program sends a byte received on `uart_rx` back on `uart_tx`; a guest's four back-to-back stores to the UART come out in order at a baud rate slow enough that core 3 must wait for the transmitter (the guest programs are in `guest_echo.dart`) |
+| `parcore_pipeline_trace_test.dart` | The guest UART echo, as its own test |
 | `conductor_boot_test.dart` | The conductor and SPI controller elaborate; the conductor copies firmware from a simulated SPI flash into the core TCMs and releases reset, and core 0 and core 1's TCMs hold their sections (about 10,000 cycles) |
 | `parcore_rv32_pipeline_test.dart` | Guest RV32 programs run on the four-stage pipeline, and core 1's registers at the end must match the RV32 reference model: register writes, signed division, multiply high, sub-word loads and stores, branches and jumps, CSRs. A FENCE.I program writes code with `SW` and `SB`, runs it, replaces an instruction and runs it again; the reference model keeps code and data apart, so that test checks the registers itself |
 | `rv32_reference.dart` | Not a test: the RV32 reference interpreter the pipeline tests compare against (RV32I, RV32M, the Zbb instructions core 1 decodes, and the CSRs core 2 keeps) |

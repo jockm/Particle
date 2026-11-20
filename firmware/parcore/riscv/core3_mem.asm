@@ -25,6 +25,7 @@ _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 2 (EX)
     LD      R2, 1               ; FIFO Ch1: Outbound WB to Core 1 (memToWb)
     LD      R7, 2               ; FIFO Ch2: Outbound store mirror to Core 0 (memToIf)
+                                ; FIFO Ch3: the FTDI UART (guest I/O, _io_access)
 
 ; ==============================================================================
 ; Main Memory Pipeline Loop
@@ -81,6 +82,16 @@ _route_alu_wb:
 ; 8..10: Stores (8: SB, 9: SH, 10: SW)
 ; ==============================================================================
 _dispatch_mem_op:
+    ; Guest I/O (address bits 31:28 = 1), before anything touches the TCM.
+    ; (A FENCE.I item carries pc + 4 here, never an I/O address.)
+    LD      R14, R12
+    SHIFTR  R14, 14
+    SHIFTR  R14, 14
+    SUB     R14, 1
+    FBRA.NZ R14, ._not_io
+    LOAD16  R14, _io_access
+    JMP     R14, R0
+._not_io:
     ; Check Stores (8..10)
     LOAD16  R5, 8
     LD      R6, R3
@@ -293,4 +304,46 @@ _send_wb_tokens:
     FIFO.W  R4, R2              ; Token 0: Destination Register Rd
     FIFO.W  R11, R2             ; Token 1: 32-bit Committed Data
     LOAD16  R14, _mem_main_loop
+    JMP     R14, R0
+
+; ==============================================================================
+; Guest I/O: the FTDI UART, on FIFO channel 3
+;   0x1000_0000  store: send the low byte (waits while the transmitter is busy)
+;                load:  the received byte, or 0xFFFFFFFF if none has arrived
+;   0x1000_0004  load:  status: bit 0 a byte has been received, bit 1 room to
+;                send
+; Other addresses from 0x1000_0000 to 0x1FFF_FFFF: stores are ignored, loads
+; return 0. Loads aren't sign-extended. R12 address, R13 store data, R3 the
+; memory operation, R4 Rd (kept for the writeback).
+; ==============================================================================
+_io_access:
+    LD      R6, 3               ; FIFO channel 3: the UART
+    LOAD32  R5, 0x0FFFFFFF
+    AND     R5, R12             ; R5 = offset from 0x1000_0000
+    LD      R14, R3
+    SUB     R14, 8
+    FBRA.N  R14, ._io_load      ; operations 1-5 are loads, 8-10 stores
+    FBRA.NZ R5, ._io_done       ; a store elsewhere is ignored
+._io_send:
+    FIFO.TRYW R13, R6           ; R14 = 1 when the byte was sent
+    BBRA.Z  R14, ._io_send
+._io_done:
+    LOAD16  R14, _mem_main_loop
+    JMP     R14, R0
+._io_load:
+    LD      R11, 0
+    FBRA.Z  R5, ._io_receive
+    SUB     R5, 4
+    FBRA.NZ R5, ._io_result     ; another address: 0
+    FIFO.STAT R11, R6           ; bit 0 nothing received, bit 1 busy
+    NOT     R11
+    AND     R11, 3
+    FBRA    ._io_result
+._io_receive:
+    FIFO.TRYR R11, R6           ; R14 = 1 when a byte was received
+    FBRA.NZ R14, ._io_result
+    LD      R11, 0
+    SUB     R11, 1              ; none: 0xFFFFFFFF
+._io_result:
+    LOAD16  R14, _emit_writeback
     JMP     R14, R0
