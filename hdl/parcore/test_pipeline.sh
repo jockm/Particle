@@ -10,6 +10,7 @@ TESTS=(
   "Control Transfer"
   "System & CSR"
   "FENCE.I"
+  "illegal instructions trap"
 )
 
 echo "===================================================="

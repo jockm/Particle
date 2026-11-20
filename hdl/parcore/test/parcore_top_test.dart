@@ -27,7 +27,7 @@ void main() {
       reset = Logic(name: 'reset');
       uartRx = Logic(name: 'uart_rx');
 
-      final c0 = _loadBinary('../../build/parcore/riscv/core0_if_uart.bin');
+      final c0 = _loadBinary('../../build/parcore/riscv/core0_if.bin');
       final c1 = _loadBinary('../../build/parcore/riscv/core1_id.bin');
       final c2 = _loadBinary('../../build/parcore/riscv/core2_ex.bin');
       final c3 = _loadBinary('../../build/parcore/riscv/core3_mem.bin');
@@ -131,7 +131,7 @@ void main() {
       final clk = SimpleClockGenerator(10);
       final reset = Logic(name: 'reset');
       final uartRx = Logic(name: 'uart_rx');
-      final c0 = _loadBinary('../../build/parcore/riscv/core0_if_uart.bin')!;
+      final c0 = _loadBinary('../../build/parcore/riscv/core0_if.bin')!;
       final c1 = _loadBinary('../../build/parcore/riscv/core1_id.bin');
       final c2 = _loadBinary('../../build/parcore/riscv/core2_ex.bin');
       final c3 = _loadBinary('../../build/parcore/riscv/core3_mem.bin')!;

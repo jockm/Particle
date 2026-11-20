@@ -357,7 +357,7 @@ void main() {
   late List<int> c3Kernel;
 
   setUpAll(() {
-    c0Kernel = loadBinary('../../build/parcore/riscv/core0_if_uart.bin');
+    c0Kernel = loadBinary('../../build/parcore/riscv/core0_if.bin');
     c1Kernel = loadBinary('../../build/parcore/riscv/core1_id.bin');
     c2Kernel = loadBinary('../../build/parcore/riscv/core2_ex.bin');
     c3Kernel = loadBinary('../../build/parcore/riscv/core3_mem.bin');
@@ -510,6 +510,69 @@ void main() {
       expect(regs[9]! & 0xFFFFFFFF, equals(0x12345670), reason: 'csrrwi old val');
       expect(regs[10]! & 0xFFFFFFFF, equals(0x1A), reason: 'csrrsi result');
       expectMatchesReference(res, guestProg, c3Kernel);
+    });
+
+    test('Guest instructions - illegal instructions trap (mcause 2, mtval, mepc); WFI does nothing', () async {
+      // SRET (a SYSTEM encoding Parcore doesn't support) and 0xFFFFFFFF (an
+      // unknown opcode) each trap to mtvec with mcause 2, mtval = the
+      // instruction and mepc = its address; the instruction after neither
+      // runs. WFI before them does nothing. The RV32 reference model has no
+      // traps, so the test checks the registers itself.
+      final guestInstructions = <int>[
+        0x00000297, // auipc x5, 0            ; x5 = 0x500
+        0x04028293, // addi x5, x5, 0x40      ; handler at 0x540
+        0x30529073, // csrrw x0, mtvec, x5
+        0x00100313, // addi x6, x0, 1
+        0x10500073, // wfi                    ; 0x510: a no-op
+        0x00130313, // addi x6, x6, 1         ; x6 = 2
+        0x10200073, // sret                   ; 0x518: not supported: illegal, mtval = 0x10200073
+        0x00700393, // addi x7, x0, 7         ; skipped: the handler does not return
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x34202573, // csrrs x10, mcause, x0  ; 0x540: handler 1
+        0x343025f3, // csrrs x11, mtval, x0
+        0x34102673, // csrrs x12, mepc, x0
+        0x04028293, // addi x5, x5, 0x40      ; handler 2 at 0x580
+        0x30529073, // csrrw x0, mtvec, x5
+        0xffffffff, // .word 0xFFFFFFFF       ; 0x554: unknown opcode: illegal
+        0x00700393, // addi x7, x0, 7         ; skipped
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x00000000, // (core 0 stops here until the trap redirects it)
+        0x342026f3, // csrrs x13, mcause, x0  ; 0x580: handler 2
+        0x34302773, // csrrs x14, mtval, x0
+        0x341027f3, // csrrs x15, mepc, x0
+      ];
+      final guestProg = encodeWords(guestInstructions);
+      final res = await runPipeline(
+        c0Merged: mergeCore0WithGuest(c0Kernel, guestProg),
+        c1Kernel: c1Kernel,
+        c2Kernel: c2Kernel,
+        c3Kernel: mergeCore3WithGuest(c3Kernel, guestProg),
+        maxCycles: 20000,
+      );
+      final regs = res.regs;
+      int x(int n) => regs[n]! & 0xFFFFFFFF;
+      expect(x(6), equals(2), reason: 'WFI did nothing');
+      expect(x(7), equals(0), reason: 'nothing after a trapping instruction ran');
+      expect(x(10), equals(2), reason: 'SRET: mcause');
+      expect(x(11), equals(0x10200073), reason: 'SRET: mtval');
+      expect(x(12), equals(0x518), reason: 'SRET: mepc');
+      expect(x(13), equals(2), reason: '0xFFFFFFFF: mcause');
+      expect(x(14), equals(0xFFFFFFFF), reason: '0xFFFFFFFF: mtval');
+      expect(x(15), equals(0x554), reason: '0xFFFFFFFF: mepc');
     });
 
     test('Guest instructions - FENCE.I (code written with SW and SB, then run)', () async {

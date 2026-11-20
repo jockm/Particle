@@ -2,7 +2,7 @@
 ; Parcore RV32IM: Core 0 (Instruction Fetch)
 ; The FTDI console UART is core 3's: guests reach it as memory-mapped I/O.
 ; Architecture: Particle 32-bit RISC Assembly
-; File: firmware/parcore/riscv/core0_if_uart.asm
+; File: firmware/parcore/riscv/core0_if.asm
 ; ==============================================================================
 .include "lib/vectors.inc"
 

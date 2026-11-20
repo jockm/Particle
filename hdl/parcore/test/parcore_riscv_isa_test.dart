@@ -217,7 +217,7 @@ void main() {
             final uartRx = Logic(name: 'uart_rx');
 
             final c0Kernel =
-                _loadBinary('../../build/parcore/riscv/core0_if_uart.bin');
+                _loadBinary('../../build/parcore/riscv/core0_if.bin');
             final c1Kernel =
                 _loadBinary('../../build/parcore/riscv/core1_id.bin');
             final c2Kernel =

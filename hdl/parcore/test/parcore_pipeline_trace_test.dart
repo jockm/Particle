@@ -37,7 +37,7 @@ void main() {
       reset = Logic(name: 'reset');
       uartRx = Logic(name: 'uart_rx');
 
-      final c0Bin = loadFirmware('build/parcore/riscv/core0_if_uart.bin');
+      final c0Bin = loadFirmware('build/parcore/riscv/core0_if.bin');
       final c1Bin = loadFirmware('build/parcore/riscv/core1_id.bin');
       final c2Bin = loadFirmware('build/parcore/riscv/core2_ex.bin');
       final c3Bin = loadFirmware('build/parcore/riscv/core3_mem.bin');

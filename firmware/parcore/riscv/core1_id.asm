@@ -429,11 +429,26 @@ _check_system:
     LOAD16  R14, 0x73
     LD      R4, R12
     SUB     R4, R14
-    FBRA.NZ R4, _drop_unrecognized
+    FBRA.NZ R4, _emit_illegal
     LOAD16  R14, _emit_system
     JMP     R14, R0
 
-_drop_unrecognized:
+_emit_illegal:
+    ; An instruction core 1 can't decode (an unknown opcode or SYSTEM
+    ; encoding): send core 2 an illegal-instruction item (uop 0x46), which
+    ; traps to mtvec with mcause 2 and mtval = the instruction. No
+    ; destination register. (A zero word never gets here: core 0 doesn't
+    ; send it.)
+    LOAD16  R4, 0x46
+    LD      R8, 12
+    SHIFTL  R8, 1               ; R8 = 24
+    SHIFTL  R4, R8              ; uop << 24, Rd 0
+    VALID_FLAGS R4
+    LD      R5, 0
+    FIFO.W  R4, R2              ; Word 0: Control Word
+    FIFO.W  R5, R2              ; Word 1: 0
+    FIFO.W  R11, R2             ; Word 2: the instruction (for mtval)
+    FIFO.W  R10, R2             ; Word 3: Guest PC
     LOAD16  R14, _id_main_loop
     JMP     R14, R0
 
@@ -876,7 +891,14 @@ _emit_system:
     LOAD16  R8, 0x302
     SUB     R8, R7
     FBRA.Z  R8, ._do_mret
-    LOAD16  R14, _drop_unrecognized
+    ; Check 0x105: WFI, which may do nothing (no interrupts to wait for)
+    LOAD16  R8, 0x105
+    SUB     R8, R7
+    FBRA.Z  R8, ._wfi
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._wfi:
+    LOAD16  R14, _id_main_loop
     JMP     R14, R0
 ._do_mret:
     LOAD16  R4, 0x42            ; uop = 0x42 (MRET)

@@ -28,6 +28,7 @@
 .define CSR_OFS_MSCRATCH 0x14    ; 0x340 (mscratch)
 .define CSR_OFS_MEPC     0x18    ; 0x341 (mepc)
 .define CSR_OFS_MCAUSE   0x1C    ; 0x342 (mcause)
+.define CSR_OFS_MTVAL    0x20    ; 0x343 (mtval)
 
 _reset_vector:
     LD      R1, 0               ; FIFO Ch0: Inbound from Core 1 (ID)
@@ -1173,8 +1174,26 @@ _do_rev8:
     JMP     R14, R0
 
 _dispatch_system:
-    ; uop in R3: 0x40=ECALL, 0x41=EBREAK, 0x42=MRET, 0x43=CSRRW, 0x44=CSRRS, 0x45=CSRRC
-    ; R10 = Control Word, R11 = OpA, R12 = OpB (12-bit CSR), R13 = Base PC
+    ; uop in R3: 0x40=ECALL, 0x41=EBREAK, 0x42=MRET, 0x43=CSRRW, 0x44=CSRRS, 0x45=CSRRC,
+    ; 0x46=illegal instruction
+    ; R10 = Control Word, R11 = OpA, R12 = OpB (12-bit CSR; the instruction for
+    ; 0x46), R13 = Base PC
+
+    ; 0x46: an instruction core 1 couldn't decode: mcause 2, mtval = it
+    LOAD16  R4, 0x46
+    LD      R5, R3
+    SUB     R5, R4
+    FBRA.NZ R5, ._not_illegal
+    LD      R14, CSR_BASE+CSR_OFS_MEPC
+    ST32    (R14), R13
+    LD      R14, CSR_BASE+CSR_OFS_MTVAL
+    ST32    (R14), R12
+    LOAD16  R7, 2
+    LD      R14, CSR_BASE+CSR_OFS_MCAUSE
+    ST32    (R14), R7
+    LOAD16  R14, ._system_trap_redirect
+    JMP     R14, R0
+._not_illegal:
 
     ; 0x40: ECALL
     LOAD16  R4, 0x40
@@ -1335,6 +1354,16 @@ _dispatch_system:
     ; 0x342: mcause
     LOAD16  R6, CSR_BASE+CSR_OFS_MCAUSE
     LOAD16  R7, 0x342
+    LD      R8, R12
+    SUB     R8, R7
+    FBRA.NZ R8, ._c10
+    LOAD16  R14, ._read_csr_val
+    JMP     R14, R0
+
+._c10:
+    ; 0x343: mtval
+    LOAD16  R6, CSR_BASE+CSR_OFS_MTVAL
+    LOAD16  R7, 0x343
     LD      R8, R12
     SUB     R8, R7
     FBRA.NZ R8, ._csr_unmapped
