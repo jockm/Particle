@@ -904,12 +904,19 @@ _emit_lui:
     JMP     R14, R0
 
 _emit_fence_i:
+    ; MISC-MEM: funct3 0 FENCE (nothing to do: one core does every load and
+    ; store, in order), 1 FENCE.I; 2-7 are reserved (Zicbom/Zicboz cache-block
+    ; operations use 2) and trap as illegal
     LD      R4, R11
     SHIFTR  R4, 12
     AND     R4, 7
+    FBRA.NZ R4, ._fence_not_0
+    LOAD16  R14, _id_main_loop
+    JMP     R14, R0
+._fence_not_0:
     SUB     R4, 1
     FBRA.Z  R4, ._do_fence_i
-    LOAD16  R14, _id_main_loop
+    LOAD16  R14, _emit_illegal
     JMP     R14, R0
 ._do_fence_i:
     LOAD16  R4, 0x32            ; FENCE.I uop
@@ -1001,7 +1008,14 @@ _emit_system:
     JMP     R14, R0
 
 _emit_csr_rw:
-    ; R14 = funct3 (1: CSRRW, 2: CSRRS, 3: CSRRC, 5: CSRRWI, 6: CSRRSI, 7: CSRRCI)
+    ; R14 = funct3 (1: CSRRW, 2: CSRRS, 3: CSRRC, 5: CSRRWI, 6: CSRRSI, 7: CSRRCI);
+    ; 4 is reserved (the hypervisor extension's HLV/HSV use it) and traps
+    LD      R8, R14
+    SUB     R8, 4
+    FBRA.NZ R8, ._csr_funct3_ok
+    LOAD16  R14, _emit_illegal
+    JMP     R14, R0
+._csr_funct3_ok:
     LD      R7, R11
     SHIFTR  R7, 15
     SHIFTR  R7, 5               ; R7 = CSR Address (inst[31:20])

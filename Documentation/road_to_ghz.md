@@ -88,7 +88,8 @@ The open-source OpenROAD flow can synthesise, place and route the Particle core 
 
 Roughly in order of effort:
 
-* A jump-table dispatch instruction in Particle, and bitfield extract/insert, to replace core 2's compare chains and core 1's shift-and-mask decoding.
+* **Use the instructions Particle already has.** The stage firmware uses none of `JTBL` (jump-table dispatch), `BEXTR` (bit-field extract) or `DIV`/`MOD`. Core 2 picks each operation with chains of compare-and-branch (144 long jumps) and divides in software (`_udiv_calc`, about 32 loop iterations); core 1 extracts RISC-V fields with shift-and-mask sequences. Rewriting them with `JTBL`, `BEXTR` and `DIV` needs no ISA change and is probably the biggest gain available. Agreed (337): the first step after end-to-end Parcore, measured stage by stage.
+* The new Particle instructions in [Particle ISA additions](#particle-isa-additions), especially the 2-word branches and the immediate `BEXTR`.
 * FIFO-to-register paths that skip the explicit `FIFO.R`.
 * More than one core per slow stage, such as two EX cores taking alternate instructions (proposal 04 points this way).
 * Hardware decode for the common RISC-V formats, with firmware handling the rest. This is the biggest step and trades away some flexibility.
@@ -103,10 +104,40 @@ Roughly in order of effort:
 * It's shared state between cores, against the CSP/transputer model Particles are meant for (cores coordinate over channels, with no shared memory), and it ties cores 1, 2 and 3 together. A register file shared by cores spread across a die is also hard to time at GHz.
 * Cheaper options in the same spirit: send ALU results from core 2 straight to core 1 on a FIFO of their own instead of through core 3; add Particle instructions that make core 1's bookkeeping cheaper.
 
+### Particle ISA additions
+
+Agreed (337, 338): one step after the firmware rewrite. Each touches the spec, the core, psim, pasm and its linter, and the Action compiler.
+
+* **2-word branches**, with a signed 16-bit displacement in the second word, covering the whole TCM in either direction: `BRA disp16`, `BRA.Z/NZ/N/P Rr, disp16` (any register, not just R14), and `CALL Rl, disp16` (PC-relative, with link). Today a far jump is `LOAD16 R14, label` + `JMP R14, R0`: 3 halfwords and about 5 cycles, and a conditional one adds an inverted short branch around it. The stage firmware has 234 of them. The displacement arrives while the first halfword is in D, as for `LDI`, and E decides: about 3 cycles when taken. Free opcodes: `0xBC`–`0xBF`, `0xCC`–`0xCF`.
+* **Compare-two-registers-and-branch**, `BEQ`/`BNE Rr, Rl, disp16`.
+* **Immediate `BEXTR`**: a 2-word form with the position and length in the second word, from a source register that isn't overwritten, so a RISC-V field is one instruction.
+* **`JTBL` strides**: the Rl field (ignored today, and written as 0 by pasm) gives the entry size: 0 two bytes (as now, a short branch), 1 four bytes (a 2-word branch to anywhere), 2 eight bytes and 3 sixteen bytes (a handler inline, like the trap table's slots). Only a shift of the index in the pipeline.
+* **`WAIT` and `HALT`, and low power.** `WAIT` sleeps until an `MBOX` arrives from any core, keeping the core's state. `HALT` sleeps until reset: the conductor restarts the core through `RST_CTRL`, and may reload its TCM first, so a halted core could later be powered down completely. Asleep, the core's clock enable (and its block RAMs') is off on the FPGA, and its clock is gated on an ASIC, with only the `MBOX` and reset logic awake. A blocking `FIFO.R` can sleep the same way while it waits. The conductor gets a status bit per core (running, waiting, halted) and a way to send an `MBOX` to any core. In the pipeline both are a stall that only `MBOX` or reset ends.
+* **The `MBOX` redesign**, all five parts:
+  1. **R14:** trap entry writes the return PC into R14, destroying the interrupted code's R14 (a known issue in the spec; `lib/particle_runtime.asm`'s handler returns to interrupted code). An `MBOX` trap switches to the shadow bank in hardware, with the return PC in S14, and a new `RETI` swaps back and returns.
+  2. **Masking:** `MBOX.OFF`/`MBOX.ON`; an `MBOX` that arrives while masked waits until the core unmasks.
+  3. **No lost messages:** today a newer `MBOX` replaces one not yet taken. A small queue of pending `MBOX`es, or a busy result the sender can check, as with `FIFO.TRYW`.
+  4. **Any target:** `MBOX Rr, Rl`, with the target core in a register, instead of wiring fixed by configuration.
+  5. **Scale:** carried through the interconnect as messages, a few cycles' latency, instead of a single-cycle strobe across the chip.
+
+  Together: an `MBOX` is a message on a per-core interrupt channel, queued, maskable and addressed to any core. Its arrival traps, and the handler reads the value with `FIFO.R`, which also removes the memory write at trap entry (`MBOX_VALUE`).
+* Later, a static "likely taken" bit on the 2-word conditional branches could let D redirect early for loops.
+
+Avoid, for the core's speed: instructions that write two registers, read three, or do a memory access and ALU work together.
+
 ### Step 4: design the multi-core system for scale
 
 * Caches in front of the TCMs, or instead of them.
-* A real interconnect with flow control.
+* **A network on chip (339)** instead of dedicated FIFOs, so any core can message any other. Dedicated FIFOs need on the order of N² for all-to-all, with wires that lengthen as the chip grows.
+  * A router per core, linked to its neighbours: a ring first, a 2D mesh with more cores. Every hop is registered, so no wire crosses the chip.
+  * Packets: a header (destination core, destination channel, type: data or `MBOX`) and the data word.
+  * A network interface per core holds the receive buffers for its input channels (block RAM), so `FIFO.R`, `FIFO.STAT` and `FIFO.TRYR` still work locally.
+  * Each core has a channel table, set up by the conductor, mapping its local channel numbers to (destination core, destination channel). Firmware still writes "my channel 2", so Parcore's stage firmware needn't change.
+  * `MBOX` is a priority packet type on the same network: the `MBOX` redesign above.
+  * Costs: 1–2 cycles per hop; credit-based flow control, so nothing is dropped ("full" becomes "no credit", and checks like "fewer than 128 words" change meaning); deadlock avoidance (fixed routing order, `MBOX` packets kept apart from data); routers of a few hundred LUTs each.
+  * In order with fixed routes, which Parcore depends on.
+  * Steps: (1) the channel table and network interface over today's direct links, with nothing behaving differently; (2) a ring of routers; (3) `MBOX` as packets; (4) a mesh when the core count calls for it. psim already routes channels from a JSON configuration, so it can model the latency first.
+  * A fuller design note (packet format, flow control, the channel table, what `FIFO.STAT` reports) for agreement before any code.
 * Message passing as the main model; Particle's FIFOs and `MBOX` already lean that way.
 * One place where coherence is defined; FENCE.I becomes a cache operation.
 * SARF and the conductor fit here.
@@ -135,5 +166,9 @@ Roughly in order of effort:
 | 9 | Measure each Parcore stage's busy and waiting cycles, and dependency waits | Not started |
 | 10 | SARF, or a cheaper alternative (such as an EX-to-ID result FIFO), decided from 9's numbers | Not decided |
 | 11 | Smaller register file (shadow banks) | Not started |
+| 12 | Stage firmware rewritten with `JTBL`, `BEXTR` and `DIV` | Agreed (337): first after end-to-end Parcore |
+| 13 | Particle ISA additions: 2-word branches, compare-and-branch, immediate `BEXTR`, `JTBL` strides, `WAIT`/`HALT` | Agreed (337): after 12 |
+| 14 | `MBOX` redesign: R14 and `RETI`, masking, no lost messages, any target, through the interconnect | Agreed (338): with 13 |
+| 15 | Network on chip replacing the dedicated FIFOs | Agreed (339): design note first |
 
 Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, conditional branches moved to E, and the FIFOs moved into block RAM.

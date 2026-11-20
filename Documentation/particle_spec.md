@@ -54,6 +54,8 @@ A slot holds 8 instructions, which is enough to jump anywhere: `lib/vectors.inc`
 
 **Interruptible stalls**: A trap raised by another core's `MBOX` is taken before the core's next instruction. If the core is stalled (on an empty FIFO, or in a multi-cycle divide), the stall is abandoned and the return PC is the address of the stalled instruction, so returning from the handler (`JMP R14, R0`) runs it again.
 
+**Known issue: an `MBOX` trap overwrites the interrupted code's R14.** Trap entry writes the return PC into R14 before the handler runs, and R14 is the implicit register of every imm8 instruction, so code interrupted by an `MBOX` at an arbitrary point loses its R14 (`FAST_ENTER_TRAP` swaps banks only after that). A handler that returns to the interrupted code, as `lib/particle_runtime.asm`'s does, can therefore corrupt it. Parcore's handlers don't return to the interrupted code. The planned fix is part of the `MBOX` redesign in `road_to_ghz.md`: an `MBOX` trap switches to the shadow bank in hardware, with the return PC in S14, and a new `RETI` swaps back and returns.
+
 ---
 
 ## 4. Complete Instruction Set Architecture (ISA) Map

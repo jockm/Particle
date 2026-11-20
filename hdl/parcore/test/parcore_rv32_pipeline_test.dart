@@ -638,6 +638,10 @@ void main() {
         0x00002263, // ILLEGAL: BRANCH funct3 2
         0x00003263, // ILLEGAL: BRANCH funct3 3
         0x00001067, // ILLEGAL: JALR funct3 1
+        0x0ff0000f, // valid:   fence
+        0x0000200f, // ILLEGAL: MISC-MEM funct3 2
+        0x340023f3, // valid:   csrrs x7, mscratch, x0
+        0x340043f3, // ILLEGAL: SYSTEM funct3 4
         0x07700b13, // addi x22, x0, 0x77     ; reached the end
       ];
       final guestProg = encodeWords(guestInstructions);
@@ -651,8 +655,8 @@ void main() {
       final regs = res.regs;
       int x(int n) => regs[n]! & 0xFFFFFFFF;
       expect(x(22), equals(0x77), reason: 'reached the end');
-      expect(x(20), equals(15), reason: 'one trap per ILLEGAL word, none for the valid ones');
-      expect(x(21), equals(0xE0848D31), reason: 'the sum of the ILLEGAL words (mtval)');
+      expect(x(20), equals(17), reason: 'one trap per ILLEGAL word, none for the valid ones');
+      expect(x(21), equals(0x1484F133), reason: 'the sum of the ILLEGAL words (mtval)');
     });
 
     test('Guest instructions - FENCE.I (code written with SW and SB, then run)', () async {
