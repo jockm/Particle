@@ -79,6 +79,37 @@ The program is part of the bitstream, so changing it means running `make ulx3s-b
 
 The pin file is the ULX3S project's `ulx3s_v20.lpf` (with its `LICENSE.md`), unchanged; it lists every pin on the board, and nextpnr warns about the ones the design doesn't use.
 
+### Parcore on the ULX3S
+
+`make parcore-bit` builds a bitstream for the ULX3S 85F running Parcore: the conductor and the four stage cores. At reset the conductor loads the stage firmware and a RISC-V guest program from an image built into the bitstream, checks its CRC-32 and releases the cores (see *Boot Image* in `parcore_architecture.md`). The guest's console is the FTDI UART.
+
+```bash
+make parcore-bit                                  # the demo guest, apps/riscv/hello.S
+make parcore-bit PARCORE_GUEST=apps/riscv/my.S    # another guest program
+make parcore-prog                                 # load it into the board
+make ulx3s-term                                   # its console
+```
+
+Building the guest needs a RISC-V GCC toolchain (`riscv64-elf-gcc` or similar, as for `make test-parcore-isa`).
+
+| Target | What it does |
+|---|---|
+| `make parcore-guest` | Builds `PARCORE_GUEST` into `build/riscv/<name>.bin`, linked at `0x500` (`apps/riscv/link.ld`) |
+| `make parcore-image` | `firmware` and `parcore-guest`, then the boot image `build/parcore_ulx3s/parcore_image.bin` |
+| `make parcore-bit` | Generates the design with that image, then Yosys, nextpnr (`--router router2`) and `ecppack`, in `build/parcore_ulx3s`: `parcore_ulx3s.bit` |
+| `make parcore-timing` | The last build's Fmax and critical path |
+| `make parcore-prog` | Loads the bitstream into the board (lost at power-off) |
+| `make parcore-flash` | Writes it to the board's configuration flash |
+
+Variables: `PARCORE_GUEST` (default `apps/riscv/hello.S`), `PARCORE_CLOCK_HZ` (default `25000000`).
+
+| Board | Use |
+|---|---|
+| Power button (`btn[0]`) | Reset: the conductor boots everything again |
+| FIRE1 | Once the cores are running: the conductor reloads the image and restarts them |
+| LEDs | While booting, LED 0 and one more per section loaded; on a fault, its code on LEDs 0–3 with LED 7 flashing (1 bad magic, 2 bad version, 3 bad section count, 4 bad section, 5 CRC mismatch); once running, the guest's (`0x1000_0008`) |
+| Buttons | The guest reads them at `0x1000_000C` |
+
 ### Other designs
 
 For another design `<top>.sv` whose top module is `<top>`:
@@ -110,6 +141,8 @@ Use `--25k` or `--45k` for the smaller boards. The top level's port names must m
 | Parcore: Generate SystemVerilog | `make generate-parcore` |
 | ULX3S: Build Bitstream | `make ulx3s-bit` |
 | ULX3S: Load Bitstream into the Board | `make ulx3s-prog` |
+| Parcore: Build ULX3S Bitstream | `make parcore-bit` |
+| Parcore: Load ULX3S Bitstream into the Board | `make parcore-prog` |
 | ULX3S: Open the FTDI UART | `make ulx3s-term` |
 | Particle: Run ROHD Tests | `make test-particle` |
 | Parcore: Run ROHD Tests | `make test-parcore` |

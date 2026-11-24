@@ -312,8 +312,13 @@ _send_wb_tokens:
 ;                load:  the received byte, or 0xFFFFFFFF if none has arrived
 ;   0x1000_0004  load:  status: bit 0 a byte has been received, bit 1 room to
 ;                send
+;   0x1000_0008  store: the board LEDs (bits 7:0), once the conductor has
+;                handed them over; load: the value last stored
+;   0x1000_000C  load:  the buttons, 1 = pressed: bit 0 FIRE1, 1 FIRE2, 2 UP,
+;                3 DOWN, 4 LEFT, 5 RIGHT
 ; Other addresses from 0x1000_0000 to 0x1FFF_FFFF: stores are ignored, loads
-; return 0. Loads aren't sign-extended. R12 address, R13 store data, R3 the
+; return 0. The LEDs and buttons are core 3's own I/O at 0xF000_0000 and
+; 0xF000_0004. Loads aren't sign-extended. R12 address, R13 store data, R3 the
 ; memory operation, R4 Rd (kept for the writeback).
 ; ==============================================================================
 _io_access:
@@ -323,7 +328,13 @@ _io_access:
     LD      R14, R3
     SUB     R14, 8
     FBRA.N  R14, ._io_load      ; operations 1-5 are loads, 8-10 stores
-    FBRA.NZ R5, ._io_done       ; a store elsewhere is ignored
+    FBRA.Z  R5, ._io_send
+    LD      R14, R5
+    SUB     R14, 8
+    FBRA.NZ R14, ._io_done      ; a store elsewhere is ignored
+    LOAD32  R14, 0xF0000000     ; the LEDs
+    ST32    (R14), R13
+    FBRA    ._io_done
 ._io_send:
     FIFO.TRYW R13, R6           ; R14 = 1 when the byte was sent
     BBRA.Z  R14, ._io_send
@@ -332,9 +343,15 @@ _io_access:
     JMP     R14, R0
 ._io_load:
     LD      R11, 0
-    FBRA.Z  R5, ._io_receive
-    SUB     R5, 4
-    FBRA.NZ R5, ._io_result     ; another address: 0
+    LD      R14, R5
+    FBRA.Z  R14, ._io_receive   ; 0x1000_0000: a received byte
+    SUB     R14, 8
+    FBRA.Z  R14, ._io_board     ; 0x1000_0008: the LEDs
+    SUB     R14, 4
+    FBRA.Z  R14, ._io_board     ; 0x1000_000C: the buttons
+    LD      R14, R5
+    SUB     R14, 4
+    FBRA.NZ R14, ._io_result    ; another address: 0
     FIFO.STAT R11, R6           ; bit 0 nothing received, bit 1 busy
     NOT     R11
     AND     R11, 3
@@ -344,6 +361,13 @@ _io_access:
     FBRA.NZ R14, ._io_result
     LD      R11, 0
     SUB     R11, 1              ; none: 0xFFFFFFFF
+._io_board:
+    ; 0xF000_0000 the LEDs, 0xF000_0004 the buttons: bit 2 of the address
+    ; picks between them, as bit 2 of the offset (8 or 0xC) does
+    LOAD32  R14, 0xF0000000
+    AND     R5, 4
+    OR      R14, R5
+    LD32    R11, (R14)
 ._io_result:
     LOAD16  R14, _emit_writeback
     JMP     R14, R0

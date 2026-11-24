@@ -75,7 +75,8 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
-        generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help
+        generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
+        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-timing parcore-prog parcore-flash
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -115,6 +116,12 @@ help:
 	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
 	@echo "  make ulx3s-flash      - Write build/ulx3s/particle_ulx3s.bit to the ULX3S flash (kept across power cycles)"
 	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000); Ctrl-] leaves"
+	@echo "  make parcore-guest    - Build the RISC-V guest program (PARCORE_GUEST=apps/riscv/hello.S; needs RISC-V GCC)"
+	@echo "  make parcore-image    - Build the Parcore boot image (stage firmware + guest) in build/parcore_ulx3s"
+	@echo "  make parcore-bit      - Synthesize, place and route Parcore for the ULX3S (PARCORE_CLOCK_HZ=...)"
+	@echo "  make parcore-timing   - Show the last Parcore build's Fmax and critical path"
+	@echo "  make parcore-prog     - Load build/parcore_ulx3s/parcore_ulx3s.bit into the ULX3S"
+	@echo "  make parcore-flash    - Write build/parcore_ulx3s/parcore_ulx3s.bit to the ULX3S flash"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
@@ -232,6 +239,71 @@ ulx3s-term:
 	@$(PYTHON) $(ROHD_DIR)/boards/ulx3s/ulx3s_term.py $(ULX3S_PORT) $(ULX3S_BAUD)
 
 # ------------------------------------------------------------------------------
+# Parcore on the ULX3S: the conductor loads the stage firmware and a RISC-V
+# guest program (PARCORE_GUEST, built with a RISC-V GCC toolchain) from the
+# image ROM built into the bitstream, then releases the cores. The guest uses
+# the FTDI UART (make ulx3s-term), the LEDs and the buttons; FIRE1 restarts.
+# ------------------------------------------------------------------------------
+PARCORE_ULX3S_BLD  := $(BUILD_DIR)/parcore_ulx3s
+PARCORE_GUEST      ?= apps/riscv/hello.S
+PARCORE_GUEST_BIN  := $(BUILD_DIR)/riscv/$(basename $(notdir $(PARCORE_GUEST))).bin
+PARCORE_CLOCK_HZ   ?= 25000000
+
+parcore-guest:
+	@bash apps/riscv/build_riscv_guest.sh "$(PARCORE_GUEST)" "$(PARCORE_GUEST_BIN)"
+
+parcore-image: setup firmware parcore-guest
+	@mkdir -p $(PARCORE_ULX3S_BLD)
+	@cd $(PARCORE_DIR) && $(DART) run bin/build_parcore_image.dart \
+		--core0 ../../$(PARCORE_BLD)/riscv/core0_if.bin --core1 ../../$(PARCORE_BLD)/riscv/core1_id.bin \
+		--core2 ../../$(PARCORE_BLD)/riscv/core2_ex.bin --core3 ../../$(PARCORE_BLD)/riscv/core3_mem.bin \
+		--guest ../../$(PARCORE_GUEST_BIN) --out ../../$(PARCORE_ULX3S_BLD)/parcore_image.bin
+
+generate-parcore-ulx3s: parcore-image
+	@echo "==> Generating the Parcore ULX3S design (build/parcore_ulx3s/parcore_ulx3s.sv)..."
+	@cd $(PARCORE_DIR) && $(DART) run bin/generate_parcore_ulx3s.dart \
+		--conductor ../../$(PARCORE_BLD)/conductor/conductor.bin \
+		--image ../../$(PARCORE_ULX3S_BLD)/parcore_image.bin \
+		--out ../../$(PARCORE_ULX3S_BLD) --clock-hz $(PARCORE_CLOCK_HZ)
+	@$(DOT_CLEAN_CMD)
+
+parcore-bit: generate-parcore-ulx3s
+	@echo "==> Synthesizing (Yosys; log in build/parcore_ulx3s/yosys.log)..."
+	@cd $(PARCORE_ULX3S_BLD) && $(YOSYS) -q -l yosys.log \
+		-p "read_verilog -sv parcore_ulx3s.sv; synth_ecp5 -top ulx3s_board -json parcore_ulx3s.json"
+	@echo "==> Placing and routing for the 85F (nextpnr; log in build/parcore_ulx3s/nextpnr.log)..."
+	@cd $(PARCORE_ULX3S_BLD) && $(NEXTPNR_ECP5) -q --85k --package CABGA381 --lpf ../../$(ULX3S_LPF) \
+		--json parcore_ulx3s.json --textcfg parcore_ulx3s.config --router router2 \
+		--freq $$(( $(PARCORE_CLOCK_HZ) / 1000000 )) -l nextpnr.log
+	@cd $(PARCORE_ULX3S_BLD) && $(ECPPACK) --compress parcore_ulx3s.config parcore_ulx3s.bit
+	@grep "Max frequency for clock" $(PARCORE_ULX3S_BLD)/nextpnr.log | tail -1
+	@echo "==> Bitstream: $(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
+	@$(DOT_CLEAN_CMD)
+
+# The critical path from the last parcore-bit
+parcore-timing:
+	@if [ ! -f "$(PARCORE_ULX3S_BLD)/nextpnr.log" ]; then \
+		echo "[FAIL] $(PARCORE_ULX3S_BLD)/nextpnr.log not found: run make parcore-bit first."; exit 1; \
+	fi
+	@grep "Max frequency for clock" $(PARCORE_ULX3S_BLD)/nextpnr.log | tail -1
+	@sed -n '/Critical path report for clock/,/^Info: *$$/p' $(PARCORE_ULX3S_BLD)/nextpnr.log | \
+		awk '$$2=="clk-to-q" || $$2=="logic" || $$2=="routing" || $$2=="setup" { \
+			n = $$6; if (length(n) > 90) n = substr(n, 1, 90) "..."; \
+			printf "%-9s %6s %7s  %s\n", $$2, $$3, $$4, n }'
+
+parcore-prog:
+	@if [ ! -f "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit" ]; then \
+		echo "[FAIL] $(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit not found: run make parcore-bit first."; exit 1; \
+	fi
+	$(OPENFPGALOADER) -b ulx3s "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
+
+parcore-flash:
+	@if [ ! -f "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit" ]; then \
+		echo "[FAIL] $(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit not found: run make parcore-bit first."; exit 1; \
+	fi
+	$(OPENFPGALOADER) -b ulx3s -f "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
+
+# ------------------------------------------------------------------------------
 # Verification & Test Suites
 # ------------------------------------------------------------------------------
 
@@ -256,7 +328,10 @@ test-particle-isa: $(PARTICLE_TEST_DEPS)
 
 test-parcore: setup firmware guest-tests
 	@echo "==> Running Parcore unit tests..."
-	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart)
+	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart \
+		test/spi_flash_rom_test.dart test/conductor_boot_test.dart)
+	@echo "==> Booting the whole Parcore ULX3S design from its image ROM (Verilator)..."
+	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) $(DART) test test/parcore_ulx3s_boot_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
 	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) bash ./test_pipeline.sh)
 

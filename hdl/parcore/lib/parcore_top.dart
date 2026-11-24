@@ -37,6 +37,12 @@ class ParcoreTop extends Module {
   Logic get spiMosi => output('spi_mosi');
   Logic get spiMiso => input('spi_miso');
 
+  // Board LEDs and buttons: the conductor shows boot progress and faults on
+  // the LEDs, then hands them to the guest (core 3's I/O, 0x1000_0008).
+  // Buttons, 1 = pressed: bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT, 5 RIGHT.
+  Logic get leds => output('leds');
+  Logic get buttons => input('buttons');
+
   // Diagnostic observability
   Logic get branchRedirectStrobe => output('branch_redirect_strobe');
   Logic get branchRedirectVector => output('branch_redirect_vector');
@@ -46,6 +52,7 @@ class ParcoreTop extends Module {
     required Logic reset,
     required Logic uartRx,
     Logic? spiMiso,
+    Logic? buttons,
     int clkFreqMhz = 25,
     int ftdiBaud = 1000000,
     List<int>? conductorBinary,
@@ -64,11 +71,13 @@ class ParcoreTop extends Module {
     addInput('reset', reset);
     addInput('uart_rx', uartRx);
     addInput('spi_miso', spiMiso ?? Const(0));
+    addInput('buttons', buttons ?? Const(0, width: 6), width: 6);
 
     addOutput('uart_tx');
     addOutput('spi_cs_n');
     addOutput('spi_sck');
     addOutput('spi_mosi');
+    addOutput('leds', width: 8);
     addOutput('branch_redirect_strobe');
     addOutput('branch_redirect_vector', width: 4);
 
@@ -169,23 +178,48 @@ class ParcoreTop extends Module {
 
     final isSpiSel = condMemAddr.slice(31, 4).eq(Const(0xF000001, width: 28));
 
+    // Buttons, through two flip-flops (they're asynchronous to the clock)
+    final buttonsMeta = Logic(name: 'buttons_meta', width: 6);
+    final buttonsSync = Logic(name: 'buttons_sync', width: 6);
+    Sequential(clk, [buttonsMeta < buttons, buttonsSync < buttonsMeta]);
+
+    // STATUS (0xF000_0020): bits [7:0] the LEDs while the conductor has them,
+    // bit 8 gives them to the guest. Without a conductor the guest has them
+    // from reset. BUTTONS (0xF000_0024, read only).
+    final regStatus = Logic(name: 'reg_status', width: 9);
+    final isStatusSel = condMemAddr.eq(Const(0xF0000020, width: 32));
+    final isButtonsSel = condMemAddr.eq(Const(0xF0000024, width: 32));
+    Sequential(clk, reset: reset, resetValues: {
+      regStatus: Const(conductorBinary != null ? 0 : 0x100, width: 9),
+    }, [
+      If(condMemWEn & isStatusSel, then: [
+        regStatus < condMemWData.slice(8, 0),
+      ]),
+    ]);
+
     // Conductor Port B Readback Multiplexer. Memory is synchronous: a load's
     // data is used in the cycle after its address, so the source selection
     // and the register values are captured at the clock edge, like the TCM.
     final readSelRst = Logic(name: 'cond_read_sel_rst');
     final readSelSpi = Logic(name: 'cond_read_sel_spi');
+    final readSelIo = Logic(name: 'cond_read_sel_io');
     final readRstVal = Logic(name: 'cond_read_rst_val', width: 32);
     final readSpiVal = Logic(name: 'cond_read_spi_val', width: 32);
+    final readIoVal = Logic(name: 'cond_read_io_val', width: 32);
     Sequential(clk, [
       readSelRst < isRstCtrlSel,
       readSelSpi < isSpiSel,
+      readSelIo < isStatusSel | isButtonsSel,
       readRstVal < regRstCtrl,
       readSpiVal < spiCtrl.rData,
+      readIoVal <
+          mux(isStatusSel, regStatus.zeroExtend(32), buttonsSync.zeroExtend(32)),
     ]);
     condMemBRData <= mux(
       readSelRst,
       readRstVal,
-      mux(readSelSpi, readSpiVal, condTcm.rDataB),
+      mux(readSelSpi, readSpiVal,
+          mux(readSelIo, readIoVal, condTcm.rDataB)),
     );
 
     // -------------------------------------------------------------------------
@@ -458,6 +492,7 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     final c3MemARData = Logic(name: 'c3_mem_a_rdata', width: ParticleWidths.halfWord);
     final c3MemBRData = Logic(name: 'c3_mem_b_rdata', width: ParticleWidths.word);
+    final c3TcmBRData = Logic(name: 'c3_tcm_b_rdata', width: ParticleWidths.word);
 
     // FIFO.STAT: channel 2 memToIf (core 3 waits for room before mirroring
     // a store), channel 3 the FTDI UART, any other channel exToMem
@@ -490,9 +525,36 @@ class ParcoreTop extends Module {
       portBBEn: core3.memPortBBEn,
       portBWEn: core3.memPortBWEn,
       portBREn: core3.memPortBREn,
-      portBRData: c3MemBRData,
+      portBRData: c3TcmBRData,
       initialBytes: core3Binary,
     );
+
+    // Core 3's own I/O, at 0xF000_0000 in its address space (writes there
+    // never reach its TCM): 0xF000_0000 the guest's LEDs (bits 7:0, written),
+    // 0xF000_0004 the buttons (read). Its firmware maps them to the guest
+    // addresses 0x1000_0008 and 0x1000_000C. Reads answer like memory: the
+    // selection and value are captured at the clock edge.
+    final c3IoSel = core3.memPortBAddr.slice(31, 28).eq(Const(0xF, width: 4));
+    final guestLeds = Logic(name: 'guest_leds', width: 8);
+    Sequential(clk, reset: reset, resetValues: {
+      guestLeds: Const(0, width: 8),
+    }, [
+      If(core3.memPortBWEn &
+          core3.memPortBAddr.eq(Const(0xF0000000, width: 32)), then: [
+        guestLeds < core3.memPortBWData.slice(7, 0),
+      ]),
+    ]);
+    final c3ReadIo = Logic(name: 'c3_read_io');
+    final c3ReadIoVal = Logic(name: 'c3_read_io_val', width: 32);
+    Sequential(clk, [
+      c3ReadIo < c3IoSel,
+      c3ReadIoVal <
+          mux(core3.memPortBAddr.slice(2, 2), buttonsSync.zeroExtend(32),
+              guestLeds.zeroExtend(32)),
+    ]);
+    c3MemBRData <= mux(c3ReadIo, c3ReadIoVal, c3TcmBRData);
+
+    leds <= mux(regStatus[8], guestLeds, regStatus.slice(7, 0));
 
     memToWbPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
     memToWbData <= core3.fifoPushData;

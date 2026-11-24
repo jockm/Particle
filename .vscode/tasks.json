@@ -73,6 +73,19 @@
       "problemMatcher": []
     },
     {
+      "label": "Parcore: Build ULX3S Bitstream",
+      "type": "shell",
+      "command": "make parcore-bit",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Parcore: Load ULX3S Bitstream into the Board",
+      "type": "shell",
+      "command": "make parcore-prog",
+      "problemMatcher": []
+    },
+    {
       "label": "ULX3S: Open the FTDI UART",
       "type": "shell",
       "command": "make ulx3s-term",

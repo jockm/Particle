@@ -6,6 +6,19 @@ The project's goal is a fast, flexible multi-core design that could run at sever
 
 **Parcore isn't fixed.** The current Parcore design (each RISC-V pipeline stage as a Particle core running firmware) came from an earlier discussion and isn't a commitment. If a different design serves the goal better in the long term, we can change it.
 
+## The larger goal
+
+The ULX3S limits how many Particles a design can have, but the aim is a system of dozens, perhaps hundreds, of Particles, configured at boot for one job or another:
+
+* Several Parcores side by side: a multi-core RISC-V system, or a RISC-V Parcore next to one emulating another architecture (a Pentium, say).
+* "Spare" Particles as I/O controllers, or for dedicated computation.
+* Inside a Parcore, techniques such as out-of-order and superscalar execution or an internal JIT; but the point is larger systems that are fast and flexible.
+* **A Parcore RISC-V somewhere near native RISC-V performance.** This is the hard target. Today a RISC-V instruction costs tens of Particle cycles, so closing that gap (dispatch, decode, hardware assists, perhaps translation) matters more than the clock. It will take time, refinement and experiment.
+
+This shapes the items below: the network on chip and the `MBOX` redesign are what let many Particles be arranged at boot, and the firmware and ISA work is aimed at the per-instruction cost.
+
+The conductor will have more jobs: a watchdog over the other cores, and a serial console on a second UART for loading new firmware and the like. Writing it in Action was tried (`conductor.act`) and wasn't practical yet: it needed more than 2 KiB and a multiplier. To revisit: Action with multi-line `asm` blocks, not just single `asm("...")` statements, and the conductor written in Action.
+
 ---
 
 ## Where we are (November 2026)
@@ -170,5 +183,7 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 | 13 | Particle ISA additions: 2-word branches, compare-and-branch, immediate `BEXTR`, `JTBL` strides, `WAIT`/`HALT` | Agreed (337): after 12 |
 | 14 | `MBOX` redesign: R14 and `RETI`, masking, no lost messages, any target, through the interconnect | Agreed (338): with 13 |
 | 15 | Network on chip replacing the dedicated FIFOs | Agreed (339): design note first |
+| 16 | Conductor: watchdog over the cores; console on a second UART for loading firmware | Not started |
+| 17 | Action: multi-line `asm` blocks; then the conductor in Action | Not started |
 
 Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, conditional branches moved to E, and the FIFOs moved into block RAM.

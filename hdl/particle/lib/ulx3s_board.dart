@@ -17,7 +17,8 @@
 //   ftdi_rxd (L4)    FPGA -> FTDI: FTDI UART transmit
 //   gp[0]  (B11)     GPIO UART transmit
 //   gp[1]  (A10)     GPIO UART receive
-//   led[7:0]         low byte of the fetch address
+//   led[7:0]         low byte of the fetch address (Parcore: its LEDs)
+//   btn[6:1]         FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT (Parcore only)
 //   wifi_gpio0 (L2)  held high so the ESP32 doesn't reset or reprogram the FPGA
 
 /// EHXPLLL settings for one output clock, with CLKOP as the feedback.
@@ -66,9 +67,12 @@ class Ecp5PllSettings {
 }
 
 /// The board top level, `ulx3s_board`, which instantiates [coreModule].
+/// With [buttons], the core module also has a `buttons` input, given
+/// btn[6:1] (FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT; 1 = pressed).
 String ulx3sBoardVerilog({
   required Ecp5PllSettings pll,
   String coreModule = 'particle_ulx3s_top',
+  bool buttons = false,
 }) {
   String mhz(int hz) => (hz / 1e6).toString().replaceAll(RegExp(r'\.0$'), '');
   return '''
@@ -132,7 +136,7 @@ module ulx3s_board (
     .ftdi_rx_pin(ftdi_txd),
     .gpio_rx_pin(gp[1]),
     .ftdi_tx_pin(ftdi_rxd),
-    .gpio_tx_pin(gpioTx),
+    .gpio_tx_pin(gpioTx),${buttons ? '\n    .buttons(btn[6:1]),' : ''}
     .leds(led)
   );
 

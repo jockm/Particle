@@ -22,21 +22,101 @@
 .define SPI_DATA_ADDR       0xF0000014
 .define SPI_DIV_ADDR        0xF0000018
 
-; Multi-Core Firmware Image Layout (SPI Flash @ 0x0010_0000)
-.define IMAGE_MAGIC_HI      0x5041
-.define IMAGE_MAGIC_LO      0x5243
+; STATUS (0xF000_0020): bits [7:0] the LEDs while the conductor has them;
+; bit 8 gives the LEDs to the guest (core 3's I/O, 0x1000_0008).
+; BUTTONS (0xF000_0024, read): bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT,
+; 5 RIGHT (1 = pressed).
+.define STATUS_OFFSET       0x20
+.define BUTTONS_OFFSET      0x24
+.define STATUS_GUEST_LEDS   0x0100
 
 ; ------------------------------------------------------------------------------
-; Register Convention (Supervisor Resident State)
+; Firmware Image (format version 2), in SPI flash at 0x0040_0000
+; ------------------------------------------------------------------------------
+; Header (16 bytes):
+;   +0  Magic 0x50415243 ("PARC")
+;   +4  Number of sections, 1..8
+;   +8  CRC-32 of the whole image (header, section table and payloads) with
+;       these four bytes taken as zero: the standard CRC-32 (zlib's), over
+;       the image's bytes in order
+;   +12 Format version: 2
+; Section n (12 bytes, at 16 + 12*n):
+;   +0  Cores: bit i set writes the payload into core i's TCM (bits 0..5)
+;   +4  Offset in those TCMs (a multiple of 4)
+;   +8  Payload length in bytes (a multiple of 4)
+; Then the payloads, in section order.
+;
+; The conductor reads the image front to back in one pass. On a fault it
+; keeps every core held in reset and blinks the fault code on LEDs 0-3, with
+; LED 7 flashing:
+.define FAULT_MAGIC         1       ; not "PARC"
+.define FAULT_VERSION       2       ; not format version 2
+.define FAULT_COUNT         3       ; 0 or more than 8 sections
+.define FAULT_SECTION       4       ; no cores, cores beyond 5, or an offset
+                                    ; or length that isn't a multiple of 4
+.define FAULT_CRC           5       ; the CRC-32 doesn't match
+; While booting, LED 0 is lit and one more LED lights per section loaded.
+; Once the cores are running, the guest has the LEDs, and FIRE1 reloads the
+; image and restarts them.
+
+.define IMAGE_BASE_HI       0x0040  ; image at 0x0040_0000
+.define IMAGE_MAGIC_HI      0x5041
+.define IMAGE_MAGIC_LO      0x5243
+.define IMAGE_VERSION       2
+.define MAX_SECTIONS        8
+.define SECTION_TABLE       0x0600  ; copy of the section table (96 bytes)
+
+; ------------------------------------------------------------------------------
+; Register Convention
 ;   R5  = RST_CTRL MMIO base (0xF000_0000)
 ;   R6  = SPI_CTRL MMIO base (0xF000_0010)
-;   R7  = Section Count remaining
-;   R8  = Expected Checksum
-;   R9  = Running Checksum accumulator
-;   R10 = Current Flash Payload Offset
-;   R11 = Current Directory Entry Flash Offset
+;   R7  = Sections left
+;   R8  = Expected CRC-32
+;   R9  = Running CRC-32
+;   R10 = LED pattern while booting
+;   R11 = Current entry in the section table copy
+;   R12 = Offset in the target TCMs of the next payload word
+;   R13 = Payload words left in this section
 ;   R15 = Stack Pointer (0x0000_0800 = top of 2 KB Conductor TCM)
 ; ------------------------------------------------------------------------------
+
+; CRC-32, four bits at a time: R9 = (R9 >> 4) ^ table[R9 & 15]
+; (uses R2, R3)
+.macro CRC_NIBBLE
+    LD      R2, R9
+    AND     R2, 15
+    SHIFTL  R2, 2
+    LDI     R3, _crc_table
+    ADD     R2, R3
+    LD32    R2, (R2)
+    SHIFTR  R9, 4
+    XOR     R9, R2
+.endmacro
+
+; CRC-32 of the low byte of R4, then R4 >>= 8 (uses R2, R3)
+.macro CRC_BYTE
+    LD      R2, R4
+    LDI     R3, 0xFF
+    AND     R2, R3
+    XOR     R9, R2
+    CRC_NIBBLE
+    CRC_NIBBLE
+    SHIFTR  R4, 8
+.endmacro
+
+; Show R1 on the LEDs (uses R2)
+.macro SET_LEDS
+    LD      R2, R5
+    ADD     R2, 15
+    ADD     R2, 15
+    ADD     R2, 2                   ; R2 = STATUS (0xF000_0020)
+    ST32    (R2), R1
+.endmacro
+
+.macro FAULT code
+    LD      R1, %code
+    JUMP    _fault_halt
+.endmacro
 
     VECTOR_TABLE _reset_vector
 _reset_vector:
@@ -57,19 +137,26 @@ _reset_vector:
     LDI     R1, 0x003F              ; Deassert flush strobe; keep cores in reset
     ST32    (R5), R1
 
-    ; Configure SPI clock divider = 1 (12.5 MHz SCK @ 25 MHz sysclk)
+    ; Booting: LED 0, and the conductor has the LEDs
+    LD      R10, 1
+    LD      R1, R10
+    SET_LEDS
+
+    ; Configure SPI clock divider = 1 (SCK = clock / 4)
     LD      R1, 1
     LD      R2, R6
     ADD     R2, 8                   ; R2 = SPI_DIV (0xF000_0018)
     ST32    (R2), R1
 
-    ; 2. Read Multi-Core Image Header from SPI Flash @ 0x0010_0000
-    LDI     R1, 0x0010
+    ; 2. Read the header
+    LD      R9, 0
+    SUB     R9, 1                   ; R9 = CRC-32 initial value 0xFFFFFFFF
+    LDI     R1, IMAGE_BASE_HI
     SHIFTL  R1, 15
-    SHIFTL  R1, 1                   ; R1 = 0x0010_0000
+    SHIFTL  R1, 1                   ; R1 = 0x0040_0000
     RCALL   _spi_begin_read
 
-    ; Word 0: Magic ("PARC" = 0x50415243)
+    ; +0: Magic ("PARC" = 0x50415243)
     RCALL   _spi_read_word_le
     LDI     R2, IMAGE_MAGIC_HI
     SHIFTL  R2, 15
@@ -77,140 +164,133 @@ _reset_vector:
     LDI     R3, IMAGE_MAGIC_LO
     OR      R2, R3                  ; R2 = 0x50415243
     SEQ     R1, R2
-    FBRA.NZ R1, ._magic_ok          ; Skip 1 JUMP (<= 5 halfwords)
-    JUMP    _fault_halt
+    FBRA.NZ R1, ._magic_ok
+    FAULT   FAULT_MAGIC
 ._magic_ok:
 
-    ; Word 1: Section Count (must be 1..6)
+    ; +4: Number of sections (1..8)
     RCALL   _spi_read_word_le
     LD      R7, R1                  ; R7 = sectionCount
-    FBRA.NZ R7, ._sec_nonzero       ; Skip 1 JUMP
-    JUMP    _fault_halt
+    FBRA.NZ R7, ._sec_nonzero
+    FAULT   FAULT_COUNT
 ._sec_nonzero:
-    LD      R2, 6
-    SLT     R2, R7                  ; R2 = (6 < sectionCount) ? 1 : 0
-    FBRA.Z  R2, ._sec_in_range      ; Skip 1 JUMP
-    JUMP    _fault_halt
+    LD      R2, MAX_SECTIONS
+    SLT     R2, R7                  ; R2 = (8 < sectionCount) ? 1 : 0
+    FBRA.Z  R2, ._sec_in_range
+    FAULT   FAULT_COUNT
 ._sec_in_range:
 
-    ; Word 2: Expected Checksum
+    ; +8: Expected CRC-32; it counts as four zero bytes in the CRC
+    RCALL   _spi_read_word_raw
+    LD      R8, R1                  ; R8 = expected CRC-32
+    LD      R1, 0
+    RCALL   _crc_word
+
+    ; +12: Format version (2)
     RCALL   _spi_read_word_le
-    LD      R8, R1                  ; R8 = expectedSum
+    LD      R2, IMAGE_VERSION
+    SEQ     R1, R2
+    FBRA.NZ R1, ._version_ok
+    FAULT   FAULT_VERSION
+._version_ok:
 
-    ; Word 3: Reserved (discard)
+    ; 3. Read the section table into SECTION_TABLE, checking each entry
+    LDI     R11, SECTION_TABLE
+    LD      R12, R7                 ; R12 = entries left to read
+_table_loop:
+    FBRA.NZ R12, ._table_entry
+    JUMP    _table_done
+._table_entry:
+    ; +0: cores (1..0x3F)
     RCALL   _spi_read_word_le
-
-    RCALL   _spi_end_read
-
-    ; 3. Initialize Section Directory & Payload Flash Pointers
-    LD      R9, 0                   ; R9 = runningSum = 0
-
-    ; Directory starts at FLASH_IMAGE_BASE + 16 (0x0010_0010)
-    LDI     R11, 0x0010
-    SHIFTL  R11, 15
-    SHIFTL  R11, 1
-    ADD     R11, 15
-    ADD     R11, 1                  ; R11 = 0x0010_0010
-
-    ; Payload offset = dirAddr + (sectionCount * 12) = dirAddr + (n << 3) + (n << 2)
-    LD      R1, R7
-    SHIFTL  R1, 3
-    LD      R2, R7
-    SHIFTL  R2, 2
-    ADD     R1, R2
-    LD      R10, R11
-    ADD     R10, R1                 ; R10 = payloadFlashOffset
-
-; ------------------------------------------------------------------------------
-; Section Staging Loop (iterates R7 times)
-; ------------------------------------------------------------------------------
-_section_loop:
-    FBRA.NZ R7, ._has_sections      ; Skip 1 JUMP
-    JUMP    _verify_checksum
-._has_sections:
-
-    ; Read 12-byte section entry at R11
-    LD      R1, R11
-    RCALL   _spi_begin_read
-
+    ST32    (R11++), R1
+    FBRA.NZ R1, ._cores_some
+    FAULT   FAULT_SECTION
+._cores_some:
+    LD      R2, R1
+    SHIFTR  R2, 6
+    FBRA.Z  R2, ._cores_ok          ; no bits above core 5
+    FAULT   FAULT_SECTION
+._cores_ok:
+    ; +4: TCM offset, +8: length (multiples of 4)
     RCALL   _spi_read_word_le
-    LD      R12, R1                 ; R12 = targetCore (0..5)
-
-    RCALL   _spi_read_word_le
-    LD      R13, R1                 ; R13 = tcmOffset
-
-    RCALL   _spi_read_word_le
-    ST32    (--SP), R1              ; Push byteLength onto stack
-
-    RCALL   _spi_end_read
-
-    LD32    R3, (SP++)              ; Pop R3 = byteLength
-
-    ; Validate targetCore <= 5 and (byteLength & 3) == 0
-    LD      R1, 5
-    SLT     R1, R12                 ; R1 = (5 < targetCore)
-    FBRA.Z  R1, ._core_id_ok        ; Skip 1 JUMP
-    JUMP    _fault_halt
-._core_id_ok:
-    LD      R1, R3
+    ST32    (R11++), R1
     AND     R1, 3
-    FBRA.Z  R1, ._len_aligned       ; Skip 1 JUMP
-    JUMP    _fault_halt
-._len_aligned:
+    FBRA.Z  R1, ._offset_ok
+    FAULT   FAULT_SECTION
+._offset_ok:
+    RCALL   _spi_read_word_le
+    ST32    (R11++), R1
+    AND     R1, 3
+    FBRA.Z  R1, ._length_ok
+    FAULT   FAULT_SECTION
+._length_ok:
+    SUB     R12, 1
+    JUMP    _table_loop
+_table_done:
 
-    ; Compute destination TCM window address:
-    ; dstAddr = 0x1000_0000 + (targetCore << 16) + tcmOffset
-    LDI     R1, 0x1000
-    SHIFTL  R1, 15
-    SHIFTL  R1, 1                   ; 0x1000_0000
-    SHIFTL  R12, 15
-    SHIFTL  R12, 1                  ; targetCore << 16
-    ADD     R12, R1
-    ADD     R12, R13                ; R12 = dstAddr (Port B window)
+    ; 4. Payloads, in section order, straight after the table
+    LDI     R11, SECTION_TABLE
+_section_loop:
+    FBRA.NZ R7, ._has_sections
+    JUMP    _sections_done
+._has_sections:
+    LD      R1, R11
+    ADD     R1, 4
+    LD32    R12, (R1)               ; R12 = TCM offset
+    ADD     R1, 4
+    LD32    R13, (R1)
+    SHIFTR  R13, 2                  ; R13 = payload words
 
-    ; Compute wordCount = byteLength >> 2 and advance payloadFlashOffset
-    LD      R13, R3
-    SHIFTR  R13, 2                  ; R13 = wordCount
-
-    ; Begin streaming payload words from R10
-    LD      R1, R10
-    ADD     R10, R3                 ; Advance R10 by byteLength for next section
-    ST32    (--SP), R12             ; Save dstAddr across call
-    ST32    (--SP), R13             ; Save wordCount across call
-    RCALL   _spi_begin_read
-    LD32    R13, (SP++)             ; Restore wordCount
-    LD32    R12, (SP++)             ; Restore dstAddr
-
-_word_stream_loop:
-    FBRA.NZ R13, ._has_words        ; Skip 1 JUMP
+_word_loop:
+    FBRA.NZ R13, ._has_words
     JUMP    _section_done
 ._has_words:
-    ST32    (--SP), R12             ; Save dstAddr
-    ST32    (--SP), R13             ; Save wordCount
-    RCALL   _spi_read_word_le       ; R1 = next 32-bit little-endian word
-    LD32    R13, (SP++)             ; Restore wordCount
-    LD32    R12, (SP++)             ; Restore dstAddr
-
-    ST32    (R12++), R1             ; Write word to target Core TCM & advance +4
-    ADD     R9, R1                  ; runningSum += word
-    SUB     R13, 1                  ; wordCount--
-    JUMP    _word_stream_loop
+    RCALL   _spi_read_word_le       ; R1 = next payload word
+    ; Write it into every core in the section's mask:
+    ; 0x1000_0000 + (core << 16) + offset
+    LD32    R2, (R11)               ; R2 = cores
+    LDI     R3, 0x1000
+    SHIFTL  R3, 15
+    SHIFTL  R3, 1
+    ADD     R3, R12                 ; R3 = core 0's window + offset
+._core_loop:
+    FBRA.Z  R2, ._cores_done
+    LD      R4, R2
+    AND     R4, 1
+    FBRA.Z  R4, ._next_core
+    ST32    (R3), R1
+._next_core:
+    SHIFTR  R2, 1
+    LD      R4, 1
+    SHIFTL  R4, 15
+    SHIFTL  R4, 1
+    ADD     R3, R4                  ; the next core's window
+    BBRA    ._core_loop
+._cores_done:
+    ADD     R12, 4
+    SUB     R13, 1
+    JUMP    _word_loop
 
 _section_done:
-    RCALL   _spi_end_read
-
-    ADD     R11, 12                 ; Advance directory pointer by 12 bytes
-    SUB     R7, 1                   ; sectionCount--
+    ; One more LED per section loaded
+    SHIFTL  R10, 1
+    OR      R10, 1
+    LD      R1, R10
+    SET_LEDS
+    ADD     R11, 12                 ; the next entry in the table copy
+    SUB     R7, 1
     JUMP    _section_loop
 
-; ------------------------------------------------------------------------------
-; Checksum Validation & Synchronized Core Release
-; ------------------------------------------------------------------------------
-_verify_checksum:
-    SEQ     R9, R8                  ; R9 = (runningSum == expectedSum) ? 1 : 0
-    FBRA.NZ R9, ._checksum_ok       ; Skip 1 JUMP
-    JUMP    _fault_halt
-._checksum_ok:
+_sections_done:
+    RCALL   _spi_end_read
+
+    ; 5. Check the CRC-32, then release the cores together
+    NOT     R9                      ; final XOR with 0xFFFFFFFF
+    SEQ     R9, R8
+    FBRA.NZ R9, ._crc_ok
+    FAULT   FAULT_CRC
+._crc_ok:
 
     ; Release Cores 0..5 simultaneously (bits [5:0] = 0) & set Boot Complete (bit 31)
     LD      R1, 1
@@ -219,19 +299,59 @@ _verify_checksum:
     SHIFTL  R1, 1                   ; R1 = 0x8000_0000
     ST32    (R5), R1                ; Write RST_CTRL
 
-_supervisor_idle:
-    NOP
-    BBRA    _supervisor_idle        ; 1-instruction backward loop (offset = 1)
+    ; The guest has the LEDs now
+    LDI     R1, STATUS_GUEST_LEDS
+    SET_LEDS
 
+; ------------------------------------------------------------------------------
+; Supervisor: FIRE1 reloads the image and restarts the cores (once released)
+; ------------------------------------------------------------------------------
+_supervisor_idle:
+    LD      R2, R5
+    ADD     R2, 15
+    ADD     R2, 15
+    ADD     R2, 6                   ; R2 = BUTTONS (0xF000_0024)
+    LD32    R1, (R2)
+    AND     R1, 1                   ; FIRE1
+    BBRA.Z  R1, _supervisor_idle
+._wait_release:
+    LD32    R1, (R2)
+    AND     R1, 1
+    BBRA.NZ R1, ._wait_release
+    JUMP    _reset_vector
+
+; ------------------------------------------------------------------------------
+; Fault: R1 = code. Every core stays held in reset; the code is on LEDs 0-3,
+; with LED 7 flashing.
+; ------------------------------------------------------------------------------
 _fault_halt:
+    LD      R7, R1                  ; R7 = fault code
+    RCALL   _spi_end_read
     LDI     R1, 0x003F              ; Keep all 6 cores held in hardware reset
     ST32    (R5), R1
-_fault_spin:
-    NOP
-    BBRA    _fault_spin             ; 1-instruction backward loop (offset = 1)
+_fault_blink:
+    LD      R1, R7
+    LDI     R2, 0x80
+    OR      R1, R2                  ; the code, with LED 7 on
+    SET_LEDS
+    RCALL   _fault_delay
+    LD      R1, R7
+    SET_LEDS
+    RCALL   _fault_delay
+    JUMP    _fault_blink
+
+; About 0.2 s at 35 MHz (uses R1)
+_fault_delay:
+    LDI     R1, 0x0020
+    SHIFTL  R1, 15
+    SHIFTL  R1, 1                   ; R1 = 0x0020_0000
+._delay:
+    SUB     R1, 1
+    BBRA.NZ R1, ._delay
+    RRET
 
 ; ==============================================================================
-; SPI Flash Low-Level Subroutines (Preserves R5-R11)
+; SPI Flash Low-Level Subroutines (Preserves R5-R13)
 ; ==============================================================================
 
 ; _spi_begin_read: Asserts CS_N low and shifts out 0x03 READ + 24-bit addr in R1
@@ -305,8 +425,17 @@ _spi_xfer_byte:
     AND     R1, R3
     RRET
 
-; _spi_read_word_le: Reads 4 bytes from SPI and packs into 32-bit little-endian R1
+; _spi_read_word_le: the next 4 bytes as a little-endian word in R1, added
+; to the CRC-32 in R9
 _spi_read_word_le:
+    ST32    (--SP), R14             ; Save return address
+    RCALL   _spi_read_word_raw
+    RCALL   _crc_word
+    LD32    R14, (SP++)
+    RRET
+
+; _spi_read_word_raw: the next 4 bytes as a little-endian word in R1
+_spi_read_word_raw:
     ST32    (--SP), R14             ; Save return address
     ST32    (--SP), R4              ; Save R4 accumulator
 
@@ -338,3 +467,23 @@ _spi_read_word_le:
     LD32    R4, (SP++)
     LD32    R14, (SP++)
     RRET
+
+; _crc_word: adds the 4 bytes of R1 (low byte first) to the CRC-32 in R9;
+; R1 unchanged (uses R2, R3)
+_crc_word:
+    ST32    (--SP), R4
+    LD      R4, R1
+    CRC_BYTE
+    CRC_BYTE
+    CRC_BYTE
+    CRC_BYTE
+    LD32    R4, (SP++)
+    RRET
+
+; CRC-32 (polynomial 0xEDB88320, reflected) for each value of four bits
+    .align 4
+_crc_table:
+    .word 0x00000000, 0x1DB71064, 0x3B6E20C8, 0x26D930AC
+    .word 0x76DC4190, 0x6B6B51F4, 0x4DB26158, 0x5005713C
+    .word 0xEDB88320, 0xF00F9344, 0xD6D6A3E8, 0xCB61B38C
+    .word 0x9B64C2B0, 0x86D3D2D4, 0xA00AE278, 0xBDBDF21C

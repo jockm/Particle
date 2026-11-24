@@ -23,7 +23,7 @@ This document describes the design as it is in `hdl/parcore` and `firmware/parco
 
 | Stage | Module instance | Firmware | TCM | Multiplier / divider |
 |---|---|---|---|---|
-| Conductor | `parcore_conductor` | `firmware/parcore/conductor/conductor.asm` (from `conductor.act`) | 2 KiB | no / no |
+| Conductor | `parcore_conductor` | `firmware/parcore/conductor/conductor.asm` | 2 KiB | no / no |
 | Core 0, IF | `core0_if` | `firmware/parcore/riscv/core0_if.asm` | 8 KiB | no / no |
 | Core 1, ID | `core1_id` | `firmware/parcore/riscv/core1_id.asm` | 4 KiB | no / no |
 | Core 2, EX | `core2_ex` | `firmware/parcore/riscv/core2_ex.asm` | 4 KiB | yes / configured, see below |
@@ -42,10 +42,16 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 | `lib/parcore_tcm.dart` | `ParcoreTcm`: a core's TCM, a synchronous `ParticleBlockRamTdp` (16-bit fetch port, 32-bit data port with byte enables), preloaded with a binary at `0x100` |
 | `lib/parcore_config.dart` | The `CpuConfig` of each core |
 | `lib/spi_controller.dart` | `SpiController`: the conductor's SPI master |
+| `lib/spi_flash_rom.dart` | `SpiFlashRom`: the boot image in an on-chip ROM that answers like an SPI flash chip |
+| `lib/parcore_image.dart` | Builds the conductor's boot image (format 2, CRC-32) |
+| `lib/parcore_ulx3s_top.dart` | `ParcoreUlx3sTop`: `ParcoreTop` with the image ROM and the board's reset, UART, LEDs and buttons |
 | `lib/cpu_config.dart` | Parcore's copy of `CpuConfig` |
 | `bin/generate_parcore.dart` | Writes `parcore_top.sv` |
+| `bin/build_parcore_image.dart`, `bin/generate_parcore_ulx3s.dart` | The boot image and the ULX3S design (`make parcore-image`, `make parcore-bit`) |
 | `test/` | ROHD and Verilator tests (see [Tests](#tests)) |
 | `test_pipeline.sh` | Runs the RV32 pipeline tests one group at a time |
+
+The demo guest, its link script and build script are in `apps/riscv/`.
 
 ## Top-Level Ports
 
@@ -53,6 +59,8 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 |---|---|---|---|
 | `clk`, `reset` | in | 1 | Clock and active-high reset |
 | `uart_rx`, `uart_tx` | in / out | 1 | FTDI console UART, connected to core 3: the guest's memory-mapped UART (see [Guest I/O](#guest-io)) |
+| `leds` | out | 8 | The board LEDs: the conductor's boot progress and fault codes, then the guest's |
+| `buttons` | in | 6 | The board buttons, 1 = pressed: FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT |
 | `spi_cs_n`, `spi_sck`, `spi_mosi`, `spi_miso` | out / in | 1 | SPI flash, driven by the conductor |
 | `branch_redirect_strobe`, `branch_redirect_vector` | out | 1, 4 | Copies of core 2's MBOX outputs, for debugging |
 
@@ -106,9 +114,11 @@ Core 3 does every guest load and store, so the guest's I/O is there. Addresses f
 |---|---|---|
 | `0x1000_0000` | Sends the low byte on the FTDI UART, waiting while the transmitter is busy | The received byte, or `0xFFFFFFFF` if none has arrived |
 | `0x1000_0004` | Ignored | Status: bit 0 set when a byte has been received, bit 1 set when there's room to send |
+| `0x1000_0008` | Sets the LEDs (bits 7:0), once the conductor has handed them over | The value last stored |
+| `0x1000_000C` | Ignored | The buttons, 1 = pressed: bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT, 5 RIGHT |
 | Anything else in the range | Ignored | `0` |
 
-I/O loads aren't sign-extended. A store to `0x1000_0000` waits, so a guest can print without checking the status first; a guest that must not wait checks bit 1. The UART runs at the clock divided by `ParcoreTop.ftdiDivisor` (1 Mbps by default).
+The LEDs and buttons are core 3's own I/O, at `0xF000_0000` and `0xF000_0004` in its address space. I/O loads aren't sign-extended. A store to `0x1000_0000` waits, so a guest can print without checking the status first; a guest that must not wait checks bit 1. The UART runs at the clock divided by `ParcoreTop.ftdiDivisor` (1 Mbps by default).
 
 ### FENCE.I
 
@@ -136,6 +146,8 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 2 KiB
 | `0xF000_0010` | `SPI_CTRL`: bit 0 CS_N, bit 1 START, bit 2 BUSY (read only) |
 | `0xF000_0014` | `SPI_DATA`: bits 7:0, transmit and receive |
 | `0xF000_0018` | `SPI_DIV`: bits 15:0, SPI clock divider |
+| `0xF000_0020` | `STATUS`: bits 7:0 the board LEDs while the conductor has them; bit 8 gives them to the guest (core 3's I/O, see [Guest I/O](#guest-io)) |
+| `0xF000_0024` | `BUTTONS` (read only): 1 = pressed; bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT, 5 RIGHT |
 
 The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START) while idle starts an 8-bit transfer, most significant bit first. SCK changes once every `SPI_DIV + 1` cycles. MISO is sampled on each rising SCK edge and shifted in on the next falling edge, which is also when the next MOSI bit appears, so MOSI never changes while SCK is high.
 
@@ -147,25 +159,45 @@ The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START
 | 6 | Flush `ifToId` and `idToEx` |
 | 31 | Boot complete |
 
-Reads of `RST_CTRL`, the SPI registers and the conductor's TCM all answer like memory: the value is captured at the clock edge after the address, and arrives in the next cycle.
+Reads of `RST_CTRL`, the SPI registers, `STATUS`, `BUTTONS` and the conductor's TCM all answer like memory: the value is captured at the clock edge after the address, and arrives in the next cycle.
 
-At reset `RST_CTRL` is `0x3F` (every core held) when a conductor binary is given, and `0` otherwise, so without a conductor the stage cores start immediately from their preloaded TCMs.
+At reset `RST_CTRL` is `0x3F` (every core held) when a conductor binary is given, and `0` otherwise, so without a conductor the stage cores start immediately from their preloaded TCMs. Likewise `STATUS` starts at `0` (LEDs off, the conductor's) with a conductor, and at `0x100` (the guest's) without one.
 
-### Flash Image
+The conductor's firmware is `firmware/parcore/conductor/conductor.asm`, written by hand: its job is small and sits right on the SPI timing, and it has to fit in 2 KiB without a multiplier.
 
-`conductor.act` reads a firmware image from SPI flash at `0x0010_0000`:
+### Boot Image
+
+At reset the conductor holds every stage core, reads a firmware image over SPI from flash address `0x0040_0000` (4 MiB in, past any ECP5-85F bitstream; the ULX3S 3.1.7 has 16 MiB), copies its sections into the cores' TCMs through the windows, checks its CRC-32, and releases the cores together, writing `0x80000000` to `RST_CTRL`. It reads the image front to back in one pass. Format 2, all words little-endian:
 
 | Offset | Contents |
 |---|---|
 | 0 | Magic `0x50415243` (`"PARC"`) |
-| 4 | Number of sections (at most 6) |
-| 8 | Payload checksum |
-| 12 | Reserved |
-| 16 + 12·n | Section n: target core, destination offset in that core's TCM (usually `0x100`), payload size in bytes (a multiple of 4) |
+| 4 | Number of sections, 1 to 8 |
+| 8 | CRC-32 of the whole image (header, section table and payloads) with these four bytes taken as zero: the standard CRC-32 (zlib's, Python's `binascii.crc32`), over the image's bytes in order |
+| 12 | Format version: 2 |
+| 16 + 12·n | Section n: the cores (bit i set writes the payload into core i's TCM, bits 0–5), the offset in those TCMs, the payload length in bytes (both multiples of 4) |
 
-The payloads follow the section table. The conductor holds every core in reset and pulses the flush bit, copies each payload into its core's TCM through the window, then writes `0x80000000` to `RST_CTRL`, releasing the cores and setting boot complete.
+The payloads follow the section table, in section order. `lib/parcore_image.dart` builds images (`buildParcoreImage`), and `bin/build_parcore_image.dart` (`make parcore-image`) builds the usual one: each stage core's firmware at `0x100`, and the guest program at `0x500` as one section for cores 0 and 3.
 
-There is no make target that builds this flash image yet.
+**LEDs:** while booting, LED 0 is lit and one more lights per section loaded. Once the cores are released, `STATUS` bit 8 gives the LEDs to the guest. If a check fails, every core stays held, and the conductor blinks a fault code on LEDs 0–3 with LED 7 flashing:
+
+| Code | Fault |
+|---|---|
+| 1 | Not `"PARC"` |
+| 2 | Not format version 2 (a version 1 image has 0 there) |
+| 3 | 0 or more than 8 sections |
+| 4 | A section with no cores, cores beyond 5, or an offset or length that isn't a multiple of 4 |
+| 5 | The CRC-32 doesn't match |
+
+**FIRE1:** once the cores are running, pressing FIRE1 makes the conductor reload the image and restart them, without a full reset.
+
+On the ULX3S the image comes from `SpiFlashRom` (`lib/spi_flash_rom.dart`), an on-chip ROM built into the bitstream that answers the standard SPI flash read command (`0x03` and a 24-bit address) like the flash chip, so the conductor's code is the same as it will be for the real flash. It needs `SPI_DIV` of at least 1, and reads outside the image return `0xFF`, like erased flash.
+
+### The ULX3S design
+
+`ParcoreUlx3sTop` (`lib/parcore_ulx3s_top.dart`) is `ParcoreTop` with the conductor's code in its TCM, the stage cores' TCMs empty, the boot image in a `SpiFlashRom`, and a two-flip-flop reset synchroniser. The board wrapper (the particle package's `ulx3sBoardVerilog`) adds the PLL and pins: the power button resets, the FTDI UART is the guest's console, `btn[6:1]` are the buttons and `led[7:0]` the LEDs. `bin/generate_parcore_ulx3s.dart` writes the design and the memories' contents.
+
+The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, shows the buttons on LEDs 0–5 with a heartbeat on LED 7, and names each button as it's pressed. `apps/riscv/build_riscv_guest.sh` builds a guest with a RISC-V GCC toolchain, linked by `apps/riscv/link.ld` at `0x500` like the official tests.
 
 ## Building and Generating
 
@@ -176,6 +208,13 @@ There is no make target that builds this flash image yet.
 | `make generate-parcore` | Writes `hdl/parcore/parcore_top.sv` |
 | `make test-parcore` | Builds the firmware and guest programs, then runs the Parcore tests |
 | `make test-parcore-isa` | Builds the official RISC-V tests (`third_party/riscv-tests`, a submodule) and runs them on Parcore |
+| `make parcore-guest` | Builds the guest program `PARCORE_GUEST` (default `apps/riscv/hello.S`) into `build/riscv/` (needs a RISC-V GCC toolchain) |
+| `make parcore-image` | Builds the boot image, `build/parcore_ulx3s/parcore_image.bin`: the stage firmware and the guest |
+| `make parcore-bit` | Generates the ULX3S design with that image (`PARCORE_CLOCK_HZ`, default 25 MHz) and synthesizes, places and routes it: `build/parcore_ulx3s/parcore_ulx3s.bit` |
+| `make parcore-timing` | The last `parcore-bit`'s Fmax and critical path |
+| `make parcore-prog`, `make parcore-flash` | Load the bitstream into the ULX3S, or write it to its flash |
+
+On the board, `make ulx3s-term` opens the guest's console.
 
 ## Tests
 
@@ -187,6 +226,9 @@ There is no make target that builds this flash image yet.
 | `parcore_rv32_pipeline_test.dart` | Guest RV32 programs run on the four-stage pipeline, and core 1's registers at the end must match the RV32 reference model: register writes, signed division, multiply high, sub-word loads and stores, branches and jumps, CSRs. An illegal-instruction program checks that `SRET` and `0xFFFFFFFF` trap with the right `mcause`, `mtval` and `mepc` and that `WFI` does nothing; another runs 17 invalid encodings within known opcodes, each beside valid ones, and checks that exactly those trap. A FENCE.I program writes code with `SW` and `SB`, runs it, replaces an instruction and runs it again; the reference model keeps code and data apart, so that test checks the registers itself |
 | `rv32_reference.dart` | Not a test: the RV32 reference interpreter the pipeline tests compare against (RV32I, RV32M, the Zbb instructions core 1 decodes, and the CSRs core 2 keeps) |
 | `parcore_riscv_isa_test.dart` | The official rv32ui, rv32um and rv32uzbb tests, including `rv32ui/fence_i` |
+| `spi_flash_rom_test.dart` | `SpiFlashRom` through the conductor's SPI controller, at `SPI_DIV` 1 and 3: reads at the start and middle, past the image and the ROM (`0xFF`), below it, and an unknown command |
+| `conductor_boot_test.dart` | The conductor loads a format 2 image from a `SpiFlashRom` (one section into two cores), checks its CRC-32 and releases the cores; each of the five faults leaves the cores held with its code on the LEDs; the CRC-32 matches the standard check value |
+| `parcore_ulx3s_boot_test.dart` | The whole ULX3S design in Verilator, from reset: the conductor loads the stage firmware and a guest from the image ROM, and the guest prints on the FTDI UART |
 
 ### Simulators
 
