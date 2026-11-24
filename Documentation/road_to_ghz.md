@@ -30,8 +30,8 @@ The conductor will have more jobs: a watchdog over the other cores, and a serial
 | Before the pipeline | 16.9 MHz, single cycle |
 | What limits it now | several paths at about 40 MHz each: D's decode and register read into the fetch address, E's ALU, forwarding and redirect, and the multiplier's output into write-back. Fixing any one alone doesn't help. |
 | Parcore | four stage cores (IF, ID, EX, MEM) and a conductor, connected by FIFOs; every RISC-V instruction is many Particle instructions in each stage |
-| Parcore on the ECP5-85F | about 65% of the LUTs, with the FIFOs in block RAM (107% with the FIFOs in flip-flops, which didn't fit) |
-| Biggest block in each core | the register file, about 4,900 LUTs and 2,000 flip-flops, mostly for the shadow banks |
+| Parcore on the ECP5-85F | 45% of the LUTs and about 34 MHz Fmax (run at 25 MHz on the ULX3S), with the FIFOs in block RAM; 65% and about 29 MHz before `RBASE` was removed |
+| Biggest block in each core | the register file: 16 registers and 16 shadows in flip-flops since `RBASE` was removed, which took the single core from 12,427 to 9,137 LUTs and 2,763 to 1,734 flip-flops |
 
 ## What FPGA numbers tell us
 
@@ -55,7 +55,7 @@ Our E stage (register read with forwarding, a full 32-bit ALU or shifter, the br
 * **Execute:** E holds the whole ALU, the forwarding muxes and the redirect logic.
 * **Branches:** there's no prediction. A taken branch costs 1–2 cycles now, and would cost 4–8 in a deeper pipeline.
 * **ISA features that are hard to pipeline:**
-  * `RBASE` and the shadow-bank exchanges (`XCHG`, `XCHGALL`, `XCHGMOST`) remap registers on the read path and force a refetch.
+  * The shadow-bank exchanges (`XCHG`, `XCHGALL`, `XCHGMOST`) force a refetch. (`RBASE`, which also remapped every register read, has been removed.)
   * R14 is the implicit destination of every imm8 operation, which creates dependencies the program didn't ask for.
   * `MBOX` is taken at any instruction boundary.
 
@@ -63,7 +63,7 @@ Our E stage (register read with forwarding, a full 32-bit ALU or shifter, the br
 
 ### 2. Parcore's throughput is set by software, not the clock
 
-Each RISC-V instruction becomes many Particle instructions in each stage: core 2's dispatch is a chain of compare-and-branch, and FIFO traffic, epoch checks and scoreboarding come on top. The official ISA tests suggest tens of Particle cycles per RISC-V instruction. Even at 3 GHz that would be roughly 60–150 RISC-V MIPS, slower than a plain single-issue RISC-V core at a few hundred MHz. A faster clock makes the cost cheaper but doesn't change the ratio; the per-instruction software cost is what has to come down.
+Each RISC-V instruction becomes many Particle instructions in each stage: core 2's dispatch is a chain of compare-and-branch, and FIFO traffic, epoch checks and scoreboarding come on top. Measured on the demo guest (`apps/riscv/hello.S`, in simulation): its main loop, 18 RISC-V instructions with two branches, takes about 3,800 Particle cycles a pass, and printing a character (7 instructions, including a call and a return) about 2,190: roughly 200–300 Particle cycles per RISC-V instruction. Even at 3 GHz that would be roughly 10–15 RISC-V MIPS, slower than a plain single-issue RISC-V core at a few hundred MHz. A faster clock makes the cost cheaper but doesn't change the ratio; the per-instruction software cost is what has to come down.
 
 ### 3. The memory and system design only works on an FPGA
 
@@ -92,9 +92,9 @@ The open-source OpenROAD flow can synthesise, place and route the Particle core 
 * Execute split from the forwarding and redirect logic.
 * A memory stage, with 2-cycle loads.
 * Write-back.
-* Make the register file smaller: about 4,900 LUTs per core now, mostly for the shadow banks. Block or LUT RAM, or fewer banks, would help both area and the read path.
+* Make the register file smaller still: it is in flip-flops, 16 registers and 16 shadows. LUT RAM, or fewer shadows, would help both area and the read path.
 * Branch prediction alongside: backward-taken/forward-not-taken first, then a small branch target buffer. A CPU hint instruction may also help here.
-* Remove `RBASE` (decided): nothing uses it, and a 15-register window can't show three arbitrary guest registers at once, so it doesn't help emulate 32-register architectures. Guest registers live in memory (core 1's zero page), as emulators usually keep them. If more fast storage is ever needed, Thumb-style high registers reachable only through moves would avoid remapping every read.
+* Remove `RBASE` (done): nothing uses it, and a 15-register window can't show three arbitrary guest registers at once, so it doesn't help emulate 32-register architectures. Guest registers live in memory (core 1's zero page), as emulators usually keep them. If more fast storage is ever needed, Thumb-style high registers reachable only through moves would avoid remapping every read.
 * Use the block RAMs' output registers on the FPGA. This adds a cycle to fetch and loads, so it needs measuring.
 
 ### Step 3: cut Parcore's per-instruction cost (or change Parcore)
@@ -171,7 +171,7 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 | 1 | End-to-end Parcore running on the ULX3S | In progress: comes before everything below |
 | 2 | ASIC measurement with OpenROAD (Nangate45, SKY130 or ASAP7) | Not started |
 | 3 | Deeper Particle pipeline and branch prediction | Not started |
-| 4 | Remove `RBASE`: 16 registers plus 16 shadows, keeping `XCHG`/`XCHGALL`/`XCHGMOST`; `0xD3`/`0xD4` become illegal. Touches the spec, the core, psim, pasm and its linter, and the tests. Thumb-style high-register moves (`MOVHI`/`MOVLO`) only if a need is shown | Decided (334); after end-to-end Parcore |
+| 4 | Remove `RBASE`: 16 registers plus 16 shadows, keeping `XCHG`/`XCHGALL`/`XCHGMOST`; `0xD3`/`0xD4` become illegal. Touches the spec, the core, psim, pasm and its linter, and the tests. Thumb-style high-register moves (`MOVHI`/`MOVLO`) only if a need is shown | Done: the single core went from 12,427 to 9,137 LUTs, Parcore from 53,758 to 37,678 LUTs and from 28.8 to 33.8 MHz. `0xD3`/`0xD4` are reserved for the coming ISA additions (346) |
 | 5 | Parcore per-instruction cost, or a different Parcore design | Not started |
 | 6 | Caches, interconnect and memory controller for many cores | Not started |
 | 7 | Portable hardware description (resets, SRAM wrappers, no FPGA primitives) | Not started |
@@ -186,4 +186,4 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 | 16 | Conductor: watchdog over the cores; console on a second UART for loading firmware | Not started |
 | 17 | Action: multi-line `asm` blocks; then the conductor in Action | Not started |
 
-Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, conditional branches moved to E, and the FIFOs moved into block RAM.
+Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, conditional branches moved to E, the FIFOs moved into block RAM, Parcore running end to end on the ULX3S, and `RBASE` removed.

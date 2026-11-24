@@ -1,7 +1,7 @@
 // =============================================================================
 // File: apps/tools/psim/lib/core.dart
 // Project: Particle RISC Architecture
-// Description: Particle 32-bit RISC core engine with Option-2 RBASE windowing.
+// Description: Particle 32-bit RISC core engine.
 // =============================================================================
 
 import "dart:collection";
@@ -20,25 +20,17 @@ int toUnsigned32(int val) {
   return val & mask32;
 }
 
-class RegisterWindowView {
-  final ParticleCore core;
-  final Uint32List raw = Uint32List(32);
-
-  RegisterWindowView(this.core);
-
-  int effIdx(int idx) {
-    if (idx == 0) return 0;
-    return (idx + core.rbase) & 0x1F;
-  }
+/// R0..R15. R0 reads as zero; writes to it are discarded.
+class Registers {
+  final Uint32List raw = Uint32List(16);
 
   int operator [](int idx) {
-    return raw[effIdx(idx)];
+    return raw[idx];
   }
 
   void operator []=(int idx, int val) {
-    final phys = effIdx(idx);
-    if (phys != 0) {
-      raw[phys] = val & mask32;
+    if (idx != 0) {
+      raw[idx] = val & mask32;
     }
   }
 }
@@ -48,9 +40,8 @@ class ParticleCore {
   late final Uint8List mem;
   final ByteData byteData;
 
-  int rbase = 0;
-  late final RegisterWindowView r;
-  final Uint32List shadowR = Uint32List(32);
+  final Registers r = Registers();
+  final Uint32List shadowR = Uint32List(16);
 
   int pc = 0x00000100;
   final List<Queue<int>> fifos;
@@ -106,15 +97,13 @@ class ParticleCore {
       : fifos = List.generate(numFifos, (_) => Queue<int>()),
         byteData = ByteData(memSize) {
     mem = byteData.buffer.asUint8List();
-    r = RegisterWindowView(this);
   }
 
   void reset() {
-    for (var i = 0; i < 32; i++) {
+    for (var i = 0; i < 16; i++) {
       r.raw[i] = 0;
       shadowR[i] = 0;
     }
-    rbase = 0;
     pc = trapBase;
     cycleCount = 0;
     halted = false;
@@ -710,31 +699,26 @@ class ParticleCore {
     } else if (opcode == 0xCB) {
       if (r[14] != 0) nextPc = (pc - (imm8 * 2)) & mask32;
 
-    // ---------------- Shadow Banks & RBASE (0xD0 - 0xD4) ----------------
+    // ---------------- Shadow Bank (0xD0 - 0xD2) ----------------
+    // (0xD3 and 0xD4 are reserved: vector 15, like any undefined opcode)
     } else if (opcode == 0xD0) {
       if (rr != 0) {
-        final phys = r.effIdx(rr);
-        final tmp = r.raw[phys];
-        r.raw[phys] = shadowR[phys];
-        shadowR[phys] = tmp;
+        final tmp = r.raw[rr];
+        r.raw[rr] = shadowR[rr];
+        shadowR[rr] = tmp;
       }
     } else if (opcode == 0xD1) {
-      for (var i = 1; i < 32; i++) {
+      for (var i = 1; i < 16; i++) {
         final tmp = r.raw[i];
         r.raw[i] = shadowR[i];
         shadowR[i] = tmp;
       }
     } else if (opcode == 0xD2) {
       for (var i = 1; i < 15; i++) {
-        final phys = r.effIdx(i);
-        final tmp = r.raw[phys];
-        r.raw[phys] = shadowR[phys];
-        shadowR[phys] = tmp;
+        final tmp = r.raw[i];
+        r.raw[i] = shadowR[i];
+        shadowR[i] = tmp;
       }
-    } else if (opcode == 0xD3) {
-      rbase = imm8 & 0x1F;
-    } else if (opcode == 0xD4) {
-      rbase = r[rr] & 0x1F;
 
     // ---------------- Streaming FIFOs (0xE0 - 0xE7) ----------------
     } else if (opcode == 0xE0) {

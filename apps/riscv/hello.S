@@ -13,6 +13,11 @@
 #   0x1000_000C  load: the buttons, 1 = pressed: bit 0 FIRE1, 1 FIRE2, 2 UP,
 #                3 DOWN, 4 LEFT, 5 RIGHT
 # FIRE1 also makes the conductor reload the image and restart everything.
+#
+# The buttons are debounced: a change counts once they have read the same for
+# DEBOUNCE passes of the main loop. There's no timer, so this is counted in
+# passes: one pass takes about 3,800 cycles at 25 MHz (about 150 us), so 64
+# passes are about 10 ms. A faster Parcore will need a larger count.
 
     .equ IO_BASE,      0x10000000
     .equ IO_DATA,      0
@@ -20,6 +25,7 @@
     .equ IO_LEDS,      8
     .equ IO_BUTTONS,   12
     .equ HEARTBEAT,    13           # counter bit shown on LED 7
+    .equ DEBOUNCE,     64           # passes the buttons must be steady
 
     .section .text.init
     .globl _start
@@ -29,7 +35,9 @@ _start:
     la      a0, banner
     call    puts
     li      s1, 0                   # s1 = loop counter
-    li      s2, 0                   # s2 = buttons last time
+    li      s2, 0                   # s2 = the buttons, debounced
+    li      s7, 0                   # s7 = the buttons as last read
+    li      s8, 0                   # s8 = passes they have read the same
 
 main_loop:
     addi    s1, s1, 1
@@ -45,8 +53,20 @@ main_loop:
     li      a0, '\n'
     call    putc
 1:
+    # Debounce: s3 = the buttons once they have read the same DEBOUNCE times
+    lw      t0, IO_BUTTONS(s0)
+    beq     t0, s7, 4f
+    mv      s7, t0                  # changed: start counting again
+    li      s8, 0
+4:
+    mv      s3, s2
+    li      t1, DEBOUNCE
+    bgeu    s8, t1, 5f              # steady for a while already
+    addi    s8, s8, 1
+    bne     s8, t1, 5f
+    mv      s3, s7                  # steady just long enough: accept it
+5:
     # The buttons on LEDs 0-5, the heartbeat on LED 7
-    lw      s3, IO_BUTTONS(s0)
     srli    t0, s1, HEARTBEAT
     andi    t0, t0, 1
     slli    t0, t0, 7

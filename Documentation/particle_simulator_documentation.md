@@ -1,6 +1,6 @@
 # Particle Instruction Simulator & Debugger (`psim`)
 
-`psim` is an instruction-accurate, cycle-counting simulator and interactive debugger (`p4db`) for the Particle processor architecture, written in Dart (`apps/tools/psim`, built into `build/tools/psim` by `make tools`). It models the 32-bit datapath, the register file with its shadow bank and `RBASE` window, byte-addressed memory, the streaming FIFO channels, and the direct stride trap vectors.
+`psim` is an instruction-accurate, cycle-counting simulator and interactive debugger (`p4db`) for the Particle processor architecture, written in Dart (`apps/tools/psim`, built into `build/tools/psim` by `make tools`). It models the 32-bit datapath, the register file with its shadow bank, byte-addressed memory, the streaming FIFO channels, and the direct stride trap vectors.
 
 It runs a single core from a binary image, or several cores together (a *cluster*) described by a JSON file: their FIFO channels routed between cores, a shared memory window, and `MBOX` traps from one core to another.
 
@@ -120,7 +120,7 @@ Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields, such as `
 | `s` | `[count]` | Step one cycle (or `count`). In a cluster, every core steps, and each core's PC is shown. |
 | `c` | — | Continue until a breakpoint on any core, every core stops, the cycle limit, or (in a cluster) a deadlock. Selects the core that hit the breakpoint. |
 | `b` | `<addr>` | Set a breakpoint on the selected core. |
-| `r` | — | Show the PC, cycles, `RBASE`, the 32 physical registers, the shadow bank, and `R0`–`R15`. |
+| `r` | — | Show the PC, cycles, `R0`–`R15` and the shadow registers `S0`–`S15`. |
 | `m` | `<addr> [count]` | Hex and ASCII dump of `count` bytes (default 16). Addresses in the shared window show shared memory. |
 | `w` | `<addr> <v> ...` | Write 32-bit words. |
 | `wh` | `<addr> <v> ...` | Write 16-bit halfwords. |

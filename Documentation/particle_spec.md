@@ -16,15 +16,11 @@ This revision of the specification is aligned with the reference simulator `psim
   - `R14`: Subroutine link register (`JMP`/`RJUMP` link, `RCALL`/`RRET` aliases), immediate accumulator, trap link register, and FIFO try-status register.
   - `R15` (`SP`): Stack pointer by convention (full-descending, 4-byte aligned).
 - **Hardware Shadow Register Bank**:
-  - One 32-bit shadow register for each of the 32 physical registers (`S0`–`S31`; `S0`, like physical register 0, is always zero).
-  - Single-cycle exchange operations. `Sr` below is the shadow of the physical register that `Rr` maps to through `RBASE`:
+  - One 32-bit shadow register for each register (`S0`–`S15`; `S0`, like `R0`, is always zero).
+  - Single-cycle exchange operations:
     - `XCHG Rr`: Swaps active `Rr` with `Sr` (`XCHG R0` is a no-op).
-    - `XCHGALL`: Swaps all 31 physical registers (1–31) with their shadows, whatever `RBASE` is.
+    - `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
     - `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
-- **RBASE Register Windowing**:
-  - Shifts logical register index decoding into a 32-register physical file (`R0` remains fixed at physical 0; `R1`–`R15` map to physical `(index + rbase) mod 32`).
-  - `RBASE Imm8` (`0xD3`): Load window offset from constant ($rbase \leftarrow Imm8[4:0]$).
-  - `RBASE Rr` (`0xD4`): Load window offset dynamically from register ($rbase \leftarrow Rr[4:0]$).
 - **Flagless Design**: No traditional ALU condition code flags. Branching evaluates registers directly (`FBRA.Z`, `FBRA.NZ`, `FBRA.P`, `BBRA.Z`, etc.), while relational evaluations yield integer boolean results (`0` or `1`) directly in destination registers.
 - **Immediates**: `Imm4` and `Imm8` are zero-extended unless an instruction is marked **(signed imm)**, in which case `Imm4` is sign-extended to $-8 \ldots 7$ and `Imm8` to $-128 \ldots 127$. The `-Imm4` / `-Imm8` forms encode a magnitude ($0 \ldots 15$ / $0 \ldots 255$) and use its negation.
 - **Alignment**: Instruction fetch requires an even PC. 16-bit memory accesses require 2-byte alignment and 32-bit accesses require 4-byte alignment; a misaligned access or fetch raises Vector 14. Byte accesses have no alignment requirement.
@@ -248,12 +244,11 @@ Displacements are unsigned halfword counts added to (forward) or subtracted from
 - `0xCA`: `BBRA.NZ Rr, Imm4` — If $Rr \ne 0$: $PC \leftarrow PC - (Imm4 \times 2)$
 - `0xCB`: `BBRA.NZ R14, Imm8` — If $R14 \ne 0$: $PC \leftarrow PC - (Imm8 \times 2)$
 
-### 4.10 Context, Register Windowing & Interconnect Operations (0xD0 - 0xE7)
+### 4.10 Context & Interconnect Operations (0xD0 - 0xE7)
 - `0xD0`: `XCHG Rr` — Exchange active $Rr$ with shadow register $Sr$
-- `0xD1`: `XCHGALL` — Swap all 31 physical registers (1–31) with their shadow registers
+- `0xD1`: `XCHGALL` — Swap $R1$–$R15$ with $S1$–$S15$
 - `0xD2`: `XCHGMOST` — Fast interrupt context swap: swap $R1$–$R14$ with $S1$–$S14$ (preserving $SP$)
-- `0xD3`: `RBASE Imm8` — Set register bank window offset ($rbase \leftarrow Imm8[4:0]$)
-- `0xD4`: `RBASE Rr` — Set register bank window offset dynamically ($rbase \leftarrow Rr[4:0]$)
+- `0xD3`, `0xD4`: Reserved for future instructions (formerly `RBASE`, the register window, now removed). Until they are assigned they are undefined opcodes and raise Vector 15.
 
 FIFO channels are 256 entries deep. A channel number is taken modulo the number of implemented channels.
 - `0xE0`: `FIFO.R Rr, Rl` — Blocking read from channel `Rl` into `Rr`; stalls until data is available
@@ -294,3 +289,7 @@ Aligned with `psim` (then `psim.py`):
 Merged from the retired `particle_processor_architecture_specification.md`, and aligned with the hardware:
 - §2: Memory system and multi-core summary. §3: Interruptible stalls.
 - §4.10: `0xE5` is `MBOX Rr, Imm4`, as in the hardware; the immediate-channel `FIFO.STAT Rr, Chan` form was removed. `FIFO.R` and `FIFO.W` take the channel in a register (`Rl`), as in the hardware, instead of an immediate.
+
+Removed `RBASE` (register windowing):
+- §2: 16 registers and 16 shadow registers; `XCHGALL` swaps `R1`–`R15`.
+- §4.10: `0xD3` and `0xD4` are reserved for future instructions, and raise Vector 15 until then.

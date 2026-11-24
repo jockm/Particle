@@ -73,7 +73,7 @@ void main() {
 
   test('both reject what the spec does not allow', () {
     for (final line in [
-      'ADD R1, 16', 'SADD R1, 8', 'SSLT R1, 8', 'SMULH R1, 8', 'TRAP 16', 'RBASE 32',
+      'ADD R1, 16', 'SADD R1, 8', 'SSLT R1, 8', 'SMULH R1, 8', 'TRAP 16', 'RBASE 4', 'RBASE R2',
       'PUSH8 R1, 5', 'LD R1, (R2)', 'ST8 R1, (R2)', 'TAS (R1++), R2', 'CLZ R1',
       'FIFO.STAT R1, 3', 'MBOX R1, R2', 'NEG R1, R2', 'XCHG R1,', 'BBRA R1',
     ]) {
@@ -85,7 +85,7 @@ void main() {
   test('both accept the spec forms', () {
     for (final line in [
       'ADD R1, 15', 'SADD R1, -8', 'SSLT R1, 7', 'SSLT R1, -15', 'SSLT R14, 127',
-      'SLT R14, 255', 'SMULH R1, -8', 'TRAP 15', 'TRAP R3', 'RBASE 31', 'RBASE R2',
+      'SLT R14, 255', 'SMULH R1, -8', 'TRAP 15', 'TRAP R3',
       'PUSH8 R14, 255', 'PUSH4 R1, 15', 'LD R14, -255', 'LD R1, -15', 'LD8 R1, (R2++)',
       'ST32 (--R15), R1', 'LD32 (R1), R2', 'TAS (R1), R2', 'CLZ R1, R2',
       'FIFO.STAT R1, R2', 'FIFO.TRYR R1, R2', 'MBOX R1, 3', 'JMP R14, R14', 'NOP',

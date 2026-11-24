@@ -72,46 +72,24 @@ class Debugger {
 
   void dumpRegisters() {
     final pcHex = core.pc.toRadixString(16).toUpperCase().padLeft(8, "0");
-    stdout.writeln("  PC: 0x$pcHex  Cycles: ${core.cycleCount}  RBASE: ${core.rbase} (Window maps R1..R15 -> phys ${(1 + core.rbase) & 0x1F}..${(15 + core.rbase) & 0x1F})");
+    stdout.writeln("  PC: 0x$pcHex  Cycles: ${core.cycleCount}");
 
-    stdout.writeln();
-    stdout.writeln("  [Physical Register File (0..31)]");
-    for (var row = 0; row < 8; row++) {
-      final line = StringBuffer("  ");
-      for (var col = 0; col < 4; col++) {
-        final rIdx = (row * 4) + col;
-        final hex = core.r.raw[rIdx].toRadixString(16).toUpperCase().padLeft(8, "0");
-        final rStr = "P${rIdx.toString().padLeft(2, '0')}";
-        line.write("$rStr: 0x$hex  ");
+    void bank(String title, String prefix, List<int> values) {
+      stdout.writeln();
+      stdout.writeln("  [$title]");
+      for (var row = 0; row < 4; row++) {
+        final line = StringBuffer("  ");
+        for (var col = 0; col < 4; col++) {
+          final idx = (row * 4) + col;
+          final hex = values[idx].toRadixString(16).toUpperCase().padLeft(8, "0");
+          line.write("$prefix${idx.toString().padLeft(2, '0')}: 0x$hex  ");
+        }
+        stdout.writeln(line.toString());
       }
-      stdout.writeln(line.toString());
     }
 
-    stdout.writeln();
-    stdout.writeln("  [Shadow Register File (0..31)]");
-    for (var row = 0; row < 8; row++) {
-      final line = StringBuffer("  ");
-      for (var col = 0; col < 4; col++) {
-        final sIdx = (row * 4) + col;
-        final hex = core.shadowR[sIdx].toRadixString(16).toUpperCase().padLeft(8, "0");
-        final sStr = "S${sIdx.toString().padLeft(2, '0')}";
-        line.write("$sStr: 0x$hex  ");
-      }
-      stdout.writeln(line.toString());
-    }
-
-    stdout.writeln();
-    stdout.writeln("  [Active Virtual Registers (vR0..vR15)]");
-    for (var row = 0; row < 4; row++) {
-      final line = StringBuffer("  ");
-      for (var col = 0; col < 4; col++) {
-        final vIdx = (row * 4) + col;
-        final hex = core.r[vIdx].toRadixString(16).toUpperCase().padLeft(8, "0");
-        final vStr = "R${vIdx.toString().padLeft(2, '0')}";
-        line.write("$vStr: 0x$hex  ");
-      }
-      stdout.writeln(line.toString());
-    }
+    bank("Registers (R0..R15)", "R", core.r.raw);
+    bank("Shadow Registers (S0..S15)", "S", core.shadowR);
     stdout.writeln();
   }
 
@@ -119,7 +97,7 @@ class Debugger {
     final commands = {
       'c': "c                  Continue execution until breakpoint, halt, or Ctrl+C",
       's': "s [count]          Step one instruction (or [count] instructions)",
-      'r': "r                  Display PC, cycles, RBASE, all 32 physical and 16 active virtual registers",
+      'r': "r                  Display PC, cycles, the 16 registers and their 16 shadows",
       'm': "m <addr> [n]       Dump memory at <addr> (hex or decimal) for [n] bytes",
       'w': "w <addr> <v1> ...  Write 32-bit word(s) to memory (e.g. w 0x180 0xCAFE)",
       'wh': "wh <addr> <h1> ... Write 16-bit halfword(s) to memory (e.g. wh 0x180 0xCAFE)",

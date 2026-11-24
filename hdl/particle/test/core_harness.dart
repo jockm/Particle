@@ -16,14 +16,13 @@ import 'package:rohd/rohd.dart';
 
 class CoreState {
   final int pc;
-  final int rbase;
-  final List<int> physical; // P0..P31
-  final List<int> shadow; // S0..S31
+  final List<int> regs; // R0..R15
+  final List<int> shadow; // S0..S15
   final int cycles;
-  CoreState(this.pc, this.rbase, this.physical, this.shadow, this.cycles);
+  CoreState(this.pc, this.regs, this.shadow, this.cycles);
 
-  /// Virtual register Rn through the RBASE window.
-  int reg(int n) => n == 0 ? 0 : physical[(n + rbase) % 32];
+  /// Register Rn.
+  int reg(int n) => regs[n];
 }
 
 class _HarnessTop extends Module {
@@ -174,7 +173,6 @@ class CoreHarness {
     int val(Logic l) => l.value.isValid ? l.value.toInt() : -1;
     return CoreState(
       pc,
-      val(rf.rbaseOut),
       [for (final r in rf.physical) val(r)],
       [for (final r in rf.shadow) val(r)],
       cycles,

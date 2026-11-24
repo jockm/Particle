@@ -3,7 +3,7 @@
 // Description: Differential ISA test. Each program in test/isa/ is assembled
 //              with pasm and run in psim and on the ROHD core (CoreHarness:
 //              synchronous block RAM, loop-back FIFOs). Both must end with the
-//              same PC, RBASE, physical and shadow registers, and the same
+//              same PC, registers and shadow registers, and the same
 //              bytes in each memory area the program names.
 //
 // Needs build/tools/pasm and build/tools/psim (`make tools`).
@@ -13,9 +13,9 @@
 //   ; check-memory: <addr> <bytes>   a memory area to compare (any number)
 //   ; max-cycles: <n>                cycle limit (default 20000)
 // It must avoid what psim and the hardware are allowed to do differently:
-// TRAP 0 and TRAP 15 (psim stops), unknown opcodes (psim: no-ops; hardware:
-// vector 15), misaligned loads and pointer-mode accesses (psim writes some
-// registers before the fault), and filling a FIFO to 256 entries.
+// TRAP 0 and TRAP 15 (psim stops), and filling a FIFO to 256 entries.
+// (Undefined opcodes and misaligned accesses behave the same in both: see
+// 11_misaligned.asm and 12_reserved.asm.)
 // =============================================================================
 
 import 'dart:io';
@@ -43,11 +43,10 @@ List<int> assemble(File source, Directory workDir) {
 
 class PsimResult {
   final int pc;
-  final int rbase;
-  final List<int> physical;
+  final List<int> regs;
   final List<int> shadow;
   final Map<int, List<int>> memory;
-  PsimResult(this.pc, this.rbase, this.physical, this.shadow, this.memory);
+  PsimResult(this.pc, this.regs, this.shadow, this.memory);
 }
 
 /// Runs [binary] in psim for [maxCycles] and reads its state through the
@@ -72,13 +71,12 @@ PsimResult runPsim(String binary, int maxCycles, List<(int, int)> areas) {
   );
   final out = '${proc.stdout}';
   int hex(String s) => int.parse(s, radix: 16);
-  final pcM = RegExp(r'PC: 0x([0-9A-Fa-f]+)\s+Cycles: \d+\s+RBASE: (\d+)')
-      .firstMatch(out);
+  final pcM = RegExp(r'PC: 0x([0-9A-Fa-f]+)\s+Cycles: \d+').firstMatch(out);
   if (pcM == null) throw StateError('Could not read psim state:\n$out');
-  final physical = List<int>.filled(32, 0);
-  final shadow = List<int>.filled(32, 0);
-  for (final m in RegExp(r'P(\d\d): 0x([0-9A-Fa-f]{8})').allMatches(out)) {
-    physical[int.parse(m.group(1)!)] = hex(m.group(2)!);
+  final regs = List<int>.filled(16, 0);
+  final shadow = List<int>.filled(16, 0);
+  for (final m in RegExp(r'R(\d\d): 0x([0-9A-Fa-f]{8})').allMatches(out)) {
+    regs[int.parse(m.group(1)!)] = hex(m.group(2)!);
   }
   for (final m in RegExp(r'S(\d\d): 0x([0-9A-Fa-f]{8})').allMatches(out)) {
     shadow[int.parse(m.group(1)!)] = hex(m.group(2)!);
@@ -95,8 +93,7 @@ PsimResult runPsim(String binary, int maxCycles, List<(int, int)> areas) {
     }
     memory[addr] = bytes.sublist(0, len);
   }
-  return PsimResult(hex(pcM.group(1)!), int.parse(pcM.group(2)!), physical,
-      shadow, memory);
+  return PsimResult(hex(pcM.group(1)!), regs, shadow, memory);
 }
 
 String h(int v) => '0x${v.toRadixString(16).padLeft(8, '0')}';
@@ -124,12 +121,9 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
   final st = hw.snapshot();
   final diffs = <String>[];
   if (st.pc != ref.pc) diffs.add('PC: hardware ${h(st.pc)}, psim ${h(ref.pc)}');
-  if (st.rbase != ref.rbase) {
-    diffs.add('RBASE: hardware ${st.rbase}, psim ${ref.rbase}');
-  }
-  for (var i = 1; i < 32; i++) {
-    if (st.physical[i] != ref.physical[i]) {
-      diffs.add('P$i: hardware ${h(st.physical[i])}, psim ${h(ref.physical[i])}');
+  for (var i = 1; i < 16; i++) {
+    if (st.regs[i] != ref.regs[i]) {
+      diffs.add('R$i: hardware ${h(st.regs[i])}, psim ${h(ref.regs[i])}');
     }
     if (st.shadow[i] != ref.shadow[i]) {
       diffs.add('S$i: hardware ${h(st.shadow[i])}, psim ${h(ref.shadow[i])}');

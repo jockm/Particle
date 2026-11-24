@@ -484,8 +484,7 @@ def XCHG : FR<0xD0, (outs GPR:$rr), (ins GPR:$rr_in), "xchg $rr", []> {
 }
 def XCHGALL  : FN<0xD1, (outs), (ins), "xchgall", []>;
 def XCHGMOST : FN<0xD2, (outs), (ins), "xchgmost", []>;
-def RBASEI   : FI8<0xD3, (outs), (ins uimm8:$imm), "rbase $imm", []>;
-def RBASER   : FR<0xD4, (outs), (ins GPR:$rr), "rbase $rr", []>;
+// 0xD3 and 0xD4 (formerly RBASE) are reserved
 
 // FIFO and mailbox opcode map (psim and the spec):
 //   E0 fifo.r Rr, Rl        blocking read, channel in Rl (stalls while empty)

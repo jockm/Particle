@@ -223,8 +223,8 @@ abstract class ParticleOpcodes {
   static const int xchg = 0xD0;
   static const int xchgAll = 0xD1;
   static const int xchgMost = 0xD2;
-  static const int rbaseImm4 = 0xD3;
-  static const int rbaseR = 0xD4;
+  // 0xD3 and 0xD4 (formerly RBASE) are reserved for future instructions and
+  // are illegal (vector 15) until then
 
   // 4.12 Hardware Streaming FIFOs & Mailbox (0xE0 - 0xE9)
   static const int fifoR = 0xE0;
@@ -379,8 +379,6 @@ abstract class ParticleOpcodes {
     xchg,
     xchgAll,
     xchgMost,
-    rbaseImm4,
-    rbaseR,
     fifoR,
     fifoW,
     fifoStat,

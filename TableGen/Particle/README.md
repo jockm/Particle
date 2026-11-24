@@ -58,7 +58,7 @@ Questions resolved by psim.py: CLZ is `Rr ← clz(Rl)` with clz(0) = 32. TAS is 
   - Return: `jmp r14, r0`, which prints as `rret`.
 - **NOP** is `ld r0, r0` (0x0000).
 - **Stack access.** With no offset addressing modes, stack slots go through `PseudoLD{8,16,32}FI` / `PseudoST{8,16,32}FI`. `eliminateFrameIndex` expands them to `ld rT, sp ; add rT, off ; ld32 rD, (rT)`. Loads reuse the destination as rT; stores need a scavenged register. Pushes and pops use `st32 (--sp), rX` and `ld32 rX, (sp++)`. Indexed stores carry an earlyclobber, because the hardware reads the data register after updating the base.
-- **Not used by codegen:** XCHG, XCHGALL, XCHGMOST, RBASE, FIFO.*, JTBL, BRANCH, RJUMP, BEXTR, the register-displacement branches and MULHSU. They are assemble/disassemble only, for inline asm and hand-written handlers. `CSR_Particle_Shadow` is provided for handlers entered via `xchgmost`.
+- **Not used by codegen:** XCHG, XCHGALL, XCHGMOST, FIFO.*, JTBL, BRANCH, RJUMP, BEXTR, the register-displacement branches and MULHSU. They are assemble/disassemble only, for inline asm and hand-written handlers. `CSR_Particle_Shadow` is provided for handlers entered via `xchgmost`.
 
 ## C++ the generated code calls (names must match)
 

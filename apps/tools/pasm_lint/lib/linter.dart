@@ -152,7 +152,7 @@ const Set<String> allValidMnemonics = {
   // Bit Manipulation & System Registers
   "REV32", "NEG", "NOT", "NEZ", "CLZ", "JTBL", "BEXTR",
   "BSET", "BCLR", "BINV", "BGET",
-  "SEXT8", "SEXT16", "XCHG", "XCHGALL", "XCHGMOST", "RBASE"
+  "SEXT8", "SEXT16", "XCHG", "XCHGALL", "XCHGMOST"
 };
 
 // -----------------------------------------------------------------------------
@@ -181,7 +181,7 @@ const Map<String, List<String>> instructionForms = {
   "NOP": [""], "XCHGALL": [""], "XCHGMOST": [""],
   "NEG": ["R"], "NOT": ["R"], "NEZ": ["R"], "SEXT8": ["R"], "SEXT16": ["R"],
   "REV32": ["R"], "XCHG": ["R"], "JTBL": ["R"], "BRANCH": ["R"],
-  "TRAP": ["R", "V:0:15"], "RBASE": ["R", "V:0:31"],
+  "TRAP": ["R", "V:0:15"],
   "FBRA": ["V"], "BBRA": ["V"], "JUMP": ["V"],
   "FBRA.Z": ["R,R", "R,V"], "FBRA.N": ["R,R", "R,V"], "FBRA.P": ["R,R", "R,V"], "FBRA.NZ": ["R,V"],
   "BBRA.Z": ["R,R", "R,V"], "BBRA.N": ["R,R", "R,V"], "BBRA.P": ["R,R", "R,V"], "BBRA.NZ": ["R,V"],

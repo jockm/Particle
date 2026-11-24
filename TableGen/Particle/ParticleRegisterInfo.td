@@ -3,11 +3,9 @@
 // 16 architectural 32-bit GPRs. R0 reads as zero (reserved in C++
 // getReservedRegs, like RISC-V x0), R15 is SP.
 //
-// Not modelled for code generation:
-//   * the shadow bank S0-S15 (XCHG / XCHGALL / XCHGMOST),
-//   * the 32-entry physical file reached through RBASE.
-// The compiler always runs with rbase = 0 and never touches the shadow
-// bank; those instructions are available to the assembler / inline asm.
+// Not modelled for code generation: the shadow bank S0-S15 (XCHG /
+// XCHGALL / XCHGMOST). The compiler never touches it; those instructions
+// are available to the assembler / inline asm.
 //
 //===----------------------------------------------------------------------===//
 

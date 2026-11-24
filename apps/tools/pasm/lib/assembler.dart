@@ -537,7 +537,7 @@ class ParticleAssembler {
   static const Map<String, int> operandCounts = {
     'NOP': 0, 'XCHGALL': 0, 'XCHGMOST': 0,
     'NEG': 1, 'NOT': 1, 'NEZ': 1, 'SEXT8': 1, 'SEXT16': 1, 'REV32': 1,
-    'XCHG': 1, 'JTBL': 1, 'BRANCH': 1, 'TRAP': 1, 'RBASE': 1,
+    'XCHG': 1, 'JTBL': 1, 'BRANCH': 1, 'TRAP': 1,
     'FBRA': 1, 'BBRA': 1,
     'LD': 2, 'PUSH4': 2, 'PUSH8': 2,
     'LD8': 2, 'LD16': 2, 'LD32': 2, 'ST8': 2, 'ST16': 2, 'ST32': 2,
@@ -994,22 +994,11 @@ class ParticleAssembler {
     }
 
     // -------------------------------------------------------------------------
-    // Context Exchange: XCHG, XCHGALL, XCHGMOST, RBASE
+    // Context Exchange: XCHG, XCHGALL, XCHGMOST
     // -------------------------------------------------------------------------
     if (mnem == 'XCHG') return (0xD0 << 8) | (getR(0) << 4);
     if (mnem == 'XCHGALL') return 0xD100;
     if (mnem == 'XCHGMOST') return 0xD200;
-
-    if (mnem == 'RBASE') {
-      final op0 = ops[0].trim().toLowerCase();
-      if (regMap.containsKey(op0)) {
-        final rr = getR(0);
-        return (0xD4 << 8) | ((rr & 0x0F) << 4);
-      } else {
-        final imm = getImm(0, 0, 31, 'Window offset');
-        return (0xD3 << 8) | (imm & 0xFF);
-      }
-    }
 
     // -------------------------------------------------------------------------
     // Streaming FIFOs & Inter-core Mailbox

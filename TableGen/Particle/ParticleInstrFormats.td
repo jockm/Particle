@@ -64,7 +64,7 @@ class FI4<bits<8> op, dag outs, dag ins, string asmstr, list<dag> pat>
   let Inst{3-0}  = imm;
 }
 
-// [15:8] op | [7:0] imm8                 (implicit R14, FBRA/BBRA Imm8, RBASE Imm8)
+// [15:8] op | [7:0] imm8                 (implicit R14, FBRA/BBRA Imm8)
 class FI8<bits<8> op, dag outs, dag ins, string asmstr, list<dag> pat>
     : ParticleInst<outs, ins, asmstr, pat> {
   bits<8> imm;

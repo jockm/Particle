@@ -197,7 +197,7 @@ On the ULX3S the image comes from `SpiFlashRom` (`lib/spi_flash_rom.dart`), an o
 
 `ParcoreUlx3sTop` (`lib/parcore_ulx3s_top.dart`) is `ParcoreTop` with the conductor's code in its TCM, the stage cores' TCMs empty, the boot image in a `SpiFlashRom`, and a two-flip-flop reset synchroniser. The board wrapper (the particle package's `ulx3sBoardVerilog`) adds the PLL and pins: the power button resets, the FTDI UART is the guest's console, `btn[6:1]` are the buttons and `led[7:0]` the LEDs. `bin/generate_parcore_ulx3s.dart` writes the design and the memories' contents.
 
-The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, shows the buttons on LEDs 0–5 with a heartbeat on LED 7, and names each button as it's pressed. `apps/riscv/build_riscv_guest.sh` builds a guest with a RISC-V GCC toolchain, linked by `apps/riscv/link.ld` at `0x500` like the official tests.
+The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, shows the buttons on LEDs 0–5 with a heartbeat on LED 7, and names each button as it's pressed. It debounces the buttons in software: a change counts once they have read the same for 64 passes of its main loop, about 10 ms. `apps/riscv/build_riscv_guest.sh` builds a guest with a RISC-V GCC toolchain, linked by `apps/riscv/link.ld` at `0x500` like the official tests.
 
 ## Building and Generating
 

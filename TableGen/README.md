@@ -53,7 +53,7 @@ Tested with `llvm-tblgen` 18.1.3 and the matching `llvm/include` headers. All 10
   - Indirect: `jmp rX, r14`.
   - Return: `jmp r14, r0`, which prints as `rret`.
 - **NOP** is `ld r0, r0` (0x0000).
-- **Not used by codegen:** XCHG, XCHGALL, XCHGMOST, RBASE, FIFO.*, JTBL, BRANCH, RJUMP and MULHSU. They are assemble/disassemble only, for inline asm and hand-written handlers. `CSR_Particle_Shadow` is provided for handlers entered via `xchgmost`.
+- **Not used by codegen:** XCHG, XCHGALL, XCHGMOST, FIFO.*, JTBL, BRANCH, RJUMP and MULHSU. They are assemble/disassemble only, for inline asm and hand-written handlers. `CSR_Particle_Shadow` is provided for handlers entered via `xchgmost`.
 
 ## C++ the generated code calls (names must match)
 

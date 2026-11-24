@@ -209,8 +209,6 @@ class ParticleCpuCore extends Module {
     final rfXchgEn = Logic(name: 'rfXchgEn');
     final rfXchgAllEn = Logic(name: 'rfXchgAllEn');
     final rfXchgMostEn = Logic(name: 'rfXchgMostEn');
-    final rfRbaseEn = Logic(name: 'rfRbaseEn');
-    final rfRbaseIn = Logic(name: 'rfRbaseIn', width: 5);
 
     final inst = eInst;
     final pc = ePc;
@@ -244,8 +242,6 @@ class ParticleCpuCore extends Module {
       xchgAllEn: rfXchgAllEn,
       xchgMostEn: rfXchgMostEn,
       xchgRegIdx: rr,
-      rbaseEn: rfRbaseEn,
-      rbaseIn: rfRbaseIn,
     );
     registerFile = rf;
     final dValA = rf.rDataA;
@@ -653,10 +649,10 @@ class ParticleCpuCore extends Module {
     // A branch or jump to an odd address runs (a JMP still links) and then
     // takes vector 14, with R14 = the odd target
     final oddTarget = ctlTaken & branchNextPc.slice(0, 0).eq(1);
-    // These change which register is which: what follows is fetched again
+    // These swap register values behind the operands D has already read:
+    // what follows is fetched again
     final isSerialize = anyOp([
       ParticleOpcodes.xchg, ParticleOpcodes.xchgAll, ParticleOpcodes.xchgMost,
-      ParticleOpcodes.rbaseImm4, ParticleOpcodes.rbaseR,
     ]);
 
     final vec14 = Const(trapBase + 14 * config.trapStrideBytes, width: 32);
@@ -772,10 +768,6 @@ class ParticleCpuCore extends Module {
       rfXchgEn < doExec & op(ParticleOpcodes.xchg),
       rfXchgAllEn < doExec & op(ParticleOpcodes.xchgAll),
       rfXchgMostEn < doExec & op(ParticleOpcodes.xchgMost),
-      rfRbaseEn < doExec &
-          (op(ParticleOpcodes.rbaseImm4) | op(ParticleOpcodes.rbaseR)),
-      rfRbaseIn < mux(op(ParticleOpcodes.rbaseR), valA.slice(4, 0),
-          imm8.slice(4, 0)),
     ]);
 
     // -------------------------------------------------------------------------

@@ -252,6 +252,35 @@ _main:
     await h.stop();
   });
 
+  test('The reserved opcodes 0xD3 and 0xD4 take vector 15', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x1F0
+    ADD     R6, 1
+    LD      R7, R14
+    ADD     R14, 2
+    JMP     R14, R0
+.org 0x500
+_main:
+    LD      R1, 1
+    .half   0xD304          ; formerly RBASE 4
+    LD      R1, 2
+    .half   0xD410          ; formerly RBASE R1
+    LD      R2, 3
+_halt: BBRA _halt
+'''));
+    await h.start();
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(6), equals(2), reason: 'both trapped');
+    expect(st.reg(7), equals(0x506), reason: 'R14 = the second one');
+    expect(st.reg(1), equals(2), reason: 'registers are not windowed');
+    expect(st.reg(2), equals(3));
+    await h.stop();
+  });
+
   test('A misaligned load takes vector 14 and changes nothing', () async {
     final h = CoreHarness(asm('''
 .org 0x100
