@@ -13,6 +13,7 @@ set "OSS_CAD_ROOT=%USERPROFILE%\oss-cad-suite"
 set "OSS_CAD_BIN=%OSS_CAD_ROOT%\bin"
 set "OSS_CAD_LIB=%OSS_CAD_ROOT%\lib"
 set "RISCV_BIN=%USERPROFILE%\xpack-riscv-none-elf-gcc\bin"
+set "DOCKER_BIN=%ProgramFiles%\Docker\Docker\resources\bin"
 
 if not exist "%BASH_EXE%" (
     echo Git Bash not found: "%BASH_EXE%"
@@ -76,6 +77,7 @@ if exist "%OSS_CAD_LIB%\." set "PATH=%OSS_CAD_LIB%;%PATH%"
 if exist "%OSS_CAD_BIN%\." set "PATH=%OSS_CAD_BIN%;%PATH%"
 if exist "%OSS_CAD_ROOT%\share\openFPGALoader\." set "OPENFPGALOADER_SOJ_DIR=%OSS_CAD_ROOT%\share\openFPGALoader"
 if exist "%RISCV_BIN%\riscv-none-elf-gcc.exe" set "PATH=%RISCV_BIN%;%PATH%"
+if exist "%DOCKER_BIN%\docker.exe" set "PATH=%PATH%;%DOCKER_BIN%"
 
 where node >nul 2>nul
 if errorlevel 1 (
