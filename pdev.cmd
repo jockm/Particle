@@ -10,6 +10,7 @@ set "GNUWIN_BIN=C:\Program Files (x86)\GnuWin32\bin"
 set "DART_BIN="
 set "NODE_BIN="
 set "OSS_CAD_BIN=%USERPROFILE%\oss-cad-suite\bin"
+set "OSS_CAD_LIB=%USERPROFILE%\oss-cad-suite\lib"
 set "RISCV_BIN=%USERPROFILE%\xpack-riscv-none-elf-gcc\bin"
 
 if not exist "%BASH_EXE%" (
@@ -71,6 +72,7 @@ if defined DART_BIN (
 
 if defined NODE_BIN set "PATH=%NODE_BIN%;%PATH%"
 if exist "%OSS_CAD_BIN%\." set "PATH=%OSS_CAD_BIN%;%PATH%"
+if exist "%OSS_CAD_LIB%\." set "PATH=%OSS_CAD_LIB%;%PATH%"
 if exist "%RISCV_BIN%\riscv-none-elf-gcc.exe" set "PATH=%RISCV_BIN%;%PATH%"
 
 where node >nul 2>nul
