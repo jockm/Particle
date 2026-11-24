@@ -29,7 +29,7 @@
 
 ; Zero page
 .define REG_BASE          0x0000  ; x0..x31, a word each (0x00..0x7F); x0 stays 0
-.define COUNT_BASE        0x0090  ; 32 bytes (0x90..0xAF): writes in flight per register
+.define COUNT_BASE        0x0F00  ; 32 bytes (0xF00..0xF1F): writes in flight per register
 
 ; dst = inst[pos + len - 1 : pos] (len 1..7). Uses R14.
 .macro FIELD dst, pos, len
@@ -39,20 +39,16 @@
 .endmacro
 
 ; A writeback [Rd, data] in R4, R5. Rd + 0x20 is a cancel: nothing is
-; committed. Either way x(Rd) has one write fewer in flight. Writebacks for x0
-; are ignored (x0 is never counted). Uses R6, R8, R14.
+; committed (its data goes to 0x80 + 4 * Rd, which nothing uses). Either way
+; x(Rd) has one write fewer in flight. Writebacks for x0 are ignored (x0 is
+; never counted, and a cancel never names it). Uses R6, R8.
 .macro RETIRE_WB
     LD      R6, R4
-    LD      R14, 5 * 32             ; 5 bits from bit 0
-    BEXTR   R6, R14             ; R6 = Rd
+    BCLR    R6, 5               ; R6 = Rd
     FBRA.Z  R6, .%_done
-    LD      R14, R4
-    BGET    R14, 5
-    FBRA.NZ R14, .%_count       ; a cancel: nothing to commit
-    LD      R8, R6
+    LD      R8, R4
     SHIFTL  R8, 2
     ST32    (R8), R5            ; commit: REG_BASE + (Rd << 2)
-.%_count:
     ADD     R6, R1
     LD8     R8, (R6)
     SUB     R8, 1
@@ -60,22 +56,19 @@
 .%_done:
 .endmacro
 
-; Wait until x(R15) has no write in flight, retiring writebacks meanwhile.
-; Uses R4-R6, R8, R9, R14.
-.macro WAIT_RS1
-.%_chk:
+; Go to %stall if x(R15) has a write in flight. %chk labels the check, for
+; the stall stub to come back to. Uses R8, R14.
+.macro WAIT_RS1 chk, stall
+%chk:
     LD      R8, R15
     ADD     R8, R1
     LD8     R14, (R8)
-    FBRA.Z  R14, .%_ok
-    RCALL   _wait_one
-    BBRA    .%_chk
-.%_ok:
+    FBRA.NZ R14, %stall
 .endmacro
 
-; The same for x(R15) and x(R7).
-.macro WAIT_RS1_RS2
-.%_chk:
+; The same for x(R15) and x(R7). Uses R6, R8, R9, R14.
+.macro WAIT_RS1_RS2 chk, stall
+%chk:
     LD      R8, R15
     ADD     R8, R1
     LD8     R6, (R8)
@@ -83,10 +76,17 @@
     ADD     R9, R1
     LD8     R14, (R9)
     OR      R14, R6
-    FBRA.Z  R14, .%_ok
-    RCALL   _wait_one
-    BBRA    .%_chk
-.%_ok:
+    FBRA.NZ R14, %stall
+.endmacro
+
+; A stall stub, placed after its handler: retire one writeback (waiting for
+; it), then check again. Uses R4-R6, R8.
+.macro STALL_STUB stall, chk
+%stall:
+    FIFO.R  R4, R3
+    FIFO.R  R5, R3
+    RETIRE_WB
+    JUMP    %chk
 .endmacro
 
 ; dst = x(src index register). x0 reads as zero: its word is never written.
@@ -119,25 +119,59 @@ _reset_vector:
     LD      R2, 1               ; idToEx
     LD      R3, 2               ; writebacks
 
-    ; x0..x31 = 0, and nothing in flight (0x00..0xAF)
+    ; x0..x31 = 0, and nothing in flight
     LD      R4, 0
-    LDI     R6, (COUNT_BASE + 32) / 4
-._clear:
+    LDI     R6, 32
+._clear_regs:
     ST32    (R4++), R0
     SUB     R6, 1
-    BBRA.NZ R6, ._clear
+    BBRA.NZ R6, ._clear_regs
+    LD      R4, R1
+    LD      R6, 8
+._clear_counts:
+    ST32    (R4++), R0
+    SUB     R6, 1
+    BBRA.NZ R6, ._clear_counts
+    JUMP    _id_main_loop
+
+; A writeback the main loop found (its first word in R4)
+_retire:
+    FIFO.R  R5, R3
+    RETIRE_WB
+    JUMP    _id_main_loop
+
+; ------------------------------------------------------------------------------
+; The shared tail of most handlers; it falls into the main loop
+; ------------------------------------------------------------------------------
+_send_uop:
+    ; R4 = the operation number: to [31:24]
+    SHIFTL  R4, 12
+    SHIFTL  R4, 12
+_send_ctrl:
+    ; R4 = the control word without Rd and flags; R5, R9 = words 1 and 2;
+    ; word 3 the PC. x(rd) has one more write in flight.
+    LD      R6, R13
+    SHIFTL  R6, 8
+    OR      R4, R6
+    OR      R4, R12
+    FBRA.Z  R13, ._push
+    LD      R8, R13
+    ADD     R8, R1
+    LD8     R6, (R8)
+    ADD     R6, 1
+    ST8     (R8), R6
+._push:
+    FIFO.W  R4, R2              ; control word
+    FIFO.W  R5, R2              ; operand A
+    FIFO.W  R9, R2              ; operand B
+    FIFO.W  R10, R2             ; PC
 
 ; ==============================================================================
 ; Main loop: retire the writebacks waiting, then decode one instruction
 ; ==============================================================================
 _id_main_loop:
     FIFO.TRYR R4, R3            ; a writeback?
-    FBRA.Z  R14, ._no_wb
-    FIFO.R  R5, R3              ; its data
-    RETIRE_WB
-    BBRA    _id_main_loop
-
-._no_wb:
+    BBRA.NZ R14, _retire
     ; Decode only when idToEx has room for the packet (a FIFO.W to a full
     ; channel is dropped): fewer than 128 words in it (status bit 15 clear)
     FIFO.STAT R14, R2
@@ -154,57 +188,152 @@ _have_pc:
     SHIFTL  R12, 1
     OR      R12, 1              ; R12 = valid | epoch << 1
     BCLR    R10, 0
-
     FIFO.R  R11, R0             ; the instruction
-    ; Every RV32 instruction has bits [1:0] = 11, and a PC has bit 1 = 0. A
-    ; word with bit 1 clear is the next packet's PC: the flush emptied ifToId
-    ; after this packet's PC was popped. Start again with it.
-    LD      R14, R11
-    NOT     R14
-    AND     R14, 3
-    FBRA.NZ R14, _t_not_11
 
     FIELD   R13, 7, 5           ; rd
     FIELD   R15, 15, 5          ; rs1
-    FIELD   R9, 2, 5            ; opcode[6:2]
+    ; Dispatch on inst[6:0]. Every RV32 instruction has bits [1:0] = 11,
+    ; and a PC has bit 1 = 0: a word with bit 1 clear is the next packet's
+    ; PC (the flush emptied ifToId after this packet's PC was popped), and
+    ; the table starts again with it; bits [1:0] = 10 are illegal.
+    FIELD   R9, 0, 7
     JTBL    R9
-    FBRA    _h_load             ; 0x03 LOAD
+    FBRA    _t_pc               ; 0x00 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x01 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x02
+    FBRA    _h_load             ; 0x03
+    FBRA    _t_pc               ; 0x04 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x05 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x06
     FBRA    _h_illegal          ; 0x07
+    FBRA    _t_pc               ; 0x08 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x09 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x0A
     FBRA    _h_illegal          ; 0x0B
-    FBRA    _t_misc_mem         ; 0x0F MISC-MEM (FENCE, FENCE.I)
-    FBRA    _h_op_imm           ; 0x13 OP-IMM
-    FBRA    _h_auipc            ; 0x17 AUIPC
+    FBRA    _t_pc               ; 0x0C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x0D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x0E
+    FBRA    _t_misc_mem         ; 0x0F
+    FBRA    _t_pc               ; 0x10 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x11 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x12
+    FBRA    _h_op_imm           ; 0x13
+    FBRA    _t_pc               ; 0x14 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x15 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x16
+    FBRA    _h_auipc            ; 0x17
+    FBRA    _t_pc               ; 0x18 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x19 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x1A
     FBRA    _h_illegal          ; 0x1B
+    FBRA    _t_pc               ; 0x1C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x1D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x1E
     FBRA    _h_illegal          ; 0x1F
-    FBRA    _h_store            ; 0x23 STORE
+    FBRA    _t_pc               ; 0x20 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x21 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x22
+    FBRA    _h_store            ; 0x23
+    FBRA    _t_pc               ; 0x24 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x25 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x26
     FBRA    _h_illegal          ; 0x27
+    FBRA    _t_pc               ; 0x28 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x29 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x2A
     FBRA    _h_illegal          ; 0x2B
+    FBRA    _t_pc               ; 0x2C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x2D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x2E
     FBRA    _h_illegal          ; 0x2F
-    FBRA    _h_op               ; 0x33 OP
-    FBRA    _h_lui              ; 0x37 LUI
+    FBRA    _t_pc               ; 0x30 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x31 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x32
+    FBRA    _h_op               ; 0x33
+    FBRA    _t_pc               ; 0x34 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x35 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x36
+    FBRA    _h_lui              ; 0x37
+    FBRA    _t_pc               ; 0x38 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x39 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x3A
     FBRA    _h_illegal          ; 0x3B
+    FBRA    _t_pc               ; 0x3C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x3D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x3E
     FBRA    _h_illegal          ; 0x3F
+    FBRA    _t_pc               ; 0x40 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x41 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x42
     FBRA    _h_illegal          ; 0x43
+    FBRA    _t_pc               ; 0x44 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x45 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x46
     FBRA    _h_illegal          ; 0x47
+    FBRA    _t_pc               ; 0x48 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x49 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x4A
     FBRA    _h_illegal          ; 0x4B
+    FBRA    _t_pc               ; 0x4C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x4D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x4E
     FBRA    _h_illegal          ; 0x4F
+    FBRA    _t_pc               ; 0x50 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x51 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x52
     FBRA    _h_illegal          ; 0x53
+    FBRA    _t_pc               ; 0x54 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x55 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x56
     FBRA    _h_illegal          ; 0x57
+    FBRA    _t_pc               ; 0x58 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x59 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x5A
     FBRA    _h_illegal          ; 0x5B
+    FBRA    _t_pc               ; 0x5C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x5D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x5E
     FBRA    _h_illegal          ; 0x5F
-    FBRA    _h_branch           ; 0x63 BRANCH
-    FBRA    _h_jalr             ; 0x67 JALR
+    FBRA    _t_pc               ; 0x60 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x61 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x62
+    FBRA    _h_branch           ; 0x63
+    FBRA    _t_pc               ; 0x64 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x65 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x66
+    FBRA    _t_jalr             ; 0x67
+    FBRA    _t_pc               ; 0x68 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x69 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x6A
     FBRA    _h_illegal          ; 0x6B
-    FBRA    _t_jal              ; 0x6F JAL
-    FBRA    _t_system           ; 0x73 SYSTEM
+    FBRA    _t_pc               ; 0x6C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x6D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x6E
+    FBRA    _t_jal              ; 0x6F
+    FBRA    _t_pc               ; 0x70 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x71 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x72
+    FBRA    _t_system           ; 0x73
+    FBRA    _t_pc               ; 0x74 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x75 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x76
     FBRA    _h_illegal          ; 0x77
+    FBRA    _t_pc               ; 0x78 ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x79 ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x7A
     FBRA    _h_illegal          ; 0x7B
+    FBRA    _t_pc               ; 0x7C ; bit 1 clear: a PC
+    FBRA    _t_pc               ; 0x7D ; bit 1 clear: a PC
+    FBRA    _h_illegal          ; 0x7E
     FBRA    _h_illegal          ; 0x7F
 
+_t_pc:
+    LD      R10, R11
+    JUMP    _have_pc
+_t_jalr:
+    JUMP    _h_jalr
 _t_jal:
     JUMP    _h_jal
-_t_not_11:
-    JUMP    _not_11
 _t_misc_mem:
     JUMP    _h_misc_mem
 _t_system:
@@ -247,45 +376,23 @@ _h_auipc:
 ; immediate and unary forms. OP_ADD + funct3, SRAI OP_SRA, Zbb their own.
 ; ------------------------------------------------------------------------------
 _h_op_imm:
-    WAIT_RS1
+    WAIT_RS1 ._oi_chk, ._oi_stall
     READ_REG R5, R15            ; operand A = x(rs1)
     LD      R9, R11
     ASHIFTR R9, 15
     ASHIFTR R9, 5               ; operand B = the sign-extended I-immediate
     FIELD   R4, 12, 3           ; funct3
-    LD      R14, R4
-    AND     R14, 3
-    SUB     R14, 1
-    FBRA.Z  R14, _t_op_imm_shift ; funct3 1 or 5: shifts and Zbb
-_send_uop:
-    ; R4 = the operation number: to [31:24]
-    SHIFTL  R4, 12
-    SHIFTL  R4, 12
-_send_ctrl:
-    ; R4 = the control word without Rd and flags; R5, R9 = words 1 and 2;
-    ; word 3 the PC. x(rd) has one more write in flight.
-    LD      R6, R13
-    SHIFTL  R6, 8
-    OR      R4, R6
-    OR      R4, R12
-    FBRA.Z  R13, ._push
-    LD      R8, R13
-    ADD     R8, R1
-    LD8     R6, (R8)
-    ADD     R6, 1
-    ST8     (R8), R6
-._push:
-    FIFO.W  R4, R2              ; control word
-    FIFO.W  R5, R2              ; operand A
-    FIFO.W  R9, R2              ; operand B
-    FIFO.W  R10, R2             ; PC
-    JUMP    _id_main_loop
+    LD      R14, 0x22           ; funct3 1 or 5: shifts and Zbb
+    BGET    R14, R4
+    FBRA.NZ R14, _t_op_imm_shift
+    JUMP    _send_uop
+    STALL_STUB ._oi_stall, ._oi_chk
 
 ; ------------------------------------------------------------------------------
 ; LOAD: LB, LH, LW, LBU, LHU. OP_MEM; mem_op 1 LB, 2 LH, 3 LW, 4 LBU, 5 LHU.
 ; ------------------------------------------------------------------------------
 _h_load:
-    WAIT_RS1
+    WAIT_RS1 ._ld_chk, ._ld_stall
     READ_REG R5, R15            ; base
     LD      R9, R11
     ASHIFTR R9, 15
@@ -302,7 +409,8 @@ _h_load:
     OR      R4, R8
     SHIFTL  R4, 8
     SHIFTL  R4, 8               ; OP_MEM << 24 | mem_op << 16
-    BBRA    _send_ctrl
+    JUMP    _send_ctrl
+    STALL_STUB ._ld_stall, ._ld_chk
 
 ; ------------------------------------------------------------------------------
 ; OP: register-register ALU, M and Zbb. OP_ADD + funct3, OP_MUL + funct3
@@ -310,18 +418,20 @@ _h_load:
 ; ------------------------------------------------------------------------------
 _h_op:
     FIELD   R7, 20, 5           ; rs2
-    WAIT_RS1_RS2
+    WAIT_RS1_RS2 ._op_chk, ._op_stall
     READ_REG R5, R15            ; operand A
     READ_REG R9, R7             ; operand B
     FIELD   R4, 12, 3           ; funct3
     FIELD   R8, 25, 7           ; funct7
     LD      R14, R8
-    BBRA.Z  R14, _send_uop      ; funct7 0: ADD, SLL, SLT, SLTU, XOR, SRL, OR, AND
+    FBRA.Z  R14, ._op_f7_0       ; funct7 0: ADD, SLL, SLT, SLTU, XOR, SRL, OR, AND
     SUB     R8, 1
     LD      R14, R8
     FBRA.NZ R14, _t_op_funct7
     ADD     R4, OP_MUL          ; M: MUL ... REMU
-    BBRA    _send_uop
+._op_f7_0:
+    JUMP    _send_uop
+    STALL_STUB ._op_stall, ._op_chk
 
 _t_op_imm_shift:
     JUMP    _op_imm_shift
@@ -333,7 +443,7 @@ _t_op_funct7:
 ; ------------------------------------------------------------------------------
 _h_store:
     FIELD   R7, 20, 5           ; rs2
-    WAIT_RS1_RS2
+    WAIT_RS1_RS2 ._st_chk, ._st_stall
     READ_REG R5, R15            ; base
     READ_REG R6, R7             ; data
     FIELD   R4, 12, 3           ; funct3
@@ -357,6 +467,7 @@ _h_store:
     FIFO.W  R9, R2              ; offset
     FIFO.W  R6, R2              ; store data
     JUMP    _id_main_loop
+    STALL_STUB ._st_stall, ._st_chk
 
 ; ------------------------------------------------------------------------------
 ; BRANCH: BEQ, BNE, BLT, BGE, BLTU, BGEU. OP_BEQ + funct3; word 3 the
@@ -364,7 +475,7 @@ _h_store:
 ; ------------------------------------------------------------------------------
 _h_branch:
     FIELD   R7, 20, 5           ; rs2
-    WAIT_RS1_RS2
+    WAIT_RS1_RS2 ._br_chk, ._br_stall
     READ_REG R5, R15
     READ_REG R6, R7
     FIELD   R8, 12, 3           ; funct3
@@ -398,6 +509,7 @@ _h_branch:
     FIFO.W  R6, R2              ; x(rs2)
     FIFO.W  R4, R2              ; target PC
     JUMP    _id_main_loop
+    STALL_STUB ._br_stall, ._br_chk
 
 ; ------------------------------------------------------------------------------
 ; JALR: OP_JALR; words: x(rs1), the I-immediate, the PC
@@ -405,14 +517,15 @@ _h_branch:
 _h_jalr:
     FIELD   R8, 12, 3           ; funct3: 0 only
     LD      R14, R8
-    BBRA.NZ R14, _h_illegal
-    WAIT_RS1
+    FBRA.NZ R14, _t_illegal
+    WAIT_RS1 ._jr_chk, ._jr_stall
     READ_REG R5, R15
     LD      R9, R11
     ASHIFTR R9, 15
     ASHIFTR R9, 5
     LDI     R4, OP_JALR
     JUMP    _send_uop
+    STALL_STUB ._jr_stall, ._jr_chk
 
 _t_illegal:
     JUMP    _h_illegal
@@ -448,28 +561,6 @@ _h_jal:
     LD      R5, R10             ; word 1: the PC
     LDI     R4, OP_JAL
     JUMP    _send_uop
-
-; ------------------------------------------------------------------------------
-; A word in the instruction slot that isn't an RV32 instruction (bits 1:0
-; not 11): the next packet's PC (bit 1 clear), or an illegal instruction
-; ------------------------------------------------------------------------------
-_not_11:
-    LD      R14, R11
-    AND     R14, 2
-    BBRA.NZ R14, _t_illegal
-    LD      R10, R11
-    JUMP    _have_pc
-
-; ------------------------------------------------------------------------------
-; Retire one writeback, waiting for it if need be. Called with RCALL; keeps
-; R7, R10-R13 and R15. Uses R4-R6, R8, R9, R14.
-; ------------------------------------------------------------------------------
-_wait_one:
-    LD      R9, R14             ; the return address
-    FIFO.R  R4, R3
-    FIFO.R  R5, R3
-    RETIRE_WB
-    JMP     R9, R0
 
 ; ------------------------------------------------------------------------------
 ; OP-IMM with funct3 1 or 5: SLLI, SRLI, SRAI, and the Zbb CLZ, CTZ, CPOP,
@@ -688,7 +779,7 @@ _h_system:
     LD      R14, R8
     FBRA.NZ R14, ._csr
 
-    WAIT_RS1
+    WAIT_RS1 ._sy_chk, ._sy_stall
     READ_REG R5, R15
     LD      R14, R7
     FBRA.NZ R14, ._chk_ebreak
@@ -736,12 +827,14 @@ _h_system:
     LD      R5, R15             ; the immediate forms: zext(rs1 field)
     FBRA    ._csr_uop
 ._csr_reg:
-    WAIT_RS1
+    WAIT_RS1 ._cs_chk, ._cs_stall
     READ_REG R5, R15
 ._csr_uop:
-    FIELD   R8, 12, 3           ; funct3 again (WAIT_RS1 uses R8)
+    FIELD   R8, 12, 3           ; funct3 again (the check uses R8)
     AND     R8, 3
     LDI     R4, OP_MRET
     ADD     R4, R8              ; OP_CSRRW, OP_CSRRS, OP_CSRRC
     LD      R9, R7              ; operand B: the CSR address
     JUMP    _send_uop
+    STALL_STUB ._sy_stall, ._sy_chk
+    STALL_STUB ._cs_stall, ._cs_chk

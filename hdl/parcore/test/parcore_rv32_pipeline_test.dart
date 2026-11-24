@@ -117,7 +117,7 @@ Future<PipelineResult> runRohdPipeline({
     regs[r] = core1Tcm!.readWord(r * 4);
     out.writeln('R$r=0x${regs[r]!.toRadixString(16).padLeft(8, '0')}');
   }
-  for (var a = 0x90; a < 0xB0; a += 4) {
+  for (var a = 0xF00; a < 0xF20; a += 4) {
     out.writeln('IN_FLIGHT[0x${a.toRadixString(16)}]=0x${core1Tcm!.readWord(a).toRadixString(16)}');
   }
   return (regs: regs, cycles: maxCycles, stdout: out.toString());
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
                 top->rootp->ParcoreTop__DOT__core1_id__DOT__ePc,
                 top->rootp->ParcoreTop__DOT__core2_ex__DOT__ePc,
                 top->rootp->ParcoreTop__DOT__core3_mem__DOT__ePc);
-    for (int a = 0x90; a < 0xB0; a += 4) {
+    for (int a = 0xF00; a < 0xF20; a += 4) {
         std::printf("IN_FLIGHT[0x%04x]=0x%08x\n", a, word(c1_b0, c1_b1, a));
     }
     for (int r = 0; r < 32; r++) {
