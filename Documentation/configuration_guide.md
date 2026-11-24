@@ -98,6 +98,7 @@ Building the guest needs a RISC-V GCC toolchain (`riscv64-elf-gcc` or similar, a
 | `make parcore-image` | `firmware` and `parcore-guest`, then the boot image `build/parcore_ulx3s/parcore_image.bin` |
 | `make parcore-bit` | Generates the design with that image, then Yosys, nextpnr (`--router router2`) and `ecppack`, in `build/parcore_ulx3s`: `parcore_ulx3s.bit` |
 | `make parcore-timing` | The last build's Fmax and critical path |
+| `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator: cycles per RISC-V instruction and where each stage core's cycles go. Needs Verilator and the RISC-V GCC toolchain |
 | `make parcore-prog` | Loads the bitstream into the board (lost at power-off) |
 | `make parcore-flash` | Writes it to the board's configuration flash |
 

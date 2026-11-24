@@ -196,12 +196,14 @@ class ParticleAssembler {
       var line = origLine;
       _at = entry;
 
-      // Emit standalone label entries in listing output
+      // Emit standalone label entries in listing output, with their address
       while (true) {
         final (lbl, rest) = splitLabel(line);
         if (lbl == null) break;
         if (lbl.isNotEmpty) {
-          listingLines.add('                 $lbl:');
+          final addr = symbols[lbl] ?? pc;
+          listingLines.add(
+              '${addr.toRadixString(16).padLeft(8, '0').toUpperCase()}         $lbl:');
         }
         line = rest;
       }

@@ -212,9 +212,20 @@ The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, sho
 | `make parcore-image` | Builds the boot image, `build/parcore_ulx3s/parcore_image.bin`: the stage firmware and the guest |
 | `make parcore-bit` | Generates the ULX3S design with that image (`PARCORE_CLOCK_HZ`, default 25 MHz) and synthesizes, places and routes it: `build/parcore_ulx3s/parcore_ulx3s.bit` |
 | `make parcore-timing` | The last `parcore-bit`'s Fmax and critical path |
+| `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator and prints the cycles per RISC-V instruction, overall and per phase, and where each stage core's cycles go (see [Profiling](#profiling)) |
 | `make parcore-prog`, `make parcore-flash` | Load the bitstream into the ULX3S, or write it to its flash |
 
 On the board, `make ulx3s-term` opens the guest's console.
+
+## Profiling
+
+`make parcore-profile` (`bin/profile_parcore.dart`) runs a guest on `ParcoreTop` in Verilator, with the stage firmware from `build/parcore/riscv` and the guest at `0x500`, from reset until the guest stores `0xA5` to the LEDs. Counters added to each stage core record the cycles each instruction address spends in E. It reports:
+
+* The cycles per RISC-V instruction: the run's cycles over the instructions the RV32 reference model (`test/rv32_reference.dart`) executes for the same guest. A phase starts each time the guest stores a value from 1 to 15 to the LEDs, and each phase gets its own line.
+* For each core, the share of cycles running, waiting in a `FIFO.R`, and in bubbles (E empty after a taken branch, jump or redirect), and the routines taking the most cycles, by the labels in the firmware's `.lst`. A core polling a FIFO's status counts as running.
+* Whether the guest's `a0` matches the reference model's.
+
+The benchmark guest, `apps/riscv/bench.S`, has five phases: ALU work, memory copies, an insertion sort, recursive calls, and multiply and divide.
 
 ## Tests
 

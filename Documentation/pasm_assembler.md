@@ -20,7 +20,7 @@ build/tools/pasm [options] <source.asm> [<source.asm> ...]
   * `bin`: Raw little-endian machine code binary.
   * `hex`: One 16-bit hexadecimal word per line (for FPGA Block RAM initialization).
 
-A listing, with each line's address, bytes and source line number and a symbol table, is always written beside the output, with the same name and the extension `.lst`.
+A listing, with each line's address, bytes and source line number, each label with its address, and a symbol table, is always written beside the output, with the same name and the extension `.lst`.
 
 ---
 

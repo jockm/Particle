@@ -39,6 +39,8 @@ class Rv32UnsupportedError extends Error {
 }
 
 /// Runs [program] (little-endian 32-bit words) and returns the registers.
+/// [onStore], if given, sees every store: its address, value and the number
+/// of instructions executed so far (the store included).
 Rv32Result runRv32Reference(
   List<int> program, {
   int programBase = 0x500,
@@ -46,6 +48,7 @@ Rv32Result runRv32Reference(
   int dataImageBase = 0x100,
   int dataBytes = 4096,
   int maxSteps = 100000,
+  void Function(int addr, int value, int steps)? onStore,
 }) {
   const mask32 = 0xFFFFFFFF;
   final x = List<int>.filled(32, 0);
@@ -201,6 +204,7 @@ Rv32Result runRv32Reference(
         }
       case 0x23: // stores
         final addr = u32(a + immS);
+        onStore?.call(addr, b, steps);
         switch (funct3) {
           case 0:
             store(addr, 1, b);

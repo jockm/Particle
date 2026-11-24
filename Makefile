@@ -76,7 +76,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
-        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-timing parcore-prog parcore-flash
+        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-timing parcore-prog parcore-flash parcore-profile
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -122,6 +122,7 @@ help:
 	@echo "  make parcore-timing   - Show the last Parcore build's Fmax and critical path"
 	@echo "  make parcore-prog     - Load build/parcore_ulx3s/parcore_ulx3s.bit into the ULX3S"
 	@echo "  make parcore-flash    - Write build/parcore_ulx3s/parcore_ulx3s.bit to the ULX3S flash"
+	@echo "  make parcore-profile  - Profile Parcore running PARCORE_PROFILE_GUEST (apps/riscv/bench.S) in Verilator"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
@@ -296,6 +297,16 @@ parcore-prog:
 		echo "[FAIL] $(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit not found: run make parcore-bit first."; exit 1; \
 	fi
 	$(OPENFPGALOADER) -b ulx3s "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
+
+# Profile Parcore running a guest in Verilator: cycles per RISC-V instruction
+# (overall and per phase) and where each stage core's cycles go
+PARCORE_PROFILE_GUEST ?= apps/riscv/bench.S
+PARCORE_PROFILE_BIN   := $(BUILD_DIR)/riscv/$(basename $(notdir $(PARCORE_PROFILE_GUEST))).bin
+
+parcore-profile: setup firmware
+	@bash apps/riscv/build_riscv_guest.sh "$(PARCORE_PROFILE_GUEST)" "$(PARCORE_PROFILE_BIN)"
+	@cd $(PARCORE_DIR) && $(DART) run bin/profile_parcore.dart --guest ../../$(PARCORE_PROFILE_BIN)
+	@$(DOT_CLEAN_CMD)
 
 parcore-flash:
 	@if [ ! -f "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit" ]; then \
@@ -550,7 +561,7 @@ build: firmware apps
 firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS)
 	@$(DOT_CLEAN_CMD)
 
-$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm
+$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm $(PASM_BIN)
 	@mkdir -p $(dir $@)
 	@$(PBUILD) "$<" -o "$@"
 
