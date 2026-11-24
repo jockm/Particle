@@ -156,9 +156,9 @@ Both fetch the hardware's Dart dependencies first (`make setup`). `make test`
 and `make generate` cover Parcore as well.
 
 ## How LLMs Are Used in This Project.
-Agentic development is not done in this project, however it does make use of LLM's in a Spec -> Revise -> Generate -> Test loop.  Normally for specific features or goals.  Each step is reviewed by a human, as is the output.
+The project makes use of LLM's in a Spec -> Revise -> Generate -> Test loop.  Normally for specific features or goals.  Each step is reviewed by a human, as is the output.
 
-In addition human hands have revised code and documents directly and created original code.
+In addition human hands have extensively revised code and documents directly and created original code. 
 
 Decisions and the direction of development are always made by a human, all research and references are always checked.
 
