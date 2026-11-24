@@ -141,6 +141,10 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 ### Step 4: design the multi-core system for scale
 
 * Caches in front of the TCMs, or instead of them.
+* **Memory (358, for later):** each core keeps its firmware in a small local memory, and the guest's memory moves to SDRAM.
+  * Guest memory in SDRAM, behind an instruction cache in core 0 and a data cache in core 3, with one SDRAM controller shared through the network. FENCE.I becomes a cache invalidation, and the store mirror between cores 0 and 3 goes away. The particle package already has a cache subsystem and an SDRAM controller (`cache_subsystem_test.dart`, `sdram_controller_test.dart`), and MicroRISC4 has I/D caches with an SDRAM controller to compare with.
+  * Firmware stays local, loaded at boot by the conductor (from flash, or from a reserved block of SDRAM): the stage cores' hot loops must not wait on a shared controller. A cache that is filled at boot and then locked is the same thing.
+  * A Harvard split of each core's local memory (instruction memory on the fetch port, data memory on the data port, at different addresses) makes each memory smaller and single-ported. That matters most in an ASIC; the OpenROAD numbers (item 2) should decide it. It suits Parcore: core 0's guest image is already data to core 0, read with loads.
 * **A network on chip (339)** instead of dedicated FIFOs, so any core can message any other. Dedicated FIFOs need on the order of N² for all-to-all, with wires that lengthen as the chip grows.
   * A router per core, linked to its neighbours: a ring first, a 2D mesh with more cores. Every hop is registered, so no wire crosses the chip.
   * Packets: a header (destination core, destination channel, type: data or `MBOX`) and the data word.
@@ -179,11 +183,12 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 | 9 | Measure each Parcore stage's busy and waiting cycles, and dependency waits | Done: `make parcore-profile`. Baseline on `apps/riscv/bench.S`: 285 cycles per RISC-V instruction; core 1 (ID) is the bottleneck, running 77% of the time with 23% bubbles, while core 2 waits 64% and core 3 82% |
 | 10 | SARF, or a cheaper alternative (such as an EX-to-ID result FIFO), decided from 9's numbers | Not decided |
 | 11 | Smaller register file (shadow banks) | Not started |
-| 12 | Stage firmware rewritten with `JTBL`, `BEXTR` and `DIV` | In progress (337), one package per core; the core 1 to core 2 packet may change (350). Core 1 done: `bench.S` went from 285 to 163 cycles per RISC-V instruction. Core 2 done (operation numbers in control-word bits 31:24, one `JTBL`, hardware divide): 121 cycles. Core 2 now runs 20% of the time and core 1 about 80% with 17% bubbles: core 1 is the limit again. Core 1 second pass (353a: hot paths fall through, a 128-entry `JTBL`, a shorter retire): 111.5 cycles. Next (353): decoding moved to core 0, with static branch prediction there |
+| 12 | Stage firmware rewritten with `JTBL`, `BEXTR` and `DIV` | In progress (337), one package per core; the core 1 to core 2 packet may change (350). Core 1 done: `bench.S` went from 285 to 163 cycles per RISC-V instruction. Core 2 done (operation numbers in control-word bits 31:24, one `JTBL`, hardware divide): 121 cycles. Core 2 now runs 20% of the time and core 1 about 80% with 17% bubbles: core 1 is the limit again. Core 1 second pass (353a: hot paths fall through, a 128-entry `JTBL`, a shorter retire): 111.5 cycles. Decoding moved to core 0, with static branch prediction there (353 b + c; core 0's TCM 16 KiB, 358): 87.8 cycles, 3.2 times faster than the 285 at the start. Core 1 now waits about 15% of its time for results, so the result latency through cores 2 and 3 is the next limit (item 10); `JALR` returns, still redirected, make the calls phase the slowest (98 cycles), which a return-address stack would help |
 | 13 | Particle ISA additions: 2-word branches, compare-and-branch, immediate `BEXTR`, `JTBL` strides, `WAIT`/`HALT` | Agreed (337): after 12 |
 | 14 | `MBOX` redesign: R14 and `RETI`, masking, no lost messages, any target, through the interconnect | Agreed (338): with 13 |
 | 15 | Network on chip replacing the dedicated FIFOs | Agreed (339): design note first |
 | 16 | Conductor: watchdog over the cores; console on a second UART for loading firmware | Not started |
 | 17 | Action: multi-line `asm` blocks; then the conductor in Action | Not started |
+| 18 | Memory: guest memory in SDRAM with caches in cores 0 and 3; firmware in small local (perhaps Harvard) memories (358) | Not started; core 0's TCM grew to 16 KiB for now |
 
 Done so far on this road: the 4-stage Particle pipeline (17 to 40 MHz on the ECP5), the single-product multiplier, conditional branches moved to E, the FIFOs moved into block RAM, Parcore running end to end on the ULX3S, and `RBASE` removed.

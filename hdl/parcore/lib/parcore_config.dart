@@ -21,7 +21,9 @@ class ParcoreConfig {
   /// Core 0: Instruction Fetch Stage (IF)
   static const CpuConfig core0If = CpuConfig(
     coreId: 0,
-    tcmSizeBytes: 8 * 1024, // 8 KB local TCM
+    // 16 KB: its vectors and handlers at 0x100-0x4FF, the guest image at
+    // 0x500-0x1FFF (as in core 3), and its fetch and decode code from 0x2000
+    tcmSizeBytes: 16 * 1024,
     fifoChannels: 2,
     fifoDepth: 256,
     enableMultiplier: false,

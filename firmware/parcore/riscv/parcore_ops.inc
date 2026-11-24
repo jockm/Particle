@@ -3,10 +3,18 @@
 ; File: firmware/parcore/riscv/parcore_ops.inc
 ; ==============================================================================
 ;
-; Core 1 puts one of these in bits 31:24 of every packet's control word, and
-; core 2 dispatches on it with one JTBL, so the order here is the order of
-; core 2's jump table. The rest of the control word: bits 19:16 the memory
-; operation (OP_MEM only), 15:8 Rd, bit 1 the epoch, bit 0 valid.
+; Core 0 decodes each instruction into a control word, and core 2 dispatches
+; on the operation number in its bits 31:24 with one JTBL, so the order here
+; is the order of core 2's jump table. The control word:
+;   31:24  the operation number (OP_*)
+;   23:20  core 1's class (CLASS_*): which registers it reads and what it
+;          sends; cores 2 and 3 ignore it
+;   19:16  the memory operation (OP_MEM only)
+;   15:8   Rd (0: none)
+;   3      predicted taken (branches): core 0 fetched the target
+;   2      cancel (core 2 to core 3 only)
+;   1      the epoch
+;   0      valid
 ;
 ; Some groups are numbered so core 1 can add a field to a base:
 ;   OP_ADD + funct3     the RV32I register and immediate ALU operations
@@ -70,3 +78,25 @@
 .define OP_CSRRC    54
 .define OP_ILLEGAL  55
 .define OP_COUNT    56
+
+; Core 0 sends core 1 five words: [control word, w1, w2, B, W3]. Core 1 sends
+; core 2 four: [control word, operand A, operand B, word 3]. By class:
+;   CLASS_RS1_IMM  w1 rs1, w2 rd;  A = x(rs1), B = B, word 3 = W3 (the PC)
+;   CLASS_RS1_RS2  w1 rs1, w2 rd, B rs2;  A = x(rs1), B = x(rs2), word 3 = W3
+;   CLASS_STORE    w1 rs1, w2 rs2;  A = x(rs1), B = B (the offset),
+;                  word 3 = x(rs2) (the data)
+;   CLASS_BRANCH   w1 rs1, w2 rs2;  A = x(rs1), B = x(rs2), word 3 = W3 (the
+;                  address to go to if the prediction is wrong)
+;   CLASS_IMM      w2 rd;  A = 0, B = B, word 3 = W3 (the PC)
+;   CLASS_ZIMM     w1 the immediate, w2 rd;  A = w1, B = B, word 3 = W3
+; Core 1 counts rd (w2) as having a write in flight, for the classes with
+; one. A word of all ones (CLASS_MARKER in bits 23:20) is a marker: core 0
+; sends five after every redirect, so core 1 can tell where packets start
+; again after a flush (W3 is never all ones).
+.define CLASS_RS1_IMM  0
+.define CLASS_RS1_RS2  1
+.define CLASS_STORE    2
+.define CLASS_BRANCH   3
+.define CLASS_IMM      4
+.define CLASS_ZIMM     5
+.define CLASS_MARKER   15

@@ -9,14 +9,16 @@
 ; cancel if it has a destination), and otherwise dispatches on the operation
 ; number in control-word bits 31:24 (parcore_ops.inc) with one JTBL. ALU
 ; results, loads, stores and links go on to core 3 as [control word, result,
-; address or target, word 3]; a taken branch or jump redirects core 0.
+; address or target, word 3]. Core 0 predicted every branch and followed
+; every JAL: core 2 redirects it when a branch went the other way, and for
+; JALR, MRET, traps and FENCE.I.
 ;
 ; Registers kept for the whole run:
 ;   R0   0, and FIFO channel 0 (idToEx, from core 1)
 ;   R1   the epoch, in bit 1 (0 or 2): flips on every redirect
 ;   R2   1: FIFO channel 1 (exToMem, to core 3)
 ; For each packet: R10 the control word, R11 operand A, R12 operand B, R13
-; word 3 (the PC, or a store's data, or a branch's target); the result goes
+; word 3 (the PC, or a store's data, or a branch's other address); the result goes
 ; in R15 and the address or target in R14.
 ; ==============================================================================
 .include "lib/vectors.inc"
@@ -366,56 +368,67 @@ _op_ror:
     JUMP    _forward_to_mem
 
 ; ------------------------------------------------------------------------------
-; Branches: R13 = the target. Not taken: nothing to send.
+; Branches. Core 0 guessed the direction (control-word bit 3: guessed taken)
+; and fetched down that path; R13 is the address to go to if the guess is
+; wrong. R14 = 1 if the branch is not taken (BEQ, BGE, BGEU) or taken (BNE,
+; BLT, BLTU); XOR with the guess tells whether to redirect.
 ; ------------------------------------------------------------------------------
 _op_beq:
     LD      R14, R11
     SUB     R14, R12
-    FBRA.Z  R14, _b_taken
+    NEZ     R14                 ; 1: not taken
+    FBRA    ._b_not_taken_in_r14
+_op_bge:
+    LD      R14, R11
+    SSLT    R14, R12            ; 1: not taken
+    FBRA    ._b_not_taken_in_r14
+_op_bgeu:
+    LD      R14, R11
+    SLT     R14, R12            ; 1: not taken
+._b_not_taken_in_r14:
+    ; wrong if not taken == guessed taken
+    LD      R4, R10
+    BGET    R4, 3
+    XOR     R14, R4
+    FBRA.Z  R14, _b_wrong
     JUMP    _ex_main_loop
 _op_bne:
     LD      R14, R11
     SUB     R14, R12
-    FBRA.NZ R14, _b_taken
-    JUMP    _ex_main_loop
+    NEZ     R14                 ; 1: taken
+    FBRA    ._b_taken_in_r14
 _op_blt:
     LD      R14, R11
-    SSLT    R14, R12
-    FBRA.NZ R14, _b_taken
-    JUMP    _ex_main_loop
-_op_bge:
-    LD      R14, R11
-    SSLT    R14, R12
-    FBRA.Z  R14, _b_taken
-    JUMP    _ex_main_loop
+    SSLT    R14, R12            ; 1: taken
+    FBRA    ._b_taken_in_r14
 _op_bltu:
     LD      R14, R11
-    SLT     R14, R12
-    FBRA.NZ R14, _b_taken
+    SLT     R14, R12            ; 1: taken
+._b_taken_in_r14:
+    ; wrong if taken != guessed taken
+    LD      R4, R10
+    BGET    R4, 3
+    XOR     R14, R4
+    FBRA.NZ R14, _b_wrong
     JUMP    _ex_main_loop
-_op_bgeu:
-    LD      R14, R11
-    SLT     R14, R12
-    FBRA.Z  R14, _b_taken
-    JUMP    _ex_main_loop
-_b_taken:
+_b_wrong:
     LD      R14, R13
     SEND_REDIRECT
     JUMP    _ex_main_loop
 
 ; ------------------------------------------------------------------------------
-; JAL (R12 the offset, R13 the PC) and JALR (R11 + R12): R15 = the link,
-; R14 = the target. Only a link to a register goes to core 3.
+; JAL: core 0 followed it, and sends it only with a link: R15 = PC + 4 to rd.
+; JALR (R11 + R12): R15 = the link, redirect to the target; the link goes to
+; core 3 only for a destination register.
 ; ------------------------------------------------------------------------------
 _op_jal:
-    LD      R14, R13
-    ADD     R14, R12
-    FBRA    ._jump
+    LD      R15, R13
+    ADD     R15, 4
+    JUMP    _forward_to_mem
 _op_jalr:
     LD      R14, R11
     ADD     R14, R12
     BCLR    R14, 0
-._jump:
     LD      R15, R13
     ADD     R15, 4              ; the link: PC + 4
     SEND_REDIRECT

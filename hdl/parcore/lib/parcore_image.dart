@@ -90,9 +90,39 @@ Uint8List buildParcoreImage(List<ParcoreImageSection> sections) {
   return image;
 }
 
-/// The usual image: each stage core's firmware at 0x100, and the guest
+/// The guest area in cores 0 and 3: 0x500 up to 0x2000.
+const parcoreGuestStart = 0x500;
+const parcoreGuestEnd = 0x2000;
+
+/// The sections for a firmware binary assembled from 0x100 into the cores in
+/// [coreMask]. Core 0's firmware has code on both sides of the guest area:
+/// below 0x500 and from 0x2000. Its bytes in the guest area must be zero
+/// (the assembler fills the gap with zeros); they become two sections, so
+/// the gap isn't in the image and the guest isn't overwritten.
+List<ParcoreImageSection> parcoreFirmwareSections(
+    int coreMask, List<int> binary, String name) {
+  const guestFrom = parcoreGuestStart - 0x100;
+  const guestTo = parcoreGuestEnd - 0x100;
+  if (binary.length <= guestFrom) {
+    return [ParcoreImageSection(coreMask, 0x100, binary)];
+  }
+  for (var i = guestFrom; i < guestTo && i < binary.length; i++) {
+    if (binary[i] != 0) {
+      throw ArgumentError('$name\'s firmware has code at '
+          '0x${(0x100 + i).toRadixString(16)}, in the guest area '
+          '(0x500-0x1FFF)');
+    }
+  }
+  return [
+    ParcoreImageSection(coreMask, 0x100, binary.sublist(0, guestFrom)),
+    if (binary.length > guestTo)
+      ParcoreImageSection(coreMask, parcoreGuestEnd, binary.sublist(guestTo)),
+  ];
+}
+
+/// The usual image: each stage core's firmware from 0x100, and the guest
 /// program (if any) at 0x500 in core 0 (which fetches it) and core 3 (which
-/// loads and stores it).
+/// loads and stores it). Core 0's firmware may continue from 0x2000.
 Uint8List buildParcoreStageImage({
   required List<int> core0,
   required List<int> core1,
@@ -100,17 +130,16 @@ Uint8List buildParcoreStageImage({
   required List<int> core3,
   List<int>? guest,
 }) {
-  for (final (name, kernel) in [('core 0', core0), ('core 3', core3)]) {
-    if (guest != null && 0x100 + kernel.length > 0x500) {
-      throw ArgumentError('$name\'s firmware (${kernel.length} bytes from '
-          '0x100) runs into the guest program at 0x500');
-    }
+  if (guest != null && 0x100 + core3.length > parcoreGuestStart) {
+    throw ArgumentError('core 3\'s firmware (${core3.length} bytes from '
+        '0x100) runs into the guest program at 0x500');
   }
   return buildParcoreImage([
-    ParcoreImageSection(1 << 0, 0x100, core0),
+    ...parcoreFirmwareSections(1 << 0, core0, 'core 0'),
     ParcoreImageSection(1 << 1, 0x100, core1),
     ParcoreImageSection(1 << 2, 0x100, core2),
     ParcoreImageSection(1 << 3, 0x100, core3),
-    if (guest != null) ParcoreImageSection((1 << 0) | (1 << 3), 0x500, guest),
+    if (guest != null)
+      ParcoreImageSection((1 << 0) | (1 << 3), parcoreGuestStart, guest),
   ]);
 }

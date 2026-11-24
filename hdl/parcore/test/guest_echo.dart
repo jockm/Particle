@@ -37,11 +37,10 @@ const guestHelloProgram = <int>[
 /// starting at 0x100. Core 0 and core 3 both hold the guest program.
 Uint8List kernelWithGuest(List<int> kernel, List<int> guestWords) {
   const guestOffset = 0x500 - 0x100;
-  if (kernel.length > guestOffset) {
-    throw StateError('the kernel (${kernel.length} bytes from 0x100) runs '
-        'into the guest program at 0x500');
-  }
-  final image = Uint8List(guestOffset + guestWords.length * 4);
+  // Core 0's firmware continues from 0x2000, past the guest area, whose
+  // bytes in it are zero: the guest goes over them
+  final end = guestOffset + guestWords.length * 4;
+  final image = Uint8List(kernel.length > end ? kernel.length : end);
   image.setRange(0, kernel.length, kernel);
   for (var i = 0; i < guestWords.length; i++) {
     final w = guestWords[i];
