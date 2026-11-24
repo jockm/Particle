@@ -27,6 +27,10 @@ repository root unless a step says otherwise.
   It is not needed for the Makefile targets, which generate SystemVerilog but
   do not synthesize or place-and-route it. See the
   [configuration guide](Documentation/configuration_guide.md).
+- **Docker** (optional, required for the OpenROAD ASIC RTL-to-GDS flow,
+  `make asic-flow`): runs the official `openroad/orfs` container image
+  identically across Windows, macOS, and Linux with no native OpenROAD compile
+  needed.
 
 ## Installing dependencies
 
@@ -105,6 +109,7 @@ above put them:
 | Node.js and npm | `%LOCALAPPDATA%\Programs\nodejs`, the WinGet Node.js package, then `C:\Program Files\nodejs` (required) |
 | OSS CAD Suite | `%USERPROFILE%\oss-cad-suite\bin` (used if present) |
 | RISC-V toolchain | `%USERPROFILE%\xpack-riscv-none-elf-gcc\bin` (used if present) |
+| Python / Git / Docker | Standard Windows `PATH` |
 
 If a required tool is missing, `pdev.cmd` says which one and how to install
 it. Python, VS Code's `code` command, and Git itself come from your normal
@@ -182,6 +187,87 @@ clang --version      # only for the LLVM compiler
 On Linux, `dart` may need a new terminal before it is found. On macOS, if `code` is not found, open VS Code's Command Palette and run
 **Shell Command: Install 'code' command in PATH**. The Makefile also checks
 the standard macOS VS Code application location.
+
+## Installing Docker for the ASIC flow (OpenROAD-flow-scripts)
+
+The OpenROAD ASIC RTL-to-GDS flow (`make asic-flow`) runs inside the official
+`openroad/orfs` Docker image. That image already bundles OpenROAD, Yosys,
+OpenSTA, KLayout, and public reference PDKs (`nangate45`, `asap7`, `sky130hd`,
+`ihp-sg13g2`), so **all projects on your machine share one image** and you do
+not need to clone or compile OpenROAD natively.
+
+### Windows (Docker Desktop + WSL2)
+
+1. Enable **WSL2** if not already enabled (run PowerShell as Administrator,
+   then reboot if prompted):
+
+   ```powershell
+   wsl --install --no-distribution
+   ```
+
+2. Install **Docker Desktop** via `winget`:
+
+   ```powershell
+   winget install -e --id Docker.DockerDesktop
+   ```
+
+3. Launch **Docker Desktop** from the Start menu, accept the prompts, and wait
+   until the whale icon in the system tray shows **Engine running** (ensure
+   **Settings → General → Use the WSL 2 based engine** is checked).
+4. Open a fresh `mdev.cmd` shell and verify Docker works, then pull the shared
+   OpenROAD-flow-scripts image once (~2–3 GB download, reused by all projects):
+
+   ```sh
+   docker --version
+   docker run --rm hello-world
+   docker pull openroad/orfs:latest
+   ```
+
+### macOS
+
+Choose either **Docker Desktop** (GUI) or **Colima** (lightweight open-source
+CLI-only runtime via Homebrew):
+
+* **Option A — Docker Desktop:**
+  ```sh
+  brew install --cask docker
+  # Launch Docker.app once from Applications, then:
+  docker pull openroad/orfs:latest
+  ```
+* **Option B — Lightweight CLI (`colima` + `docker`):**
+  ```sh
+  brew install colima docker
+  colima start --cpu 4 --memory 8
+  docker pull openroad/orfs:latest
+  ```
+
+### Linux (Ubuntu / Debian)
+
+Install Docker Engine following the official Debian/Ubuntu packages and add
+your user to the `docker` group:
+
+```sh
+sudo apt update
+sudo apt install -y docker.io
+sudo usermod -aG docker "$USER"
+# Log out and back in (or run `newgrp docker`), then:
+docker pull openroad/orfs:latest
+```
+
+### Checking all installed tools
+
+From your shell (on Windows, inside `mdev.cmd`):
+
+```sh
+git --version
+python3 --version        # or `python --version` on Windows
+dart --version
+make --version
+yosys -V                 # optional: OSS CAD Suite
+nextpnr-ecp5 --version   # optional: OSS CAD Suite
+docker --version         # optional: ASIC ORFS flow
+```
+
 
 ## Get the source
 
