@@ -8,9 +8,9 @@
 ; waits while a source register has a write in flight, and sends core 2 a
 ; 4-word packet: [control word, operand A, operand B, word 3].
 ;
-; Control word: [31:24] uop (ALU, CSR, SYSTEM, LUI/AUIPC/FENCE.I), [23:20]
-; branch/jump uop, [19:16] memory op, [15:8] Rd, bit 1 the epoch (PC bit 0
-; as core 0 sent it), bit 0 valid.
+; Control word: [31:24] core 2's operation number (parcore_ops.inc), [19:16]
+; memory op (OP_MEM), [15:8] Rd, bit 1 the epoch (PC bit 0 as core 0 sent
+; it), bit 0 valid.
 ;
 ; The hot path is laid out to fall through: one JTBL on opcode[6:2] picks
 ; the handler, and the common handlers share the tail _send_ctrl.
@@ -25,6 +25,7 @@
 ;   R13  rd field (inst[11:7]), R15 rs1, R7 rs2 (handlers that read it)
 ; ==============================================================================
 .include "lib/vectors.inc"
+.include "parcore_ops.inc"
 
 ; Zero page
 .define REG_BASE          0x0000  ; x0..x31, a word each (0x00..0x7F); x0 stays 0
@@ -211,10 +212,10 @@ _t_system:
 
 _h_illegal:
     ; An instruction core 1 can't decode (an unknown opcode or encoding):
-    ; send core 2 an illegal-instruction item (uop 0x46), which traps to
+    ; send core 2 an illegal-instruction item (OP_ILLEGAL), which traps to
     ; mtvec with mcause 2 and mtval = the instruction. No destination
     ; register. (A zero word never gets here: core 0 doesn't send it.)
-    LDI     R4, 0x46
+    LDI     R4, OP_ILLEGAL
     SHIFTL  R4, 12
     SHIFTL  R4, 12
     OR      R4, R12
@@ -225,16 +226,16 @@ _h_illegal:
     JUMP    _id_main_loop
 
 ; ------------------------------------------------------------------------------
-; LUI (uop 0x30): operand A 0; AUIPC (uop 0x31): operand A the PC. Operand
+; LUI: operand A 0; AUIPC: operand A the PC. Operand
 ; B the U-immediate.
 ; ------------------------------------------------------------------------------
 _h_lui:
     LD      R5, 0
-    LDI     R4, 0x30
+    LDI     R4, OP_LUI
     FBRA    ._u_imm
 _h_auipc:
     LD      R5, R10
-    LDI     R4, 0x31
+    LDI     R4, OP_AUIPC
 ._u_imm:
     LD      R9, R11
     SHIFTR  R9, 12
@@ -243,7 +244,7 @@ _h_auipc:
 
 ; ------------------------------------------------------------------------------
 ; OP-IMM: ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI, and the Zbb
-; immediate and unary forms. uop = funct3, SRAI 0x15, Zbb their own.
+; immediate and unary forms. OP_ADD + funct3, SRAI OP_SRA, Zbb their own.
 ; ------------------------------------------------------------------------------
 _h_op_imm:
     WAIT_RS1
@@ -257,7 +258,7 @@ _h_op_imm:
     SUB     R14, 1
     FBRA.Z  R14, _t_op_imm_shift ; funct3 1 or 5: shifts and Zbb
 _send_uop:
-    ; R4 = uop: to [31:24]
+    ; R4 = the operation number: to [31:24]
     SHIFTL  R4, 12
     SHIFTL  R4, 12
 _send_ctrl:
@@ -281,7 +282,7 @@ _send_ctrl:
     JUMP    _id_main_loop
 
 ; ------------------------------------------------------------------------------
-; LOAD: LB, LH, LW, LBU, LHU. mem_op 1 LB, 2 LH, 3 LW, 4 LBU, 5 LHU.
+; LOAD: LB, LH, LW, LBU, LHU. OP_MEM; mem_op 1 LB, 2 LH, 3 LW, 4 LBU, 5 LHU.
 ; ------------------------------------------------------------------------------
 _h_load:
     WAIT_RS1
@@ -297,13 +298,15 @@ _h_load:
     SUB     R8, 3
     SSLT    R8, 0               ; 1 if funct3 < 3
     ADD     R4, R8
+    LDI     R8, OP_MEM * 256
+    OR      R4, R8
     SHIFTL  R4, 8
-    SHIFTL  R4, 8               ; mem_op << 16
+    SHIFTL  R4, 8               ; OP_MEM << 24 | mem_op << 16
     BBRA    _send_ctrl
 
 ; ------------------------------------------------------------------------------
-; OP: register-register ALU, M and Zbb. uop = funct3, + 0x20 for M, + 0x10
-; for SUB and SRA, Zbb their own.
+; OP: register-register ALU, M and Zbb. OP_ADD + funct3, OP_MUL + funct3
+; for M, OP_SUB and OP_SRA, Zbb their own.
 ; ------------------------------------------------------------------------------
 _h_op:
     FIELD   R7, 20, 5           ; rs2
@@ -317,8 +320,7 @@ _h_op:
     SUB     R8, 1
     LD      R14, R8
     FBRA.NZ R14, _t_op_funct7
-    LDI     R8, 0x20            ; M: MUL ... REMU
-    OR      R4, R8
+    ADD     R4, OP_MUL          ; M: MUL ... REMU
     BBRA    _send_uop
 
 _t_op_imm_shift:
@@ -327,7 +329,7 @@ _t_op_funct7:
     JUMP    _op_funct7
 
 ; ------------------------------------------------------------------------------
-; STORE: SB, SH, SW. mem_op = funct3 + 8; word 3 the store data.
+; STORE: SB, SH, SW. OP_MEM; mem_op = funct3 + 8; word 3 the store data.
 ; ------------------------------------------------------------------------------
 _h_store:
     FIELD   R7, 20, 5           ; rs2
@@ -345,8 +347,10 @@ _h_store:
     SHIFTL  R9, 5
     OR      R9, R13             ; inst[11:7]
     ADD     R4, 8
+    LDI     R14, OP_MEM * 256
+    OR      R4, R14
     SHIFTL  R4, 8
-    SHIFTL  R4, 8               ; mem_op << 16
+    SHIFTL  R4, 8               ; OP_MEM << 24 | mem_op << 16
     OR      R4, R12
     FIFO.W  R4, R2              ; control word (Rd 0)
     FIFO.W  R5, R2              ; base
@@ -355,8 +359,8 @@ _h_store:
     JUMP    _id_main_loop
 
 ; ------------------------------------------------------------------------------
-; BRANCH: BEQ, BNE, BLT, BGE, BLTU, BGEU. uop = funct3 + 1 in [23:20]; word 3
-; the target PC.
+; BRANCH: BEQ, BNE, BLT, BGE, BLTU, BGEU. OP_BEQ + funct3; word 3 the
+; target PC.
 ; ------------------------------------------------------------------------------
 _h_branch:
     FIELD   R7, 20, 5           ; rs2
@@ -384,9 +388,10 @@ _h_branch:
     SHIFTL  R9, 1
     OR      R4, R9              ; inst[11:8] at bits 4:1
     ADD     R4, R10             ; target
-    ADD     R8, 1
-    SHIFTL  R8, 10
-    SHIFTL  R8, 10              ; uop << 20
+    LDI     R14, OP_BEQ
+    ADD     R8, R14
+    SHIFTL  R8, 12
+    SHIFTL  R8, 12              ; OP_BEQ + funct3, << 24
     OR      R8, R12
     FIFO.W  R8, R2              ; control word
     FIFO.W  R5, R2              ; x(rs1)
@@ -395,7 +400,7 @@ _h_branch:
     JUMP    _id_main_loop
 
 ; ------------------------------------------------------------------------------
-; JALR: uop 0xA in [23:20]; words: x(rs1), the I-immediate, the PC
+; JALR: OP_JALR; words: x(rs1), the I-immediate, the PC
 ; ------------------------------------------------------------------------------
 _h_jalr:
     FIELD   R8, 12, 3           ; funct3: 0 only
@@ -406,16 +411,14 @@ _h_jalr:
     LD      R9, R11
     ASHIFTR R9, 15
     ASHIFTR R9, 5
-    LD      R4, 10
-    SHIFTL  R4, 10
-    SHIFTL  R4, 10              ; uop << 20
-    JUMP    _send_ctrl
+    LDI     R4, OP_JALR
+    JUMP    _send_uop
 
 _t_illegal:
     JUMP    _h_illegal
 
 ; ------------------------------------------------------------------------------
-; JAL: uop 9 in [23:20]; words: the PC, the offset, the PC
+; JAL: OP_JAL; words: the PC, the offset, the PC
 ; ------------------------------------------------------------------------------
 _h_jal:
     ; J-immediate: {inst[31], inst[19:12], inst[20], inst[30:21], 0}
@@ -443,10 +446,8 @@ _h_jal:
     SHIFTL  R4, 1
     OR      R9, R4              ; inst[30:21] at bits 10:1
     LD      R5, R10             ; word 1: the PC
-    LD      R4, 9
-    SHIFTL  R4, 10
-    SHIFTL  R4, 10              ; uop << 20
-    JUMP    _send_ctrl
+    LDI     R4, OP_JAL
+    JUMP    _send_uop
 
 ; ------------------------------------------------------------------------------
 ; A word in the instruction slot that isn't an RV32 instruction (bits 1:0
@@ -487,7 +488,7 @@ _op_imm_shift:
     LDI     R14, 0x20
     SUB     R14, R8
     FBRA.NZ R14, ._imm_f5_zbb
-    LDI     R4, 0x15            ; SRAI
+    LDI     R4, OP_SRA          ; SRAI
     JUMP    _send_uop
 ._imm_f5_zbb:
     LD      R7, R11
@@ -496,19 +497,19 @@ _op_imm_shift:
     LDI     R14, 0x287
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f5_rev8
-    LDI     R4, 0x5F            ; ORC.B
+    LDI     R4, OP_ORC_B        ; ORC.B
     JUMP    _send_uop
 ._imm_f5_rev8:
     LDI     R14, 0x698
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f5_rori
-    LDI     R4, 0x70            ; REV8
+    LDI     R4, OP_REV8         ; REV8
     JUMP    _send_uop
 ._imm_f5_rori:
     LDI     R14, 0x30
     SUB     R14, R8
     FBRA.NZ R14, ._imm_illegal
-    LDI     R4, 0x5E            ; RORI
+    LDI     R4, OP_ROR          ; RORI
     JUMP    _send_uop
 ._imm_f1:
     ; funct3 1, funct7 not 0: Zbb unary, by imm12
@@ -518,31 +519,31 @@ _op_imm_shift:
     LDI     R14, 0x600
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f1_ctz
-    LDI     R4, 0x53            ; CLZ
+    LDI     R4, OP_CLZ          ; CLZ
     JUMP    _send_uop
 ._imm_f1_ctz:
     LDI     R14, 0x601
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f1_cpop
-    LDI     R4, 0x54            ; CTZ
+    LDI     R4, OP_CTZ          ; CTZ
     JUMP    _send_uop
 ._imm_f1_cpop:
     LDI     R14, 0x602
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f1_sextb
-    LDI     R4, 0x55            ; CPOP
+    LDI     R4, OP_CPOP         ; CPOP
     JUMP    _send_uop
 ._imm_f1_sextb:
     LDI     R14, 0x604
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f1_sexth
-    LDI     R4, 0x5A            ; SEXT.B
+    LDI     R4, OP_SEXT_B       ; SEXT.B
     JUMP    _send_uop
 ._imm_f1_sexth:
     LDI     R14, 0x605
     SUB     R14, R7
     FBRA.NZ R14, ._imm_illegal
-    LDI     R4, 0x5B            ; SEXT.H
+    LDI     R4, OP_SEXT_H       ; SEXT.H
     JUMP    _send_uop
 ._imm_illegal:
     JUMP    _h_illegal
@@ -559,29 +560,30 @@ _op_funct7:
     LD      R14, R4
     SUB     R14, 7
     FBRA.NZ R14, ._reg_20_orn
-    LDI     R4, 0x50            ; ANDN
+    LDI     R4, OP_ANDN         ; ANDN
     JUMP    _send_uop
 ._reg_20_orn:
     LD      R14, R4
     SUB     R14, 6
     FBRA.NZ R14, ._reg_20_xnor
-    LDI     R4, 0x51            ; ORN
+    LDI     R4, OP_ORN          ; ORN
     JUMP    _send_uop
 ._reg_20_xnor:
     LD      R14, R4
     SUB     R14, 4
     FBRA.NZ R14, ._reg_20_sub_sra
-    LDI     R4, 0x52            ; XNOR
+    LDI     R4, OP_XNOR         ; XNOR
     JUMP    _send_uop
 ._reg_20_sub_sra:
     ; SUB (funct3 0) or SRA (funct3 5); funct3 1-3 are illegal
     LD      R14, R4
-    FBRA.Z  R14, ._reg_20_ok
+    FBRA.NZ R14, ._reg_20_sra
+    LD      R4, OP_SUB
+    JUMP    _send_uop
+._reg_20_sra:
     SUB     R14, 5
     FBRA.NZ R14, ._reg_illegal
-._reg_20_ok:
-    LDI     R14, 0x10           ; SUB / SRA
-    OR      R4, R14
+    LD      R4, OP_SRA
     JUMP    _send_uop
 
 ._reg_chk_30:
@@ -592,13 +594,13 @@ _op_funct7:
     LD      R14, R4
     SUB     R14, 1
     FBRA.NZ R14, ._reg_30_ror
-    LDI     R4, 0x5D            ; ROL
+    LDI     R4, OP_ROL          ; ROL
     JUMP    _send_uop
 ._reg_30_ror:
     LD      R14, R4
     SUB     R14, 5
     FBRA.NZ R14, ._reg_illegal
-    LDI     R4, 0x5E            ; ROR
+    LDI     R4, OP_ROR          ; ROR
     JUMP    _send_uop
 
 ._reg_chk_05:
@@ -609,25 +611,25 @@ _op_funct7:
     LD      R14, R4
     SUB     R14, 4
     FBRA.NZ R14, ._reg_05_minu
-    LDI     R4, 0x58            ; MIN
+    LDI     R4, OP_MIN          ; MIN
     JUMP    _send_uop
 ._reg_05_minu:
     LD      R14, R4
     SUB     R14, 5
     FBRA.NZ R14, ._reg_05_max
-    LDI     R4, 0x59            ; MINU
+    LDI     R4, OP_MINU         ; MINU
     JUMP    _send_uop
 ._reg_05_max:
     LD      R14, R4
     SUB     R14, 6
     FBRA.NZ R14, ._reg_05_maxu
-    LDI     R4, 0x56            ; MAX
+    LDI     R4, OP_MAX          ; MAX
     JUMP    _send_uop
 ._reg_05_maxu:
     LD      R14, R4
     SUB     R14, 7
     FBRA.NZ R14, ._reg_illegal
-    LDI     R4, 0x57            ; MAXU
+    LDI     R4, OP_MAXU         ; MAXU
     JUMP    _send_uop
 
 ._reg_chk_04:
@@ -640,14 +642,14 @@ _op_funct7:
     FBRA.NZ R14, ._reg_illegal
     LD      R14, R7
     FBRA.NZ R14, ._reg_illegal
-    LDI     R4, 0x5C            ; ZEXT.H
+    LDI     R4, OP_ZEXT_H       ; ZEXT.H
     JUMP    _send_uop
 ._reg_illegal:
     JUMP    _h_illegal
 
 ; ------------------------------------------------------------------------------
 ; MISC-MEM: funct3 0 FENCE (nothing to do: one core does every load and
-; store, in order), 1 FENCE.I (uop 0x32; words: the PC, 0, the PC); 2-7 are
+; store, in order), 1 FENCE.I (OP_FENCE_I; words: the PC, 0, the PC); 2-7 are
 ; reserved (Zicbom/Zicboz cache-block operations use 2) and trap as illegal
 ; ------------------------------------------------------------------------------
 _h_misc_mem:
@@ -659,7 +661,7 @@ _h_misc_mem:
     SUB     R4, 1
     LD      R14, R4
     FBRA.NZ R14, ._fence_illegal
-    LDI     R4, 0x32            ; FENCE.I
+    LDI     R4, OP_FENCE_I      ; FENCE.I
     SHIFTL  R4, 12
     SHIFTL  R4, 12
     OR      R4, R12
@@ -672,9 +674,9 @@ _h_misc_mem:
     JUMP    _h_illegal
 
 ; ------------------------------------------------------------------------------
-; SYSTEM: funct3 0 ECALL (uop 0x40), EBREAK (0x41), MRET (0x42), WFI (does
-; nothing: there are no interrupts to wait for); words: x(rs1), funct12, the
-; PC. funct3 1-3, 5-7: CSRRW/S/C (uop 0x43-0x45) and their immediate forms;
+; SYSTEM: funct3 0 ECALL, EBREAK, MRET, WFI (does nothing: there are no
+; interrupts to wait for); words: x(rs1), funct12, the PC. funct3 1-3, 5-7:
+; CSRRW/S/C (OP_MRET + funct3 & 3) and their immediate forms;
 ; words: x(rs1) or the 5-bit immediate, the CSR address, the PC. funct3 4 is
 ; reserved (the hypervisor extension's HLV/HSV use it) and traps.
 ; ------------------------------------------------------------------------------
@@ -690,19 +692,19 @@ _h_system:
     READ_REG R5, R15
     LD      R14, R7
     FBRA.NZ R14, ._chk_ebreak
-    LDI     R4, 0x40            ; ECALL
+    LDI     R4, OP_ECALL        ; ECALL
     FBRA    ._send_system
 ._chk_ebreak:
     LD      R14, R7
     SUB     R14, 1
     FBRA.NZ R14, ._chk_mret
-    LDI     R4, 0x41            ; EBREAK
+    LDI     R4, OP_EBREAK       ; EBREAK
     FBRA    ._send_system
 ._chk_mret:
     LDI     R14, 0x302
     SUB     R14, R7
     FBRA.NZ R14, ._chk_wfi
-    LDI     R4, 0x42            ; MRET
+    LDI     R4, OP_MRET         ; MRET
     FBRA    ._send_system
 ._chk_wfi:
     LDI     R14, 0x105
@@ -739,7 +741,7 @@ _h_system:
 ._csr_uop:
     FIELD   R8, 12, 3           ; funct3 again (WAIT_RS1 uses R8)
     AND     R8, 3
-    LDI     R4, 0x42
-    ADD     R4, R8              ; 0x43 CSRRW, 0x44 CSRRS, 0x45 CSRRC
+    LDI     R4, OP_MRET
+    ADD     R4, R8              ; OP_CSRRW, OP_CSRRS, OP_CSRRC
     LD      R9, R7              ; operand B: the CSR address
     JUMP    _send_uop

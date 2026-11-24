@@ -561,7 +561,7 @@ build: firmware apps
 firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS)
 	@$(DOT_CLEAN_CMD)
 
-$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm $(PASM_BIN)
+$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm $(wildcard firmware/parcore/riscv/*.inc) $(PASM_BIN)
 	@mkdir -p $(dir $@)
 	@$(PBUILD) "$<" -o "$@"
 

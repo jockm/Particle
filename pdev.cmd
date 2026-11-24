@@ -9,8 +9,9 @@ set "LLVM_BIN=C:\Program Files\LLVM\bin"
 set "GNUWIN_BIN=C:\Program Files (x86)\GnuWin32\bin"
 set "DART_BIN="
 set "NODE_BIN="
-set "OSS_CAD_BIN=%USERPROFILE%\oss-cad-suite\bin"
-set "OSS_CAD_LIB=%USERPROFILE%\oss-cad-suite\lib"
+set "OSS_CAD_ROOT=%USERPROFILE%\oss-cad-suite"
+set "OSS_CAD_BIN=%OSS_CAD_ROOT%\bin"
+set "OSS_CAD_LIB=%OSS_CAD_ROOT%\lib"
 set "RISCV_BIN=%USERPROFILE%\xpack-riscv-none-elf-gcc\bin"
 
 if not exist "%BASH_EXE%" (
@@ -71,8 +72,9 @@ if defined DART_BIN (
 )
 
 if defined NODE_BIN set "PATH=%NODE_BIN%;%PATH%"
-if exist "%OSS_CAD_BIN%\." set "PATH=%OSS_CAD_BIN%;%PATH%"
 if exist "%OSS_CAD_LIB%\." set "PATH=%OSS_CAD_LIB%;%PATH%"
+if exist "%OSS_CAD_BIN%\." set "PATH=%OSS_CAD_BIN%;%PATH%"
+if exist "%OSS_CAD_ROOT%\share\openFPGALoader\." set "OPENFPGALOADER_SOJ_DIR=%OSS_CAD_ROOT%\share\openFPGALoader"
 if exist "%RISCV_BIN%\riscv-none-elf-gcc.exe" set "PATH=%RISCV_BIN%;%PATH%"
 
 where node >nul 2>nul
@@ -93,5 +95,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if not exist "%OSS_CAD_BIN%\." goto :launch_plain
+
+REM Git Bash --login runs /etc/profile, which prepends /mingw64/bin ahead of Windows PATH.
+REM Put oss-cad-suite/bin and oss-cad-suite/lib back ahead of /mingw64/bin so yosys and
+REM nextpnr-ecp5 load their own GCC/MinGW DLLs instead of Git Bash's older ones.
+"%BASH_EXE%" -c "rc=$(/usr/bin/mktemp /tmp/mr4_mdev_rc.XXXXXX) && printf '%%s\n' '[[ -r /etc/profile ]] && . /etc/profile' 'if [[ -r ~/.bash_profile ]]; then . ~/.bash_profile; elif [[ -r ~/.bash_login ]]; then . ~/.bash_login; elif [[ -r ~/.profile ]]; then . ~/.profile; elif [[ -r ~/.bashrc ]]; then . ~/.bashrc; fi' '_b=$(IFS=; /usr/bin/cygpath -u $OSS_CAD_BIN); _l=; [[ -n ${OSS_CAD_LIB:-} && -d $OSS_CAD_LIB ]] && _l=$(IFS=; /usr/bin/cygpath -u $OSS_CAD_LIB); export PATH=$_b${_l:+:$_l}:$PATH; unset _b _l' '/usr/bin/rm -f $MDEV_RC; unset MDEV_RC' > $rc && MDEV_RC=$rc exec /usr/bin/bash --rcfile $rc -i"
+exit /b %ERRORLEVEL%
+
+:launch_plain
 "%BASH_EXE%" --login -i
 exit /b %ERRORLEVEL%

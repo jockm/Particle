@@ -58,7 +58,7 @@ Install the tools with winget, from PowerShell or a Command Prompt:
 
 ```bat
 winget install -e --id Git.Git
-winget install -e --id GnuWin32.Make
+winget install -e --id MSYS2.MSYS2
 winget install -e --id Google.DartSDK
 winget install -e --id MartinStorsjo.LLVM-MinGW.UCRT
 winget install -e --id OpenJS.NodeJS.LTS

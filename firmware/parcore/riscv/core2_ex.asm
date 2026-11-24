@@ -3,22 +3,34 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core2_ex.asm
 ; ==============================================================================
+;
+; Core 2 takes each 4-word packet core 1 sends ([control word, operand A,
+; operand B, word 3]), drops it if it carries the old epoch (sending core 3 a
+; cancel if it has a destination), and otherwise dispatches on the operation
+; number in control-word bits 31:24 (parcore_ops.inc) with one JTBL. ALU
+; results, loads, stores and links go on to core 3 as [control word, result,
+; address or target, word 3]; a taken branch or jump redirects core 0.
+;
+; Registers kept for the whole run:
+;   R0   0, and FIFO channel 0 (idToEx, from core 1)
+;   R1   the epoch, in bit 1 (0 or 2): flips on every redirect
+;   R2   1: FIFO channel 1 (exToMem, to core 3)
+; For each packet: R10 the control word, R11 operand A, R12 operand B, R13
+; word 3 (the PC, or a store's data, or a branch's target); the result goes
+; in R15 and the address or target in R14.
+; ==============================================================================
 .include "lib/vectors.inc"
+.include "parcore_ops.inc"
 
     VECTOR_TABLE _reset_vector
 .define CSR_BASE         0x0004  ; Zero Page CSR block (0x0004..0x0043)
-.define EX_EPOCH         0x0048  ; Current epoch (0 or 1): flips on every redirect
 
 ; Redirect core 0 to the PC in R14 (MBOX vector 1 sends it), and flip the
 ; epoch: from now on packets of the old epoch are on the path the redirect
-; left. Uses R6, R7, R14.
+; left.
 .macro SEND_REDIRECT
     MBOX    R14, 1
-    LD      R14, EX_EPOCH
-    LD32    R6, (R14)
-    LD      R7, 1
-    XOR     R6, R7
-    ST32    (R14), R6
+    BINV    R1, 1
 .endmacro
 .define CSR_OFS_CYCLE    0x00    ; 0xC00 (cycle), 0xC01 (time)
 .define CSR_OFS_CYCLEH   0x04    ; 0xC80 (cycleh), 0xC81 (timeh)
@@ -31,951 +43,394 @@
 .define CSR_OFS_MTVAL    0x20    ; 0x343 (mtval)
 
 _reset_vector:
-    LD      R1, 0               ; FIFO Ch0: Inbound from Core 1 (ID)
-    LD      R2, 1               ; FIFO Ch1: Outbound to Core 3 (MEM)
+    LD      R1, 0               ; epoch 0
+    LD      R2, 1               ; exToMem
 
-    ; Zero-initialize 16-word CSR block (0x0000..0x003F)
+    ; Zero the CSR block (16 words from CSR_BASE)
     LD      R4, CSR_BASE
-    LOAD16  R5, 16              ; 16 words
-    LD      R6, 0
+    LD      R5, 15
+    ADD     R5, 1               ; 16 words
 ._zero_csr_loop:
-    ST32    (R4), R6
-    ADD     R4, 4
+    ST32    (R4++), R0
     SUB     R5, 1
     BBRA.NZ R5, ._zero_csr_loop
 
-    LD      R14, EX_EPOCH
-    ST32    (R14), R6           ; Epoch 0 (R6 = 0)
-
-    ; Set default trap vector address mtvec = 0x00000480
-    LOAD32  R5, 0x00000480
+    ; Default trap vector: mtvec = 0x00000480
+    LDI     R5, 0x0480
     LD      R14, CSR_BASE+CSR_OFS_MTVEC
     ST32    (R14), R5
+    JUMP    _ex_main_loop
 
 ; ==============================================================================
-; Main Execution Loop
+; Send [R10, R15, R14, R13] to core 3, then the main loop
 ; ==============================================================================
+_forward_to_mem:
+    FIFO.W  R10, R2             ; control word
+    FIFO.W  R15, R2             ; result
+    FIFO.W  R14, R2             ; address / target
+    FIFO.W  R13, R2             ; word 3 (a store's data)
+
 _ex_main_loop:
-    FIFO.R  R10, R1             ; Word 0: Control Word
-    FIFO.R  R11, R1             ; Word 1: Operand A (Rs1 Value / PC)
-    FIFO.R  R12, R1             ; Word 2: Operand B (Rs2 Value / Immediate)
-    FIFO.R  R13, R1             ; Word 3: Base PC
+    FIFO.R  R10, R0             ; control word
+    FIFO.R  R11, R0             ; operand A
+    FIFO.R  R12, R0             ; operand B
+    FIFO.R  R13, R0             ; word 3
+    LD      R14, R10
+    AND     R14, 2
+    SUB     R14, R1
+    FBRA.NZ R14, _stale         ; the old epoch
+    LD      R9, R10
+    SHIFTR  R9, 12
+    SHIFTR  R9, 12              ; the operation number
+    JTBL    R9
+    FBRA    _op_add             ; OP_ADD
+    FBRA    _op_sll             ; OP_SLL
+    FBRA    _op_slt             ; OP_SLT
+    FBRA    _op_sltu            ; OP_SLTU
+    FBRA    _op_xor             ; OP_XOR
+    FBRA    _op_srl             ; OP_SRL
+    FBRA    _op_or              ; OP_OR
+    FBRA    _op_and             ; OP_AND
+    FBRA    _op_sub             ; OP_SUB
+    FBRA    _op_sra             ; OP_SRA
+    FBRA    _op_mul             ; OP_MUL
+    FBRA    _op_mulh            ; OP_MULH
+    FBRA    _op_mulhsu          ; OP_MULHSU
+    FBRA    _op_mulhu           ; OP_MULHU
+    FBRA    _op_div             ; OP_DIV
+    FBRA    _op_divu            ; OP_DIVU
+    FBRA    _op_rem             ; OP_REM
+    FBRA    _op_remu            ; OP_REMU
+    FBRA    _op_andn            ; OP_ANDN
+    FBRA    _op_orn             ; OP_ORN
+    FBRA    _op_xnor            ; OP_XNOR
+    FBRA    _op_clz             ; OP_CLZ
+    FBRA    _t_ctz              ; OP_CTZ
+    FBRA    _t_cpop             ; OP_CPOP
+    FBRA    _op_max             ; OP_MAX
+    FBRA    _op_maxu            ; OP_MAXU
+    FBRA    _op_min             ; OP_MIN
+    FBRA    _op_minu            ; OP_MINU
+    FBRA    _op_sext_b          ; OP_SEXT_B
+    FBRA    _op_sext_h          ; OP_SEXT_H
+    FBRA    _op_zext_h          ; OP_ZEXT_H
+    FBRA    _op_rol             ; OP_ROL
+    FBRA    _op_ror             ; OP_ROR
+    FBRA    _t_orc_b            ; OP_ORC_B
+    FBRA    _t_rev8             ; OP_REV8
+    FBRA    _op_lui             ; OP_LUI
+    FBRA    _op_auipc           ; OP_AUIPC
+    FBRA    _t_fence_i          ; OP_FENCE_I
+    FBRA    _op_mem             ; OP_MEM
+    FBRA    _op_beq             ; OP_BEQ
+    FBRA    _op_bne             ; OP_BNE
+    FBRA    _op_none            ; (BEQ + 2: never sent)
+    FBRA    _op_none            ; (BEQ + 3: never sent)
+    FBRA    _op_blt             ; OP_BLT
+    FBRA    _op_bge             ; OP_BGE
+    FBRA    _op_bltu            ; OP_BLTU
+    FBRA    _op_bgeu            ; OP_BGEU
+    FBRA    _op_jal             ; OP_JAL
+    FBRA    _op_jalr            ; OP_JALR
+    FBRA    _op_ecall           ; OP_ECALL
+    FBRA    _op_ebreak          ; OP_EBREAK
+    FBRA    _op_mret            ; OP_MRET
+    FBRA    _op_csrrw           ; OP_CSRRW
+    FBRA    _op_csrrs           ; OP_CSRRS
+    FBRA    _op_csrrc           ; OP_CSRRC
+    FBRA    _op_illegal         ; OP_ILLEGAL
 
-    ; Test valid bit (bit 0)
-    LD      R3, R10
-    AND     R3, 1
-    FBRA.NZ R3, _have_valid_packet
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_have_valid_packet:
-    ; Epoch: flags bit 1 must match this core's. A packet of the old epoch was
-    ; decoded on the path a taken branch left: it doesn't run, and if it has
-    ; a destination its cancel goes to core 1 (through core 3), which takes
-    ; the register off its in-flight count
-    LD      R3, R10
-    SHIFTR  R3, 1
-    AND     R3, 1
-    LD      R14, EX_EPOCH
-    LD32    R4, (R14)
-    SUB     R3, R4
-    LD      R14, R3
-    FBRA.Z  R14, ._epoch_ok
+; ------------------------------------------------------------------------------
+; A packet of the old epoch was decoded on the path a taken branch left: it
+; doesn't run, and if it has a destination its cancel goes to core 1
+; (through core 3), which takes the register off its in-flight count
+; ------------------------------------------------------------------------------
+_stale:
     LD      R4, R10
     SHIFTR  R4, 8
-    LOAD16  R5, 0x1F
-    AND     R4, R5              ; R4 = Rd
-    FBRA.Z  R4, ._stale_no_rd
+    SHIFTL  R4, 15
+    SHIFTL  R4, 12              ; Rd, in bits 31:27
+    FBRA.Z  R4, _op_none
+    SHIFTR  R4, 15
+    SHIFTR  R4, 12
     SHIFTL  R4, 8
     OR      R4, 5               ; valid (bit 0) + cancel (bit 2), Rd in [15:8]
     LD      R10, R4
     LD      R15, 0
-    LD      R13, 0
-    LOAD16  R5, _forward_to_mem
     LD      R14, 0
-    JMP     R5, R0
-._stale_no_rd:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
+    LD      R13, 0
+    JUMP    _forward_to_mem
+_op_none:
+    JUMP    _ex_main_loop
 
-._epoch_ok:
-    LD      R15, 0              ; Result register
-    LD      R14, 0              ; Target / Effective Memory Address
+; Out-of-line operations
+_t_ctz:
+    JUMP    _do_ctz
+_t_cpop:
+    JUMP    _do_cpop
+_t_orc_b:
+    JUMP    _do_orc_b
+_t_rev8:
+    JUMP    _do_rev8
+_t_fence_i:
+    JUMP    _do_fence_i
 
-    ; --------------------------------------------------------------------------
-    ; 1. Branch / Jump Identification: Control Word [23:20]
-    ; --------------------------------------------------------------------------
-    LD      R3, R10
-    SHIFTR  R3, 12
-    SHIFTR  R3, 8
-    LD      R4, 0x0F
-    AND     R3, R4
-    FBRA.Z  R3, _not_branch_op
-    LOAD16  R14, _eval_branch
-    JMP     R14, R0
-
-_not_branch_op:
-    LOAD16  R14, _dispatch_alu
-    JMP     R14, R0
-
-; ==============================================================================
-; Branch & Jump Resolution Section
-; ==============================================================================
-_eval_branch:
-    ; uop = funct3 + 1: 1=BEQ, 2=BNE, 5=BLT, 6=BGE, 7=BLTU, 8=BGEU, 9=JAL, 10=JALR
-    ; R10 = Control Word, R11 = Rs1, R12 = Rs2, R13 = Target PC (or Base PC for JAL)
-
-    ; 1: BEQ
-    LD      R5, 1
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_beq
-    LOAD16  R14, _chk_bne
-    JMP     R14, R0
-_do_beq:
-    LD      R4, R11
-    SUB     R4, R12
-    FBRA.NZ R4, ._beq_not_taken
-    LOAD16  R5, _b_taken
-    JMP     R5, R0
-._beq_not_taken:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_chk_bne:
-    ; 2: BNE
-    LD      R5, 2
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_bne
-    LOAD16  R14, _chk_blt
-    JMP     R14, R0
-_do_bne:
-    LD      R4, R11
-    SUB     R4, R12
-    FBRA.Z  R4, ._bne_not_taken
-    LOAD16  R5, _b_taken
-    JMP     R5, R0
-._bne_not_taken:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_chk_blt:
-    ; 5: BLT (Signed)
-    LOAD16  R5, 5
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_blt
-    LOAD16  R14, _chk_bge
-    JMP     R14, R0
-_do_blt:
-    LD      R4, R11
-    SSLT    R4, R12
-    FBRA.Z  R4, ._blt_not_taken
-    LOAD16  R5, _b_taken
-    JMP     R5, R0
-._blt_not_taken:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_chk_bge:
-    ; 6: BGE (Signed)
-    LOAD16  R5, 6
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_bge
-    LOAD16  R14, _chk_bltu
-    JMP     R14, R0
-_do_bge:
-    LD      R4, R11
-    SSLT    R4, R12
-    FBRA.NZ R4, ._bge_not_taken
-    LOAD16  R5, _b_taken
-    JMP     R5, R0
-._bge_not_taken:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_chk_bltu:
-    ; 7: BLTU (Unsigned)
-    LOAD16  R5, 7
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_bltu
-    LOAD16  R14, _chk_bgeu
-    JMP     R14, R0
-_do_bltu:
-    LD      R4, R11
-    SLT     R4, R12
-    FBRA.Z  R4, ._bltu_not_taken
-    LOAD16  R5, _b_taken
-    JMP     R5, R0
-._bltu_not_taken:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_chk_bgeu:
-    ; 8: BGEU (Unsigned)
-    LOAD16  R5, 8
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_bgeu
-    LOAD16  R14, _chk_jal
-    JMP     R14, R0
-_do_bgeu:
-    LD      R4, R11
-    SLT     R4, R12
-    FBRA.NZ R4, ._bgeu_not_taken
-    LOAD16  R5, _b_taken
-    JMP     R5, R0
-._bgeu_not_taken:
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-
-_b_taken:
-    LOAD16  R5, _taken_branch
-    LD      R14, R13           ; Set Target PC in R14 after LOAD16 expands
-    JMP     R5, R0
-
-_chk_jal:
-    ; 9: JAL
-    LOAD16  R5, 9
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_jal
-    LOAD16  R14, _chk_jalr
-    JMP     R14, R0
-_do_jal:
-    LD      R15, R13
-    ADD     R15, 4             ; Link address = PC + 4
-    LOAD16  R5, _taken_branch
-    LD      R14, R13
-    ADD     R14, R12           ; Target PC = Base PC + Jump Offset
-    JMP     R5, R0
-
-_chk_jalr:
-    ; 10: JALR
-    LOAD16  R5, 10
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _do_jalr
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_do_jalr:
-    LD      R15, R13
-    ADD     R15, 4             ; Link address = PC + 4
-    LOAD16  R4, 0xFFFE
-    LOAD16  R5, _taken_branch
-    LD      R14, R11
-    ADD     R14, R12           ; Target = Rs1 + Imm
-    AND     R14, R4            ; Target & ~1 (R14 set after all LOAD16s)
-    JMP     R5, R0
-
-_taken_branch:
-    ; Redirect core 0 to the target in R14 (MBOX vector 1), new epoch
-    SEND_REDIRECT
-
-    ; Check if destination register Rd != 0 (e.g. for JAL/JALR link writeback)
-    LD      R4, R10
-    SHIFTR  R4, 8
-    LOAD16  R5, 0x1F
-    AND     R4, R5
-    FBRA.NZ R4, _branch_has_rd
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
-_branch_has_rd:
-    LOAD16  R5, _forward_to_mem
-    JMP     R5, R0
-
-; ALU / Memory / Extension Dispatch Section
-; ==============================================================================
-_dispatch_alu:
-    LD      R3, R10
-    SHIFTR  R3, 12
-    SHIFTR  R3, 12         ; Micro-op opcode [31:24]
-
-    ; Check if Memory access instruction: Control Word [19:16] != 0
-    LD      R4, R10
-    SHIFTR  R4, 12
-    SHIFTR  R4, 4
-    LD      R5, 0x0F
-    AND     R4, R5
-    FBRA.Z  R4, _run_alu_lookup
-
-    ; Effective memory address calculation: Base (Rs1) + Offset (Imm)
-    LOAD16  R4, _forward_to_mem
-    LD      R14, R11
-    ADD     R14, R12
-    JMP     R4, R0
-
-_run_alu_lookup:
-    ; Check for System / CSR uops (0x40..0x47: bit 6 set and bit 4 clear)
-    LOAD16  R4, 0x50
-    LD      R5, R3
-    AND     R5, R4
-    LOAD16  R4, 0x40
-    SUB     R5, R4
-    FBRA.NZ R5, ._not_system_uop
-
-    LOAD16  R14, _dispatch_system
-    JMP     R14, R0
-
-._not_system_uop:
-    ; RV32I Base ALU (Opcode 0x00..0x07)
-    FBRA.NZ R3, _skip_add
-    LOAD16  R14, _do_add
-    JMP     R14, R0
-_skip_add:
-    LD      R4, R3
-    SUB     R4, 1
-    FBRA.NZ R4, _skip_sll
-    LOAD16  R14, _do_sll
-    JMP     R14, R0
-_skip_sll:
-    LD      R4, R3
-    SUB     R4, 2
-    FBRA.NZ R4, _skip_slt
-    LOAD16  R14, _do_slt
-    JMP     R14, R0
-_skip_slt:
-    LD      R4, R3
-    SUB     R4, 3
-    FBRA.NZ R4, _skip_sltu
-    LOAD16  R14, _do_sltu
-    JMP     R14, R0
-_skip_sltu:
-    LD      R4, R3
-    SUB     R4, 4
-    FBRA.NZ R4, _skip_xor
-    LOAD16  R14, _do_xor
-    JMP     R14, R0
-_skip_xor:
-    LD      R4, R3
-    SUB     R4, 5
-    FBRA.NZ R4, _skip_srl
-    LOAD16  R14, _do_srl
-    JMP     R14, R0
-_skip_srl:
-    LD      R4, R3
-    SUB     R4, 6
-    FBRA.NZ R4, _skip_or
-    LOAD16  R14, _do_or
-    JMP     R14, R0
-_skip_or:
-    LD      R4, R3
-    SUB     R4, 7
-    FBRA.NZ R4, _skip_and
-    LOAD16  R14, _do_and
-    JMP     R14, R0
-_skip_and:
-
-    ; High / Alternate Base Operations
-    LOAD16  R5, 0x10
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_sub
-    LOAD16  R14, _do_sub
-    JMP     R14, R0
-_skip_sub:
-    LOAD16  R5, 0x15
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_sra
-    LOAD16  R14, _do_sra
-    JMP     R14, R0
-_skip_sra:
-    LOAD16  R5, 0x30            ; LUI
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_lui
-    LOAD16  R14, _do_lui
-    JMP     R14, R0
-_skip_lui:
-    LOAD16  R5, 0x31            ; AUIPC
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_auipc
-    LOAD16  R14, _do_auipc
-    JMP     R14, R0
-_skip_auipc:
-    LOAD16  R5, 0x32            ; FENCE.I
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_fence_i
-    LOAD16  R14, _do_fence_i
-    JMP     R14, R0
-_skip_fence_i:
-
-    ; RV32M Extension Operations (0x20..0x27)
-    LOAD16  R5, 0x20
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_mul
-    LOAD16  R14, _do_mul
-    JMP     R14, R0
-_skip_mul:
-    LOAD16  R5, 0x21
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_mulh
-    LOAD16  R14, _do_mulh
-    JMP     R14, R0
-_skip_mulh:
-    LOAD16  R5, 0x22
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_mulhsu
-    LOAD16  R14, _do_mulhsu
-    JMP     R14, R0
-_skip_mulhsu:
-    LOAD16  R5, 0x23
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_mulhu
-    LOAD16  R14, _do_mulhu
-    JMP     R14, R0
-_skip_mulhu:
-    LOAD16  R5, 0x24
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_div
-    LOAD16  R14, _do_div
-    JMP     R14, R0
-_skip_div:
-    LOAD16  R5, 0x25
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_divu
-    LOAD16  R14, _do_divu
-    JMP     R14, R0
-_skip_divu:
-    LOAD16  R5, 0x26
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_rem
-    LOAD16  R14, _do_rem
-    JMP     R14, R0
-_skip_rem:
-    LOAD16  R5, 0x27
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_remu
-    LOAD16  R14, _do_remu
-    JMP     R14, R0
-_skip_remu:
-
-    ; RV32_Zbb Bit-manipulation Extension (0x50..0x60)
-    LOAD16  R5, 0x50
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_andn
-    LOAD16  R14, _do_andn
-    JMP     R14, R0
-_skip_andn:
-    LOAD16  R5, 0x51
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_orn
-    LOAD16  R14, _do_orn
-    JMP     R14, R0
-_skip_orn:
-    LOAD16  R5, 0x52
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_xnor
-    LOAD16  R14, _do_xnor
-    JMP     R14, R0
-_skip_xnor:
-    LOAD16  R5, 0x53
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_clz
-    LOAD16  R14, _do_clz
-    JMP     R14, R0
-_skip_clz:
-    LOAD16  R5, 0x54
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_ctz
-    LOAD16  R14, _do_ctz
-    JMP     R14, R0
-_skip_ctz:
-    LOAD16  R5, 0x55
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_cpop
-    LOAD16  R14, _do_cpop
-    JMP     R14, R0
-_skip_cpop:
-    LOAD16  R5, 0x56
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_max
-    LOAD16  R14, _do_max
-    JMP     R14, R0
-_skip_max:
-    LOAD16  R5, 0x57
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_maxu
-    LOAD16  R14, _do_maxu
-    JMP     R14, R0
-_skip_maxu:
-    LOAD16  R5, 0x58
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_min
-    LOAD16  R14, _do_min
-    JMP     R14, R0
-_skip_min:
-    LOAD16  R5, 0x59
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_minu
-    LOAD16  R14, _do_minu
-    JMP     R14, R0
-_skip_minu:
-    LOAD16  R5, 0x5A
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_sext_b
-    LOAD16  R14, _do_sext_b
-    JMP     R14, R0
-_skip_sext_b:
-    LOAD16  R5, 0x5B
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_sext_h
-    LOAD16  R14, _do_sext_h
-    JMP     R14, R0
-_skip_sext_h:
-    LOAD16  R5, 0x5C
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_zext_h
-    LOAD16  R14, _do_zext_h
-    JMP     R14, R0
-_skip_zext_h:
-    LOAD16  R5, 0x5D
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_rol
-    LOAD16  R14, _do_rol
-    JMP     R14, R0
-_skip_rol:
-    LOAD16  R5, 0x5E
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_ror
-    LOAD16  R14, _do_ror
-    JMP     R14, R0
-_skip_ror:
-    LOAD16  R5, 0x5F
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _skip_orc_b
-    LOAD16  R14, _do_orc_b
-    JMP     R14, R0
-_skip_orc_b:
-    LOAD16  R5, 0x70
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.NZ R4, _fallback_forward
-    LOAD16  R14, _do_rev8
-    JMP     R14, R0
-
-_fallback_forward:
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+; The SYSTEM operations go to _dispatch_system with their old uop in R3
+_op_ecall:
+    LDI     R3, 0x40
+    JUMP    _dispatch_system
+_op_ebreak:
+    LDI     R3, 0x41
+    JUMP    _dispatch_system
+_op_mret:
+    LDI     R3, 0x42
+    JUMP    _dispatch_system
+_op_csrrw:
+    LDI     R3, 0x43
+    JUMP    _dispatch_system
+_op_csrrs:
+    LDI     R3, 0x44
+    JUMP    _dispatch_system
+_op_csrrc:
+    LDI     R3, 0x45
+    JUMP    _dispatch_system
+_op_illegal:
+    LDI     R3, 0x46
+    JUMP    _dispatch_system
 
 ; ------------------------------------------------------------------------------
-; ALU Handler Implementations
+; ALU, M and Zbb: R15 = the result
 ; ------------------------------------------------------------------------------
-_do_add:
+_op_add:
     LD      R15, R11
     ADD     R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_sub:
+    BBRA    _forward_to_mem
+_op_sub:
     LD      R15, R11
     SUB     R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_sll:
-    LOAD16  R5, 0x1F
-    LD      R4, R12
-    AND     R4, R5
+    BBRA    _forward_to_mem
+_op_sll:
     LD      R15, R11
-    SHIFTL  R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_slt:
+    SHIFTL  R15, R12            ; by R12 & 31
+    BBRA    _forward_to_mem
+_op_srl:
+    LD      R15, R11
+    SHIFTR  R15, R12
+    BBRA    _forward_to_mem
+_op_sra:
+    LD      R15, R11
+    ASHIFTR R15, R12
+    BBRA    _forward_to_mem
+_op_slt:
     LD      R15, R11
     SSLT    R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_sltu:
+    BBRA    _forward_to_mem
+_op_sltu:
     LD      R15, R11
     SLT     R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_xor:
+    BBRA    _forward_to_mem
+_op_xor:
     LD      R15, R11
     XOR     R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_srl:
-    LOAD16  R5, 0x1F
-    LD      R4, R12
-    AND     R4, R5
-    LD      R15, R11
-    SHIFTR  R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_sra:
-    LOAD16  R5, 0x1F
-    LD      R4, R12
-    AND     R4, R5
-    LD      R15, R11
-    ASHIFTR R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_or:
+    BBRA    _forward_to_mem
+_op_or:
     LD      R15, R11
     OR      R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_and:
+    BBRA    _forward_to_mem
+_op_and:
     LD      R15, R11
     AND     R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_lui:
+    BBRA    _forward_to_mem
+_op_lui:
     LD      R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_auipc:
+    BBRA    _forward_to_mem
+_op_auipc:
     LD      R15, R13
     ADD     R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    BBRA    _forward_to_mem
+_op_mem:
+    ; Loads and stores: the address; core 3 does the access
+    LD      R14, R11
+    ADD     R14, R12
+    BBRA    _forward_to_mem
 
-_do_fence_i:
-    ; Like a taken branch to pc + 4, but with MBOX vector 2: core 0's FENCE.I
-    ; handler then waits for core 3's marker, which follows every earlier
-    ; store, so the next instruction is fetched after they are in its TCM.
-    LD      R14, R13
-    ADD     R14, 4
-    MBOX    R14, 2
-    LD      R14, EX_EPOCH
-    LD32    R6, (R14)
-    LD      R7, 1
-    XOR     R6, R7
-    ST32    (R14), R6
-    ; Send core 3 the FENCE.I item (valid, memory operation 11, no Rd)
-    LOAD32  R10, 0x000B0001
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_mul:
+_op_mul:
     LD      R15, R11
     MULL    R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_mulh:
+    BBRA    _forward_to_mem
+_op_mulh:
     LD      R15, R11
     SMULH   R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_mulhsu:
+    BBRA    _forward_to_mem
+_op_mulhsu:
     LD      R15, R11
     MULHSU  R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_mulhu:
+    BBRA    _forward_to_mem
+_op_mulhu:
     LD      R15, R11
-    MULH    R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    MULH    R15, R12            ; unsigned high word
+    BBRA    _forward_to_mem
+; Particle's divides give RISC-V's results: / 0 is all ones, % 0 the
+; dividend, INT_MIN / -1 is INT_MIN and INT_MIN % -1 is 0
+_op_div:
+    LD      R15, R11
+    SDIV    R15, R12
+    BBRA    _forward_to_mem
+_op_divu:
+    LD      R15, R11
+    DIV     R15, R12
+    BBRA    _forward_to_mem
+_op_rem:
+    LD      R15, R11
+    SMOD    R15, R12
+    BBRA    _forward_to_mem
+_op_remu:
+    LD      R15, R11
+    MOD     R15, R12
+    BBRA    _forward_to_mem
 
-_do_div:
-    ; RV32M DIV (Signed)
-    FBRA.NZ R12, _div_nonzero
-    LOAD32  R15, 0xFFFFFFFF     ; Division by zero -> -1
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_div_nonzero:
-    ; Check overflow: -2147483648 / -1 = -2147483648
-    LOAD32  R4, 0x80000000
-    LD      R5, R11
-    SUB     R5, R4
-    FBRA.NZ R5, _div_check_signs
-    LD      R5, R12
-    ADD     R5, 1
-    FBRA.NZ R5, _div_check_signs
-    LD      R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_div_check_signs:
-    ; R6 = sign of quotient = (R11 ^ R12) >> 31
-    LD      R6, R11
-    XOR     R6, R12
-    SHIFTR  R6, 15
-    SHIFTR  R6, 15
-    SHIFTR  R6, 1
-
-    ; R7 = abs(R11)
-    LD      R7, R11
-    LD      R4, R11
-    SHIFTR  R4, 15
-    SHIFTR  R4, 15
-    SHIFTR  R4, 1
-    FBRA.Z  R4, _div_abs_b
-    NOT     R7
-    LD      R5, 1
-    ADD     R7, R5
-
-_div_abs_b:
-    ; R8 = abs(R12)
-    LD      R8, R12
-    LD      R4, R12
-    SHIFTR  R4, 15
-    SHIFTR  R4, 15
-    SHIFTR  R4, 1
-    FBRA.Z  R4, _div_run_calc
-    NOT     R8
-    LD      R5, 1
-    ADD     R8, R5
-
-_div_run_calc:
-    LOAD16  R3, 0               ; mode 0 = DIV
-    LOAD16  R14, _udiv_calc
-    JMP     R14, R0
-
-_div_finish:
-    LD      R15, R9             ; Quotient
-    FBRA.Z  R6, _div_exit
+_op_andn:
+    LD      R15, R12
     NOT     R15
-    LD      R5, 1
-    ADD     R15, R5
-_div_exit:
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_divu:
-    ; RV32M DIVU (Unsigned)
-    FBRA.NZ R12, _divu_nonzero
-    LOAD32  R15, 0xFFFFFFFF     ; Division by zero -> 0xFFFFFFFF
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_divu_nonzero:
-    LD      R7, R11             ; N
-    LD      R8, R12             ; D
-    LOAD16  R3, 1               ; mode 1 = DIVU
-    LOAD16  R14, _udiv_calc
-    JMP     R14, R0
-
-_divu_finish:
-    LD      R15, R9             ; Unsigned quotient
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_rem:
-    ; RV32M REM (Signed)
-    FBRA.NZ R12, _rem_nonzero
-    LD      R15, R11            ; Remainder by zero -> dividend
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_rem_nonzero:
-    ; Check overflow: -2147483648 % -1 = 0
-    LOAD32  R4, 0x80000000
-    LD      R5, R11
-    SUB     R5, R4
-    FBRA.NZ R5, _rem_check_signs
-    LD      R5, R12
-    ADD     R5, 1
-    FBRA.NZ R5, _rem_check_signs
-    LOAD16  R15, 0
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_rem_check_signs:
-    ; Remainder sign matches dividend (R11) sign
-    LD      R6, R11
-    SHIFTR  R6, 15
-    SHIFTR  R6, 15
-    SHIFTR  R6, 1              ; R6 = sign of R11
-
-    ; R7 = abs(R11)
-    LD      R7, R11
-    FBRA.Z  R6, _rem_abs_b
-    NOT     R7
-    LD      R5, 1
-    ADD     R7, R5
-
-_rem_abs_b:
-    ; R8 = abs(R12)
-    LD      R8, R12
-    LD      R4, R12
-    SHIFTR  R4, 15
-    SHIFTR  R4, 15
-    SHIFTR  R4, 1
-    FBRA.Z  R4, _rem_run_calc
-    NOT     R8
-    LD      R5, 1
-    ADD     R8, R5
-
-_rem_run_calc:
-    LOAD16  R3, 2               ; mode 2 = REM
-    LOAD16  R14, _udiv_calc
-    JMP     R14, R0
-
-_rem_finish:
-    LD      R15, R11            ; Remainder in R11
-    FBRA.Z  R6, _rem_exit
+    AND     R15, R11
+    BBRA    _forward_to_mem
+_op_orn:
+    LD      R15, R12
     NOT     R15
-    LD      R5, 1
-    ADD     R15, R5
-_rem_exit:
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_remu:
-    ; RV32M REMU (Unsigned)
-    FBRA.NZ R12, _remu_nonzero
-    LD      R15, R11            ; Remainder by zero -> dividend
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_remu_nonzero:
-    LD      R7, R11             ; N
-    LD      R8, R12             ; D
-    LOAD16  R3, 3               ; mode 3 = REMU
-    LOAD16  R14, _udiv_calc
-    JMP     R14, R0
-
-_remu_finish:
-    LD      R15, R11            ; Unsigned remainder in R11
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-; ------------------------------------------------------------------------------
-; _udiv_calc: 32-bit Restoring Division
-; Inputs:  R7 = N, R8 = D, R3 = mode (0: DIV, 1: DIVU, 2: REM, 3: REMU)
-; Outputs: R9 = Quotient, R11 = Remainder
-; Preserves: R10 (Control Word), R13 (Word 3)
-; Scratch: R4 (Loop counter), R5 (temp)
-; ------------------------------------------------------------------------------
-_udiv_calc:
-    LOAD16  R9, 0               ; Q = 0
-    LOAD16  R11, 0              ; Remainder = 0 (using R11 to preserve R10!)
-    LOAD16  R4, 32              ; 32 iterations
-
-_udiv_step:
-    ; Remainder = (Remainder << 1) | (N >> 31)
-    SHIFTL  R11, 1
-    LD      R5, R7
-    SHIFTR  R5, 15
-    SHIFTR  R5, 15
-    SHIFTR  R5, 1
-    OR      R11, R5
-
-    SHIFTL  R7, 1               ; N <<= 1
-    SHIFTL  R9, 1               ; Q <<= 1
-
-    ; If Remainder >= D: Remainder -= D, Q |= 1
-    LD      R5, R11
-    SLT     R5, R8              ; R5 = (Remainder < D) ? 1 : 0 (SLT is unsigned)
-    FBRA.NZ R5, _udiv_next
-    SUB     R11, R8
-    LD      R5, 1
-    OR      R9, R5
-
-_udiv_next:
-    LD      R5, 1
-    SUB     R4, R5
-    FBRA.NZ R4, _udiv_continue
-    LOAD16  R14, _udiv_done
-    JMP     R14, R0
-_udiv_continue:
-    LOAD16  R14, _udiv_step
-    JMP     R14, R0
-
-_udiv_done:
-    ; Dispatch by mode in R3 (0: DIV, 1: DIVU, 2: REM, 3: REMU)
-    FBRA.Z  R3, _route_div
-    LD      R5, 1
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _route_divu
-    LD      R5, 2
-    LD      R4, R3
-    SUB     R4, R5
-    FBRA.Z  R4, _route_rem
-
-    ; mode == 3 (REMU)
-    LOAD16  R14, _remu_finish
-    JMP     R14, R0
-
-_route_div:
-    LOAD16  R14, _div_finish
-    JMP     R14, R0
-
-_route_divu:
-    LOAD16  R14, _divu_finish
-    JMP     R14, R0
-
-_route_rem:
-    LOAD16  R14, _rem_finish
-    JMP     R14, R0
-
-_do_andn:
-    LD      R15, R11
-    LD      R4, R12
-    NOT     R4
-    AND     R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_orn:
-    LD      R15, R11
-    LD      R4, R12
-    NOT     R4
-    OR      R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_xnor:
+    OR      R15, R11
+    BBRA    _forward_to_mem
+_op_xnor:
     LD      R15, R11
     XOR     R15, R12
     NOT     R15
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_clz:
+    BBRA    _forward_to_mem
+_op_clz:
+    CLZ     R15, R11
+    BBRA    _forward_to_mem
+_op_max:
     LD      R15, R11
-    CLZ     R15, R15
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    LD      R14, R11
+    SSLT    R14, R12
+    BBRA.Z  R14, _forward_to_mem    ; A >= B: A
+    LD      R15, R12
+    BBRA    _forward_to_mem
+_op_maxu:
+    LD      R15, R11
+    LD      R14, R11
+    SLT     R14, R12
+    BBRA.Z  R14, _forward_to_mem
+    LD      R15, R12
+    BBRA    _forward_to_mem
+_op_min:
+    LD      R15, R11
+    LD      R14, R11
+    SSLT    R14, R12
+    BBRA.NZ R14, _forward_to_mem    ; A < B: A
+    LD      R15, R12
+    BBRA    _forward_to_mem
+_op_minu:
+    LD      R15, R11
+    LD      R14, R11
+    SLT     R14, R12
+    BBRA.NZ R14, _forward_to_mem
+    LD      R15, R12
+    BBRA    _forward_to_mem
+_op_sext_b:
+    LD      R15, R11
+    SHIFTL  R15, 12
+    SHIFTL  R15, 12
+    ASHIFTR R15, 12
+    ASHIFTR R15, 12
+    BBRA    _forward_to_mem
+_op_sext_h:
+    LD      R15, R11
+    SHIFTL  R15, 8
+    SHIFTL  R15, 8
+    ASHIFTR R15, 8
+    ASHIFTR R15, 8
+    BBRA    _forward_to_mem
+_op_zext_h:
+    LD      R15, R11
+    SHIFTL  R15, 8
+    SHIFTL  R15, 8
+    SHIFTR  R15, 8
+    SHIFTR  R15, 8
+    BBRA    _forward_to_mem
+_op_rol:
+    LD      R15, R11
+    ROTL    R15, R12
+    JUMP    _forward_to_mem
+_op_ror:
+    LD      R15, R11
+    ROTR    R15, R12
+    JUMP    _forward_to_mem
 
+; ------------------------------------------------------------------------------
+; Branches: R13 = the target. Not taken: nothing to send.
+; ------------------------------------------------------------------------------
+_op_beq:
+    LD      R14, R11
+    SUB     R14, R12
+    FBRA.Z  R14, _b_taken
+    JUMP    _ex_main_loop
+_op_bne:
+    LD      R14, R11
+    SUB     R14, R12
+    FBRA.NZ R14, _b_taken
+    JUMP    _ex_main_loop
+_op_blt:
+    LD      R14, R11
+    SSLT    R14, R12
+    FBRA.NZ R14, _b_taken
+    JUMP    _ex_main_loop
+_op_bge:
+    LD      R14, R11
+    SSLT    R14, R12
+    FBRA.Z  R14, _b_taken
+    JUMP    _ex_main_loop
+_op_bltu:
+    LD      R14, R11
+    SLT     R14, R12
+    FBRA.NZ R14, _b_taken
+    JUMP    _ex_main_loop
+_op_bgeu:
+    LD      R14, R11
+    SLT     R14, R12
+    FBRA.Z  R14, _b_taken
+    JUMP    _ex_main_loop
+_b_taken:
+    LD      R14, R13
+    SEND_REDIRECT
+    JUMP    _ex_main_loop
+
+; ------------------------------------------------------------------------------
+; JAL (R12 the offset, R13 the PC) and JALR (R11 + R12): R15 = the link,
+; R14 = the target. Only a link to a register goes to core 3.
+; ------------------------------------------------------------------------------
+_op_jal:
+    LD      R14, R13
+    ADD     R14, R12
+    FBRA    ._jump
+_op_jalr:
+    LD      R14, R11
+    ADD     R14, R12
+    BCLR    R14, 0
+._jump:
+    LD      R15, R13
+    ADD     R15, 4              ; the link: PC + 4
+    SEND_REDIRECT
+    LD      R4, R10
+    SHIFTR  R4, 8
+    SHIFTL  R4, 15
+    SHIFTL  R4, 12              ; Rd, in bits 31:27
+    FBRA.Z  R4, ._no_link
+    JUMP    _forward_to_mem
+._no_link:
+    JUMP    _ex_main_loop
+
+; ------------------------------------------------------------------------------
+; Out-of-line Zbb operations
+; ------------------------------------------------------------------------------
 _do_ctz:
     LD      R4, R11
     SUB     R4, 1
@@ -985,8 +440,7 @@ _do_ctz:
     CLZ     R4, R4
     LOAD16  R15, 32
     SUB     R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    JUMP    _forward_to_mem
 
 _do_cpop:
     LD      R4, R11
@@ -1011,99 +465,7 @@ _do_cpop:
     LD      R15, R6
     SHIFTR  R15, 12
     SHIFTR  R15, 12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_max:
-    LD      R4, R11
-    SSLT    R4, R12
-    FBRA.Z  R4, _max_take_a
-    LD      R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-_max_take_a:
-    LD      R15, R11
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_maxu:
-    LD      R4, R11
-    SLT     R4, R12
-    FBRA.Z  R4, _maxu_take_a
-    LD      R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-_maxu_take_a:
-    LD      R15, R11
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_min:
-    LD      R4, R11
-    SSLT    R4, R12
-    FBRA.NZ R4, _min_take_a
-    LD      R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-_min_take_a:
-    LD      R15, R11
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_minu:
-    LD      R4, R11
-    SLT     R4, R12
-    FBRA.NZ R4, _minu_take_a
-    LD      R15, R12
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-_minu_take_a:
-    LD      R15, R11
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_sext_b:
-    LD      R15, R11
-    LD      R5, 12
-    SHIFTL  R5, 1               ; R5 = 24
-    SHIFTL  R15, R5
-    ASHIFTR R15, R5
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_sext_h:
-    LD      R15, R11
-    LD      R5, 8
-    SHIFTL  R5, 1               ; R5 = 16
-    SHIFTL  R15, R5
-    ASHIFTR R15, R5
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_zext_h:
-    LOAD16  R4, 0xFFFF
-    LD      R15, R11
-    AND     R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_rol:
-    LOAD16  R5, 0x1F
-    LD      R4, R12
-    AND     R4, R5
-    LD      R15, R11
-    ROTL    R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
-
-_do_ror:
-    LOAD16  R5, 0x1F
-    LD      R4, R12
-    AND     R4, R5
-    LD      R15, R11
-    ROTR    R15, R4
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    JUMP    _forward_to_mem
 
 _do_orc_b:
     LD      R15, 0
@@ -1136,8 +498,7 @@ _do_orc_b:
     LOAD32  R5, 0xFF000000
     OR      R15, R5
 ._orcb_done:
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    JUMP    _forward_to_mem
 
 _do_rev8:
     LOAD16  R6, 0xFF
@@ -1170,9 +531,27 @@ _do_rev8:
     AND     R4, R6
     OR      R15, R4
 
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    JUMP    _forward_to_mem
 
+
+_do_fence_i:
+    ; Like a taken branch to pc + 4, but with MBOX vector 2: core 0's FENCE.I
+    ; handler then waits for core 3's marker, which follows every earlier
+    ; store, so the next instruction is fetched after they are in its TCM.
+    LD      R14, R13
+    ADD     R14, 4
+    MBOX    R14, 2
+    BINV    R1, 1
+    ; Send core 3 the FENCE.I item (valid, memory operation 11, no Rd)
+    LOAD32  R10, 0x000B0001
+    LD      R15, 0
+    LD      R14, 0
+    JUMP    _forward_to_mem
+
+; ------------------------------------------------------------------------------
+; SYSTEM and CSRs. R3 = 0x40 ECALL, 0x41 EBREAK, 0x42 MRET, 0x43 CSRRW,
+; 0x44 CSRRS, 0x45 CSRRC, 0x46 an illegal instruction.
+; ------------------------------------------------------------------------------
 _dispatch_system:
     ; uop in R3: 0x40=ECALL, 0x41=EBREAK, 0x42=MRET, 0x43=CSRRW, 0x44=CSRRS, 0x45=CSRRC,
     ; 0x46=illegal instruction
@@ -1243,8 +622,7 @@ _dispatch_system:
     LD      R14, CSR_BASE+CSR_OFS_MEPC
     LD32    R14, (R14)
     SEND_REDIRECT
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
+    JUMP    _ex_main_loop
 
 ._system_trap_redirect:
     LD      R14, CSR_BASE+CSR_OFS_MTVEC
@@ -1258,8 +636,7 @@ _dispatch_system:
 
 ._do_trap_strobe:
     SEND_REDIRECT
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
+    JUMP    _ex_main_loop
 
 ._chk_csr_ops:
     ; R6 holds the CSR's address: R14 is overwritten by every LOAD16 / JMP
@@ -1372,8 +749,7 @@ _dispatch_system:
 
 ._csr_unmapped:
     LD      R15, 0
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    JUMP    _forward_to_mem
 
 ._read_csr_val:
     LD32    R15, (R6)           ; R15 = Old CSR Value (R6 = CSR address)
@@ -1421,15 +797,5 @@ _dispatch_system:
     ST32    (R6), R4
 
 ._finish_csr:
-    LOAD16  R14, _forward_to_mem
-    JMP     R14, R0
+    JUMP    _forward_to_mem
 ; ------------------------------------------------------------------------------
-; Outbound Forwarding to Memory Stage (Core 3)
-; ------------------------------------------------------------------------------
-_forward_to_mem:
-    FIFO.W  R10, R2             ; Word 0: Control Word
-    FIFO.W  R15, R2             ; Word 1: Result Data
-    FIFO.W  R14, R2             ; Word 2: Memory Effective Address / Target
-    FIFO.W  R13, R2             ; Word 3: Store Data (Rs2 Value)
-    LOAD16  R14, _ex_main_loop
-    JMP     R14, R0
