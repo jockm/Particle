@@ -116,7 +116,7 @@ help:
 	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
 	@echo "  make ulx3s-flash      - Write build/ulx3s/particle_ulx3s.bit to the ULX3S flash (kept across power cycles)"
 	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000); Ctrl-] leaves"
-	@echo "  make parcore-guest    - Build the RISC-V guest program (PARCORE_GUEST=apps/riscv/hello.S; needs RISC-V GCC)"
+	@echo "  make parcore-guest    - Build the RISC-V guest program (PARCORE_GUEST=apps/riscv/hello.S; RISC-V GCC or LLVM)"
 	@echo "  make parcore-image    - Build the Parcore boot image (stage firmware + guest) in build/parcore_ulx3s"
 	@echo "  make parcore-bit      - Synthesize, place and route Parcore for the ULX3S (PARCORE_CLOCK_HZ=...)"
 	@echo "  make parcore-timing   - Show the last Parcore build's Fmax and critical path"
@@ -241,7 +241,7 @@ ulx3s-term:
 
 # ------------------------------------------------------------------------------
 # Parcore on the ULX3S: the conductor loads the stage firmware and a RISC-V
-# guest program (PARCORE_GUEST, built with a RISC-V GCC toolchain) from the
+# guest program (PARCORE_GUEST, built with a RISC-V GCC or LLVM toolchain) from the
 # image ROM built into the bitstream, then releases the cores. The guest uses
 # the FTDI UART (make ulx3s-term), the LEDs and the buttons; FIRE1 restarts.
 # ------------------------------------------------------------------------------

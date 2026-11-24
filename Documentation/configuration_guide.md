@@ -90,7 +90,7 @@ make parcore-prog                                 # load it into the board
 make ulx3s-term                                   # its console
 ```
 
-Building the guest needs a RISC-V GCC toolchain (`riscv64-elf-gcc` or similar, as for `make test-parcore-isa`).
+Building the guest, like `make test-parcore-isa`, needs a RISC-V toolchain: a RISC-V GCC (`riscv64-elf-gcc` or similar), or LLVM with the RISC-V target (`clang`, `ld.lld` and `llvm-objcopy`). `apps/riscv/riscv_toolchain.sh` uses GCC if it finds one and LLVM otherwise; `RISCV_TOOLCHAIN=gcc` or `llvm` chooses, and `RISCV_LLVM_BIN=<dir>` points at an LLVM that isn't on the PATH (Homebrew's `/opt/homebrew/opt/llvm/bin` and `lld` are found by themselves). With LLVM, three Zbb tests (`sext_b`, `sext_h`, `zext_h`) load 64-bit constants with `li`, which LLVM's assembler rejects; the build keeps their low 32 bits, as GNU as does.
 
 | Target | What it does |
 |---|---|
@@ -98,7 +98,7 @@ Building the guest needs a RISC-V GCC toolchain (`riscv64-elf-gcc` or similar, a
 | `make parcore-image` | `firmware` and `parcore-guest`, then the boot image `build/parcore_ulx3s/parcore_image.bin` |
 | `make parcore-bit` | Generates the design with that image, then Yosys, nextpnr (`--router router2`) and `ecppack`, in `build/parcore_ulx3s`: `parcore_ulx3s.bit` |
 | `make parcore-timing` | The last build's Fmax and critical path |
-| `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator: cycles per RISC-V instruction and where each stage core's cycles go. Needs Verilator and the RISC-V GCC toolchain |
+| `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator: cycles per RISC-V instruction and where each stage core's cycles go. Needs Verilator and a RISC-V toolchain |
 | `make parcore-prog` | Loads the bitstream into the board (lost at power-off) |
 | `make parcore-flash` | Writes it to the board's configuration flash |
 

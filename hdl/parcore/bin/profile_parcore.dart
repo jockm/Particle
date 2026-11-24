@@ -146,8 +146,11 @@ Uint8List _merge(List<int> kernel, List<int> guest, int tcmSize) {
     final l = labelLine.firstMatch(line);
     if (l != null) {
       final name = l.group(2)!;
-      // Local labels (._x) belong to the routine they're in
-      if (!name.startsWith('.')) labels.add((int.parse(l.group(1)!, radix: 16), name));
+      // Local labels (._x) and the labels macros make (.%_x, listed as
+      // _<n>_x) belong to the routine they're in
+      if (!name.startsWith('.') && !RegExp(r'^_\d+_').hasMatch(name)) {
+        labels.add((int.parse(l.group(1)!, radix: 16), name));
+      }
       continue;
     }
     final c = codeLine.firstMatch(line);
@@ -225,7 +228,9 @@ Future<void> main(List<String> args) async {
     tcmInitDir: work,
   );
   await top.build();
-  var sv = top.generateSynth();
+  // Without ROHD's generation time, so an unchanged design isn't rebuilt
+  var sv = top.generateSynth().replaceAll(
+      RegExp(r'^.*Generation time:.*\n', multiLine: true), '');
   final ends = RegExp(r'^endmodule : ParticleCpuCore(_\d+)?$', multiLine: true);
   if (!ends.hasMatch(sv)) throw StateError('no ParticleCpuCore module in the design');
   sv = sv.replaceAllMapped(ends, (m) => '$_profileBlock${m.group(0)}');

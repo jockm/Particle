@@ -268,7 +268,7 @@ These behaviours are specific to the simulator and are not architectural:
 - Every other trap, including a misaligned access (Vector 14), goes to its vector as on hardware.
 - Execution stops if the PC leaves simulated memory (default 128 KiB, address-wrapped for data accesses), or after 10,000,000 cycles (change it with `--max-cycles`).
 - Exit code: 0 after `TRAP 0`, 15 after `TRAP 15` (1–14 are reserved for traps that may end a run in future), 16 for a simulator error (file not found, bad arguments), 17 when the cycle limit is reached, 18 when the PC runs past the end of memory, 19 when a cluster deadlocks.
-- Opcodes not listed in this document execute as no-ops in the simulator; on hardware they raise Vector 15.
+- Opcodes not listed in this document raise Vector 15, in the simulator as on hardware.
 - `psim -C <file.json>` runs several cores in lock step, with FIFO channels routed between cores, a shared memory window, and `MBOX` between cores (see the simulator documentation). With one core, `MBOX` does nothing.
 - A cluster run that can make no progress (every running core waiting on an empty FIFO) ends with exit code 19.
 

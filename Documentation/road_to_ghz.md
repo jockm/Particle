@@ -179,7 +179,7 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 | 9 | Measure each Parcore stage's busy and waiting cycles, and dependency waits | Done: `make parcore-profile`. Baseline on `apps/riscv/bench.S`: 285 cycles per RISC-V instruction; core 1 (ID) is the bottleneck, running 77% of the time with 23% bubbles, while core 2 waits 64% and core 3 82% |
 | 10 | SARF, or a cheaper alternative (such as an EX-to-ID result FIFO), decided from 9's numbers | Not decided |
 | 11 | Smaller register file (shadow banks) | Not started |
-| 12 | Stage firmware rewritten with `JTBL`, `BEXTR` and `DIV` | In progress (337): core 1 first, then core 2, then cores 3 and 0, one package each; the core 1 to core 2 packet may change (350) |
+| 12 | Stage firmware rewritten with `JTBL`, `BEXTR` and `DIV` | In progress (337), one package per core; the core 1 to core 2 packet may change (350). Core 1 done: `bench.S` went from 285 to 163 cycles per RISC-V instruction. Core 1 now spends about 22% of its time waiting for a source register's writeback, and core 2 runs 44%: the latency through cores 2 and 3 is the next limit. Next: core 2 |
 | 13 | Particle ISA additions: 2-word branches, compare-and-branch, immediate `BEXTR`, `JTBL` strides, `WAIT`/`HALT` | Agreed (337): after 12 |
 | 14 | `MBOX` redesign: R14 and `RETI`, masking, no lost messages, any target, through the interconnect | Agreed (338): with 13 |
 | 15 | Network on chip replacing the dedicated FIFOs | Agreed (339): design note first |
