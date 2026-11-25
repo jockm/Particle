@@ -22,175 +22,129 @@
 
     VECTOR_TABLE _reset_vector
 _reset_vector:
-    LD      R1, 0               ; FIFO Ch0: Inbound from Core 2 (EX)
+    LDI     R1, 0x000F          ; R1 = 0x000F0004: the memory-op and cancel bits
+    SHIFTL  R1, 8
+    SHIFTL  R1, 8
+    OR      R1, 4
     LD      R2, 1               ; FIFO Ch1: Outbound WB to Core 1 (memToWb)
     LD      R7, 2               ; FIFO Ch2: Outbound store mirror to Core 0 (memToIf)
                                 ; FIFO Ch3: the FTDI UART (guest I/O, _io_access)
+                                ; FIFO Ch0 (R0): Inbound from Core 2 (EX)
 
 ; ==============================================================================
-; Main Memory Pipeline Loop
+; Main loop. Packets from core 2: [control word, result, address, store data].
+; Most are ALU results on their way to core 1: they take the fast path.
 ; ==============================================================================
 _mem_main_loop:
-    FIFO.R  R10, R1             ; Word 0: Control Word [uop:8 | funct:8 | Rd:8 | flags:8]
-    FIFO.R  R11, R1             ; Word 1: ALU Result
-    FIFO.R  R12, R1             ; Word 2: Effective Memory Address
-    FIFO.R  R13, R1             ; Word 3: Store Data (Rs2 Value)
-
-    ; Test valid bit (bit 0)
-    LD      R3, R10
-    AND     R3, 1
-    FBRA.NZ R3, _process_mem_packet
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
-
-_process_mem_packet:
-    ; Extract Rd index: Control Word [15:8]
+    FIFO.R  R10, R0             ; control word
+    FIFO.R  R11, R0             ; result
+    FIFO.R  R12, R0             ; address
+    FIFO.R  R13, R0             ; store data
     LD      R4, R10
-    SHIFTR  R4, 8
-    LOAD16  R5, 0x1F
-    AND     R4, R5              ; R4 = Rd index
+    LD      R14, 8 + 5 * 32
+    BEXTR   R4, R14             ; R4 = Rd
+    LD      R14, R10
+    AND     R14, R1
+    FBRA.NZ R14, _not_alu       ; a memory operation or a cancel
+_send_wb_tokens:
+    ; A writeback for core 1 (one for x0 is ignored there)
+    FIFO.W  R4, R2              ; Rd
+    FIFO.W  R11, R2             ; the value
+    BBRA    _mem_main_loop
 
-    ; A cancel from core 2 (flags bit 2): core 1 gets Rd + 0x20, which takes
-    ; the register off its in-flight count without writing it
+; ------------------------------------------------------------------------------
+; A cancel from core 2 (bit 2): core 1 gets Rd + 0x20, which takes the
+; register off its in-flight count without writing it. Otherwise dispatch on
+; the memory operation (bits 19:16): 1-5 loads LB, LH, LW, LBU, LHU; 8-10
+; stores SB, SH, SW; 11 FENCE.I.
+; ------------------------------------------------------------------------------
+_not_alu:
     LD      R14, R10
     AND     R14, 4
     FBRA.Z  R14, ._not_cancel
-    LOAD16  R5, 0x20
-    OR      R4, R5
-    LOAD16  R14, _send_wb_tokens
-    JMP     R14, R0
+    BSET    R4, 5               ; Rd + 0x20
+    JUMP    _send_wb_tokens
 ._not_cancel:
-
-    ; Inspect Memory Operation Type: Control Word [19:16]
     LD      R3, R10
-    SHIFTR  R3, 12
-    SHIFTR  R3, 4
-    LD      R5, 0x0F
-    AND     R3, R5
-    FBRA.Z  R3, _route_alu_wb   ; Non-memory instruction -> direct writeback
-    LOAD16  R14, _dispatch_mem_op
-    JMP     R14, R0
-
-_route_alu_wb:
-    ; Non-memory ALU result -> writeback to Core 1
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
-
-; ==============================================================================
-; Memory Operation Dispatch
-; 1..5: Loads  (1: LB, 2: LH, 3: LW, 4: LBU, 5: LHU)
-; 8..10: Stores (8: SB, 9: SH, 10: SW)
-; ==============================================================================
-_dispatch_mem_op:
+    SHIFTR  R3, 8
+    SHIFTR  R3, 8
+    AND     R3, 15              ; the memory operation
     ; Guest I/O (address bits 31:28 = 1), before anything touches the TCM.
     ; (A FENCE.I item carries pc + 4 here, never an I/O address.)
     LD      R14, R12
     SHIFTR  R14, 14
     SHIFTR  R14, 14
     SUB     R14, 1
-    FBRA.NZ R14, ._not_io
-    LOAD16  R14, _io_access
-    JMP     R14, R0
-._not_io:
-    ; Check Stores (8..10)
-    LOAD16  R5, 8
-    LD      R6, R3
-    SUB     R6, R5
-    FBRA.NZ R6, _chk_sh
-    LOAD16  R14, _do_sb
-    JMP     R14, R0
-
-_chk_sh:
-    LOAD16  R5, 9
-    LD      R6, R3
-    SUB     R6, R5
-    FBRA.NZ R6, _chk_sw
-    LOAD16  R14, _do_sh
-    JMP     R14, R0
-
-_chk_sw:
-    LOAD16  R5, 10
-    LD      R6, R3
-    SUB     R6, R5
-    FBRA.NZ R6, _chk_fence_i
-    LOAD16  R14, _do_sw
-    JMP     R14, R0
-
-_chk_fence_i:
-    ; 11: FENCE.I. No writeback (core 1 counts no destination for it).
-    LOAD16  R5, 11
-    LD      R6, R3
-    SUB     R6, R5
-    FBRA.NZ R6, _chk_loads
-    LOAD16  R9, MIRROR_MARKER
-    LOAD16  R14, _mirror_push
-    JMP     R14, R0
-
-_chk_loads:
-    ; Check Loads (1: LB, 2: LH, 3: LW, 4: LBU, 5: LHU)
-    LD      R6, R3
-    SUB     R6, 1
-    FBRA.NZ R6, _chk_lh
-    LOAD16  R14, _do_lb
-    JMP     R14, R0
-
-_chk_lh:
-    LD      R6, R3
-    SUB     R6, 2
-    FBRA.NZ R6, _chk_lw
-    LOAD16  R14, _do_lh
-    JMP     R14, R0
-
-_chk_lw:
-    LD      R6, R3
-    SUB     R6, 3
-    FBRA.NZ R6, _chk_lbu
-    LOAD16  R14, _do_lw
-    JMP     R14, R0
-
-_chk_lbu:
-    LD      R6, R3
-    SUB     R6, 4
-    FBRA.NZ R6, _chk_lhu
-    LOAD16  R14, _do_lbu
-    JMP     R14, R0
-
-_chk_lhu:
-    LD      R6, R3
-    SUB     R6, 5
-    FBRA.NZ R6, _mem_drop
-    LOAD16  R14, _do_lhu
-    JMP     R14, R0
-
+    FBRA.Z  R14, _t_io
+    JTBL    R3
+    FBRA    _mem_drop           ; 0 (not reached)
+    FBRA    _do_lb              ; 1
+    FBRA    _do_lh              ; 2
+    FBRA    _do_lw              ; 3
+    FBRA    _do_lbu             ; 4
+    FBRA    _do_lhu             ; 5
+    FBRA    _mem_drop           ; 6
+    FBRA    _mem_drop           ; 7
+    FBRA    _do_sb              ; 8
+    FBRA    _do_sh              ; 9
+    FBRA    _do_sw              ; 10
+    FBRA    _do_fence_i         ; 11
+    FBRA    _mem_drop           ; 12
+    FBRA    _mem_drop           ; 13
+    FBRA    _mem_drop           ; 14
+    FBRA    _mem_drop           ; 15
+_t_io:
+    JUMP    _io_access
 _mem_drop:
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
+    JUMP    _mem_main_loop
 
-; ==============================================================================
-; Store Operations (SB, SH, SW) - No Writeback Produced
-; ==============================================================================
+; Loads: R11 = the value, then the writeback
+_do_lw:
+    LD32    R11, (R12)
+    JUMP    _send_wb_tokens
+_do_lb:
+    LD8     R11, (R12)
+    SHIFTL  R11, 12
+    SHIFTL  R11, 12
+    ASHIFTR R11, 12
+    ASHIFTR R11, 12             ; sign-extend the byte
+    JUMP    _send_wb_tokens
+_do_lh:
+    LD16    R11, (R12)
+    SHIFTL  R11, 8
+    SHIFTL  R11, 8
+    ASHIFTR R11, 8
+    ASHIFTR R11, 8              ; sign-extend the halfword
+    JUMP    _send_wb_tokens
+_do_lbu:
+    LD8     R11, (R12)          ; LD8 and LD16 zero-extend
+    JUMP    _send_wb_tokens
+_do_lhu:
+    LD16    R11, (R12)
+    JUMP    _send_wb_tokens
+
+; Stores: no writeback; then the mirror to core 0
 _do_sb:
-    ; Byte store: ST8 to effective address
     ST8     (R12), R13
-    LOAD16  R8, MIRROR_BYTE
-    LOAD16  R14, _mirror_store
-    JMP     R14, R0
-
+    LDI     R8, MIRROR_BYTE
+    JUMP    _mirror_store
 _do_sh:
-    ; Halfword store: ST16 to effective address
     ST16    (R12), R13
-    LOAD16  R8, MIRROR_HALF
-    LOAD16  R14, _mirror_store
-    JMP     R14, R0
-
+    LDI     R8, MIRROR_HALF
+    JUMP    _mirror_store
 _do_sw:
-    ; Word store: ST32 to effective address. Mirrored as two halfwords: the
-    ; low one here, the high one at address + 2 by _mirror_store.
+    ; Mirrored as two halfwords: the low one here, the high one at address
+    ; + 2 by _mirror_store
     ST32    (R12), R13
-    LOAD16  R8, MIRROR_HALF
+    LDI     R8, MIRROR_HALF
     OR      R8, 1               ; bit 0: a word store
-    LOAD16  R14, _mirror_store
-    JMP     R14, R0
+    JUMP    _mirror_store
+
+; FENCE.I: no writeback (core 1 counts no destination for it); the marker
+; for core 0, after every store before it
+_do_fence_i:
+    LDI     R9, MIRROR_MARKER
+    JUMP    _mirror_push
 
 ; ==============================================================================
 ; Store mirror (FENCE.I coherence): R12 address, R13 data, R8 kind (bit 0 set
@@ -226,19 +180,16 @@ _mirror_store:
     OR      R9, R12
     ADD     R9, 2
     OR      R9, R8
-    LOAD16  R14, _mirror_push
-    JMP     R14, R0
+    JUMP    _mirror_push
 ._outside:
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
+    JUMP    _mem_main_loop
 
 ; Push the entry in R9 once memToIf has room, then go back to the main loop
 _mirror_push:
     LOAD16  R5, _mirror_wait
     JMP     R5, R15
     FIFO.W  R9, R7
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
+    JUMP    _mem_main_loop
 
 ; Wait while memToIf holds 128 words or more (core 0 drains it); returns to
 ; the address in R15
@@ -247,64 +198,6 @@ _mirror_wait:
     SHIFTR  R6, 15              ; depth[7]
     BBRA.NZ R6, _mirror_wait
     JMP     R15, R0
-
-; ==============================================================================
-; Load Operations (LB, LH, LW, LBU, LHU)
-; ==============================================================================
-_do_lb:
-    ; Signed byte load
-    LD8     R11, (R12)
-    LOAD16  R5, 24
-    SHIFTL  R11, R5
-    ASHIFTR R11, R5        ; Sign-extend byte to 32 bits
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
-
-_do_lh:
-    ; Signed halfword load
-    LD16    R11, (R12)
-    LOAD16  R5, 16
-    SHIFTL  R11, R5
-    ASHIFTR R11, R5        ; Sign-extend halfword to 32 bits
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
-
-_do_lw:
-    ; Word load
-    LD32    R11, (R12)
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
-
-_do_lbu:
-    ; Unsigned byte load
-    LD8     R11, (R12)
-    LOAD16  R5, 0xFF
-    AND     R11, R5             ; Zero-extend byte
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
-
-_do_lhu:
-    ; Unsigned halfword load
-    LD16    R11, (R12)
-    LOAD16  R5, 0xFFFF
-    AND     R11, R5             ; Zero-extend halfword
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
-
-; ==============================================================================
-; Writeback Outbound Section
-; ==============================================================================
-_emit_writeback:
-    ; Only emit writeback packet if Rd != 0 (x0 writes are discarded)
-    FBRA.NZ R4, _send_wb_tokens
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
-
-_send_wb_tokens:
-    FIFO.W  R4, R2              ; Token 0: Destination Register Rd
-    FIFO.W  R11, R2             ; Token 1: 32-bit Committed Data
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
 
 ; ==============================================================================
 ; Guest I/O: the FTDI UART, on FIFO channel 3
@@ -339,8 +232,7 @@ _io_access:
     FIFO.TRYW R13, R6           ; R14 = 1 when the byte was sent
     BBRA.Z  R14, ._io_send
 ._io_done:
-    LOAD16  R14, _mem_main_loop
-    JMP     R14, R0
+    JUMP    _mem_main_loop
 ._io_load:
     LD      R11, 0
     LD      R14, R5
@@ -369,5 +261,4 @@ _io_access:
     OR      R14, R5
     LD32    R11, (R14)
 ._io_result:
-    LOAD16  R14, _emit_writeback
-    JMP     R14, R0
+    JUMP    _send_wb_tokens
