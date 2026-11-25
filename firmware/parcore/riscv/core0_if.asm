@@ -9,11 +9,12 @@
 ; 5-word packet: [control word, w1, w2, B, W3] (see parcore_ops.inc). It
 ; predicts as it goes: it follows JAL (and sends nothing for a JAL with no
 ; link), guesses backward branches taken and forward branches not taken,
-; and fetches down the guessed path. Core 2 redirects it when a guess is
-; wrong, on JALR, MRET and traps, and for FENCE.I.
+; predicts returns with a return-address stack, and fetches down the
+; guessed path. Core 2 redirects it when a guess is wrong, on other JALRs,
+; MRET and traps, and for FENCE.I.
 ;
-; TCM (16 KiB): the vectors, redirect handlers and _apply_mirror below
-; 0x500; the guest image at 0x500-0x1FFF (kept the same as core 3's by its
+; TCM (16 KiB): the return-address stack in the zero page; the vectors,
+; redirect handlers and _apply_mirror below 0x500; the guest image at 0x500-0x1FFF (kept the same as core 3's by its
 ; store mirror); the fetch and decode loop from 0x2000.
 ;
 ; Registers kept for the whole run:
@@ -32,6 +33,23 @@
 ; The packets core 0 may have queued in ifToId: it sends another only while
 ; fewer than 16 words are there (four 5-word packets at most)
 .define QUEUE_SHIFT     12      ; status >> 12 = words queued / 16
+
+; The return-address stack: 16 words at 0x00-0x3F, used as a ring (a deeper
+; call chain overwrites the oldest), and the index of its top at RAS_TOP. A
+; call (JAL or JALR with rd x1 or x5) pushes PC + 4; a return (JALR with rd
+; x0 and rs1 x1 or x5) pops its guess. A wrong guess costs a redirect.
+.define RAS_TOP         0x40
+
+; Push R15 (PC + 4) on the return-address stack. Uses R2, R14.
+.macro RAS_PUSH
+    LD      R14, RAS_TOP
+    LD32    R2, (R14)
+    ADD     R2, 1
+    AND     R2, 15
+    ST32    (R14), R2
+    SHIFTL  R2, 2
+    ST32    (R2), R15
+.endmacro
 
 ; dst = src[pos + len - 1 : pos] (len 1..7). Uses R14.
 .macro FIELD dst, src, pos, len
@@ -64,6 +82,8 @@ _reset_vector:
     LD      R8, 2               ; memToIf
     LD      R9, 1               ; valid, epoch 0
     LD      R11, 0              ; no mirror entry
+    LD      R14, RAS_TOP
+    ST32    (R14), R0           ; the return-address stack: empty (all zero)
     JUMP    _if_main_loop
 
 ; ==============================================================================
@@ -473,8 +493,11 @@ _t_op_funct7:
     JUMP    _op_funct7
 
 ; ------------------------------------------------------------------------------
-; JALR: OP_JALR, CLASS_RS1_IMM, B the I-immediate. Not predicted: core 2
-; redirects; until then core 0 fetches on from PC + 4.
+; JALR: OP_JALR, CLASS_RS1_IMM, B the I-immediate. A call (rd x1 or x5)
+; pushes PC + 4 and isn't predicted: core 2 redirects, and until then core 0
+; fetches on from PC + 4. A return (rd x0, rs1 x1 or x5) is predicted from
+; the return-address stack: core 0 fetches the guess, sets bit 3 and sends
+; the guess as W3; core 2 redirects only if the target differs.
 ; ------------------------------------------------------------------------------
 _h_jalr:
     FIELD   R2, R5, 12, 3       ; funct3: 0 only
@@ -483,6 +506,30 @@ _h_jalr:
     LD      R7, R5
     ASHIFTR R7, 15
     ASHIFTR R7, 5
+    LD      R14, R6
+    FBRA.Z  R14, ._jalr_rd0
+    OR      R14, 4
+    SUB     R14, 5
+    FBRA.NZ R14, ._jalr_send    ; rd not x1 or x5: not a call
+    RAS_PUSH
+    FBRA    ._jalr_send
+._jalr_rd0:
+    LD      R14, R4
+    OR      R14, 4
+    SUB     R14, 5
+    FBRA.NZ R14, ._jalr_send    ; rs1 not x1 or x5: not a return
+    ; A return: pop the guess
+    LD      R14, RAS_TOP
+    LD32    R2, (R14)
+    LD      R13, R2
+    SHIFTL  R13, 2
+    LD32    R13, (R13)          ; W3: the guess
+    SUB     R2, 1
+    AND     R2, 15
+    ST32    (R14), R2
+    OR      R3, 8               ; predicted
+    LD      R15, R13            ; fetch the guess next
+._jalr_send:
     LDI     R2, OP_JALR * 256 + CLASS_RS1_IMM * 16
     JUMP    _send_rd
 _t_illegal:
@@ -518,10 +565,17 @@ _h_jal:
     SHIFTR  R14, 7
     SHIFTL  R14, 1
     OR      R7, R14             ; inst[30:21] at bits 10:1
+    LD      R14, R6
+    FBRA.Z  R14, ._jal_go       ; no link
+    OR      R14, 4
+    SUB     R14, 5
+    FBRA.NZ R14, ._jal_go       ; rd not x1 or x5: not a call
+    RAS_PUSH                    ; R15 = PC + 4
+._jal_go:
     LD      R15, R10
     ADD     R15, R7             ; fetch the target next
     LD      R14, R6
-    BBRA.Z  R14, _advance       ; no link
+    BBRA.Z  R14, _advance       ; no link: nothing to send
     LDI     R2, OP_JAL * 256 + CLASS_IMM * 16
     JUMP    _send_rd
 

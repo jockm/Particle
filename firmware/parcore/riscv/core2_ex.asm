@@ -418,8 +418,9 @@ _b_wrong:
 
 ; ------------------------------------------------------------------------------
 ; JAL: core 0 followed it, and sends it only with a link: R15 = PC + 4 to rd.
-; JALR (R11 + R12): R15 = the link, redirect to the target; the link goes to
-; core 3 only for a destination register.
+; JALR (R11 + R12): a return core 0 predicted (bit 3) redirects only if its
+; guess (R13) was wrong; any other: R15 = the link, redirect to the target,
+; and the link goes to core 3 for a destination register.
 ; ------------------------------------------------------------------------------
 _op_jal:
     LD      R15, R13
@@ -429,6 +430,18 @@ _op_jalr:
     LD      R14, R11
     ADD     R14, R12
     BCLR    R14, 0
+    LD      R4, R10
+    BGET    R4, 3
+    FBRA.Z  R4, ._jalr_unpredicted
+    ; A return core 0 predicted (Rd 0): R13 is its guess
+    LD      R4, R14
+    SUB     R4, R13
+    FBRA.NZ R4, ._jalr_wrong
+    JUMP    _ex_main_loop
+._jalr_wrong:
+    SEND_REDIRECT
+    JUMP    _ex_main_loop
+._jalr_unpredicted:
     LD      R15, R13
     ADD     R15, 4              ; the link: PC + 4
     SEND_REDIRECT
