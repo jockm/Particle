@@ -233,6 +233,7 @@ The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, sho
 | `make parcore-guest` | Builds the guest program `PARCORE_GUEST` (default `apps/riscv/hello.S`) into `build/riscv/` (needs a RISC-V GCC or LLVM toolchain) |
 | `make parcore-image` | Builds the boot image, `build/parcore_ulx3s/parcore_image.bin`: the stage firmware and the guest |
 | `make parcore-bit` | Generates the ULX3S design with that image (`PARCORE_CLOCK_HZ`, default 25 MHz) and synthesizes, places and routes it: `build/parcore_ulx3s/parcore_ulx3s.bit` |
+| `make parcore-size` | The size of each kind of core and of every module (LUT4s, flip-flops, block RAMs and so on), without place and route: `build/parcore_ulx3s/size_report.txt` |
 | `make parcore-timing` | The last `parcore-bit`'s Fmax and critical path |
 | `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator and prints the cycles per RISC-V instruction, overall and per phase, and where each stage core's cycles go (see [Profiling](#profiling)) |
 | `make parcore-prog`, `make parcore-flash` | Load the bitstream into the ULX3S, or write it to its flash |

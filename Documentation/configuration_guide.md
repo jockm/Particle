@@ -59,7 +59,8 @@ make ulx3s-term                                   # talk to it over the FTDI UAR
 | Target | Does |
 |---|---|
 | `make generate-ulx3s` | Builds `ULX3S_PROGRAM` with `pbuild --format hex` into `build/ulx3s/program.hex`, then runs `hdl/particle/bin/generate_ulx3s.dart`. That splits the image into the two block RAM banks (`program_bank0.hex`, `program_bank1.hex`, placed at `0x100`) and writes `particle_ulx3s.sv`, whose top level is `ulx3s_board`. |
-| `make ulx3s-bit` | `generate-ulx3s`, then Yosys (`synth_ecp5`), nextpnr (`--85k --package CABGA381`, pins from `hdl/particle/boards/ulx3s/ulx3s_v20.lpf`) and `ecppack`, in `build/ulx3s`. Prints nextpnr's maximum frequency; the logs are `yosys.log` and `nextpnr.log`. The bitstream is `build/ulx3s/particle_ulx3s.bit`. |
+| `make ulx3s-bit` | `generate-ulx3s`, then Yosys (`synth_ecp5`), nextpnr (`--85k --package CABGA381`, pins from `hdl/particle/boards/ulx3s/ulx3s_v20.lpf`) and `ecppack`, in `build/ulx3s`. Prints nextpnr's maximum frequency and the device totals (LUT4s, flip-flops, block RAMs, multipliers); the logs are `yosys.log` and `nextpnr.log`. The bitstream is `build/ulx3s/particle_ulx3s.bit`. |
+| `make ulx3s-size` | `generate-ulx3s`, then Yosys again with the modules kept separate (`synth_ecp5 -noflatten`), and `hdl/particle/boards/size_report.py` prints the size of the core (core logic, register file, ALU, multiplier, divider) and of every module: LUT4s, carry cells, flip-flops, LUT RAM, block RAMs, multipliers. Saved in `build/ulx3s/size_report.txt`. About half a minute; no place and route. The totals are a little higher than nextpnr's, which packs a few LUTs away. |
 | `make ulx3s-prog` | Loads the bitstream into the board's FPGA with `openFPGALoader -b ulx3s` (until the next power cycle). |
 | `make ulx3s-flash` | Writes the bitstream to the board's configuration flash (`openFPGALoader -b ulx3s -f`), so it loads at every power-up. |
 | `make ulx3s-term` | Opens the FTDI UART with `hdl/particle/boards/ulx3s/ulx3s_term.py`, a small terminal using only the Python standard library: the first `/dev/cu.usbserial-*` (macOS) or `/dev/ttyUSB*` (Linux) port, at 1 Mbps (`ULX3S_PORT`, `ULX3S_BAUD`). Ctrl-] leaves. |
@@ -97,6 +98,7 @@ Building the guest, like `make test-parcore-isa`, needs a RISC-V toolchain: a RI
 | `make parcore-guest` | Builds `PARCORE_GUEST` into `build/riscv/<name>.bin`, linked at `0x500` (`apps/riscv/link.ld`) |
 | `make parcore-image` | `firmware` and `parcore-guest`, then the boot image `build/parcore_ulx3s/parcore_image.bin` |
 | `make parcore-bit` | Generates the design with that image, then Yosys, nextpnr (`--router router2`) and `ecppack`, in `build/parcore_ulx3s`: `parcore_ulx3s.bit` |
+| `make parcore-size` | The size of each kind of core and of every module, as `make ulx3s-size` does: `build/parcore_ulx3s/size_report.txt`. `parcore-bit` prints the device totals |
 | `make parcore-timing` | The last build's Fmax and critical path |
 | `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator: cycles per RISC-V instruction and where each stage core's cycles go. Needs Verilator and a RISC-V toolchain |
 | `make parcore-prog` | Loads the bitstream into the board (lost at power-off) |

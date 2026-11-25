@@ -75,8 +75,8 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
-        generate-ulx3s ulx3s-bit ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
-        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-timing parcore-prog parcore-flash parcore-profile
+        generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
+        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -112,6 +112,7 @@ help:
 	@echo "  make generate         - Generate synthesizable SystemVerilog (.sv)"
 	@echo "  make generate-ulx3s   - Generate the ULX3S design with a program (ULX3S_PROGRAM=...) in build/ulx3s"
 	@echo "  make ulx3s-bit        - Synthesize, place and route the ULX3S design (build/ulx3s/particle_ulx3s.bit)"
+	@echo "  make ulx3s-size       - Report the ULX3S design's size per module (build/ulx3s/size_report.txt)"
 	@echo "  make ulx3s-timing     - Show the last ULX3S build's Fmax and critical path (from nextpnr.log)"
 	@echo "  make ulx3s-prog       - Load build/ulx3s/particle_ulx3s.bit into the ULX3S (openFPGALoader)"
 	@echo "  make ulx3s-flash      - Write build/ulx3s/particle_ulx3s.bit to the ULX3S flash (kept across power cycles)"
@@ -119,6 +120,7 @@ help:
 	@echo "  make parcore-guest    - Build the RISC-V guest program (PARCORE_GUEST=apps/riscv/hello.S; RISC-V GCC or LLVM)"
 	@echo "  make parcore-image    - Build the Parcore boot image (stage firmware + guest) in build/parcore_ulx3s"
 	@echo "  make parcore-bit      - Synthesize, place and route Parcore for the ULX3S (PARCORE_CLOCK_HZ=...)"
+	@echo "  make parcore-size     - Report Parcore's size per core and per module (build/parcore_ulx3s/size_report.txt)"
 	@echo "  make parcore-timing   - Show the last Parcore build's Fmax and critical path"
 	@echo "  make parcore-prog     - Load build/parcore_ulx3s/parcore_ulx3s.bit into the ULX3S"
 	@echo "  make parcore-flash    - Write build/parcore_ulx3s/parcore_ulx3s.bit to the ULX3S flash"
@@ -176,6 +178,9 @@ YOSYS          ?= yosys
 NEXTPNR_ECP5   ?= nextpnr-ecp5
 ECPPACK        ?= ecppack
 OPENFPGALOADER ?= openFPGALoader
+SIZE_REPORT    := $(ROHD_DIR)/boards/size_report.py
+# The device totals from nextpnr's log, printed after each bitstream build
+size_totals = grep -E "Total (LUT4s|DFFs):|DP16KD:|MULT18X18D:" $(1) | sed 's/^Info:[[:space:]]*//'
 
 generate-ulx3s: setup $(PASM_BIN) $(PASM_LINT_BIN)
 	@echo "==> Building $(ULX3S_PROGRAM) for the ULX3S block RAM..."
@@ -196,7 +201,18 @@ ulx3s-bit: generate-ulx3s
 		--freq $$(( $(ULX3S_CLOCK_HZ) / 1000000 )) -l nextpnr.log
 	@cd $(ULX3S_BLD) && $(ECPPACK) --compress particle_ulx3s.config particle_ulx3s.bit
 	@grep "Max frequency for clock" $(ULX3S_BLD)/nextpnr.log | tail -1
+	@$(call size_totals,$(ULX3S_BLD)/nextpnr.log)
 	@echo "==> Bitstream: $(ULX3S_BLD)/particle_ulx3s.bit"
+	@$(DOT_CLEAN_CMD)
+
+# The size of each module: Yosys synthesizes the design again with the modules
+# kept separate (the bitstream build flattens them), and size_report.py prints
+# a table per core and per module. Totals differ a little from nextpnr's.
+ulx3s-size: generate-ulx3s
+	@echo "==> Synthesizing with modules kept separate (Yosys; log in build/ulx3s/size.log)..."
+	@cd $(ULX3S_BLD) && $(YOSYS) -q -l size.log \
+		-p "read_verilog -sv particle_ulx3s.sv; synth_ecp5 -top ulx3s_board -noflatten; tee -q -o size_stat.json stat -json"
+	@$(PYTHON) $(SIZE_REPORT) $(ULX3S_BLD)/size_stat.json | tee $(ULX3S_BLD)/size_report.txt
 	@$(DOT_CLEAN_CMD)
 
 # The critical path from the last ulx3s-bit: one line per step (type, delay,
@@ -278,7 +294,16 @@ parcore-bit: generate-parcore-ulx3s
 		--freq $$(( $(PARCORE_CLOCK_HZ) / 1000000 )) -l nextpnr.log
 	@cd $(PARCORE_ULX3S_BLD) && $(ECPPACK) --compress parcore_ulx3s.config parcore_ulx3s.bit
 	@grep "Max frequency for clock" $(PARCORE_ULX3S_BLD)/nextpnr.log | tail -1
+	@$(call size_totals,$(PARCORE_ULX3S_BLD)/nextpnr.log)
 	@echo "==> Bitstream: $(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
+	@$(DOT_CLEAN_CMD)
+
+# Parcore's size per core and per module (see ulx3s-size)
+parcore-size: generate-parcore-ulx3s
+	@echo "==> Synthesizing with modules kept separate (Yosys; log in build/parcore_ulx3s/size.log)..."
+	@cd $(PARCORE_ULX3S_BLD) && $(YOSYS) -q -l size.log \
+		-p "read_verilog -sv parcore_ulx3s.sv; synth_ecp5 -top ulx3s_board -noflatten; tee -q -o size_stat.json stat -json"
+	@$(PYTHON) $(SIZE_REPORT) $(PARCORE_ULX3S_BLD)/size_stat.json | tee $(PARCORE_ULX3S_BLD)/size_report.txt
 	@$(DOT_CLEAN_CMD)
 
 # The critical path from the last parcore-bit
