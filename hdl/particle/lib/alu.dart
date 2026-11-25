@@ -79,9 +79,7 @@ class ParticleAlu extends Module {
     final amount = mux(left, Const(0, width: 5) - s, s);
     var rot = a;
     for (var k = 0; k < 5; k++) {
-      final c = 1 << k;
-      final rotated = [rot.getRange(0, c), rot.getRange(c, w)].swizzle();
-      rot = mux(amount[k], rotated, rot);
+      rot = ParticleRotateStage(rot, amount[k], 1 << k, name: 'rot_stage$k').y;
     }
     // leftMask bit i = (i >= s): the bits a left shift by s keeps.
     // rightMask is its mirror image: the bits a right shift by s keeps.
@@ -224,5 +222,42 @@ class ParticleAlu extends Module {
     // count is 5 bits (0..31); all zero gives 32
     return mux(allZero, Const(32, width: ParticleWidths.word),
         count.zeroExtend(ParticleWidths.word));
+  }
+}
+
+/// One stage of the ALU's rotator: [y] is [a] rotated right by [count] bits
+/// when [s] is high, else [a].
+///
+/// Each stage is generated as its own module marked `(* keep_hierarchy *)`.
+/// Left to itself, Yosys's ECP5 mapping merges the five stages into a 32-way
+/// multiplexer per bit, about 500 LUT4s; kept apart, each stage is 32 LUT4s.
+class ParticleRotateStage extends Module with SystemVerilog {
+  Logic get y => output('y');
+
+  /// The rotation, in bits.
+  final int count;
+
+  ParticleRotateStage(Logic a, Logic s, this.count,
+      {super.name = 'rotate_stage'})
+      : super(definitionName: 'ParticleRotateStage_$count') {
+    a = addInput('a', a, width: a.width);
+    s = addInput('s', s);
+    addOutput('y', width: a.width);
+    y <= mux(s, [a.getRange(0, count), a.getRange(count, a.width)].swizzle(), a);
+  }
+
+  @override
+  String? definitionVerilog(String definitionType) {
+    final w = input('a').width;
+    return '''
+(* keep_hierarchy *)
+module $definitionType (
+  input logic [${w - 1}:0] a,
+  input logic s,
+  output logic [${w - 1}:0] y
+);
+  assign y = s ? {a[${count - 1}:0], a[${w - 1}:$count]} : a;
+endmodule
+''';
   }
 }
