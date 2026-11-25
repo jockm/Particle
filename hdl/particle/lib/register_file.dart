@@ -2,7 +2,7 @@
 // File: hdl/particle/lib/register_file.dart
 // Architecture: Particle 32-bit RISC Core
 // Description: 16x32 Register File with hardwired R0, dual read ports, two
-//              write ports, and a single-cycle shadow bank.
+//              write ports, and a single-cycle shadow bank, in LUT RAM.
 // =============================================================================
 //
 // Registers R0..R15 are addressed by their 4-bit index. R0 reads as zero and
@@ -10,9 +10,32 @@
 //
 // Write ports: port 1 (wAddr/wData/wEn) and port 2 (wAddr2/wData2/wEn2).
 // When both write the same register in the same cycle, port 2 wins.
+//
+// Storage:
+//   * R14 and S14 are flip-flops. Every second write the core makes in one
+//     cycle (TRYR's status, trap and MBOX entry, the odd-target trap) goes to
+//     R14, so R14 has a write port of its own.
+//   * The other registers and their shadows are in two LUT RAMs, bank 0 and
+//     bank 1, each with one write port. A bank bit per register says which
+//     bank holds its active value; XCHG, XCHGALL and XCHGMOST flip bank bits
+//     (and swap R14 with S14), so they stay single-cycle. A read reads both
+//     banks and picks one with the register's bank bit.
+//   * Entry 0 of bank 0 is R0: it is never written except by the clear, so it
+//     stays zero.
+//   * The LUT RAMs have one write port, so at most one write per cycle may go
+//     to them. The core never makes two (a pointer update, the only port-2
+//     write outside R14, never comes in the same cycle as a port-1 write);
+//     simulation stops with an error if it happens.
+//   * LUT RAM can't be reset. After reset, [clearing] is high for 16 cycles
+//     while both banks are written with zeros; the core is held in reset
+//     until it falls.
+//   * As before, a swap and a write to the same register in one cycle keep
+//     the swap.
 
 import 'package:rohd/rohd.dart';
+
 import 'constants.dart';
+import 'lut_ram.dart';
 
 class RegisterFile extends Module {
   Logic get clk => input('clk');
@@ -39,9 +62,16 @@ class RegisterFile extends Module {
   Logic get rDataA => output('rDataA');
   Logic get rDataB => output('rDataB');
 
-  /// The 16 registers and their shadows, for tests and debugging.
-  late final List<Logic> physical;
-  late final List<Logic> shadow;
+  /// Cycles the register file takes to clear itself after reset.
+  static const clearCycles = 16;
+
+  /// High while the register file clears itself after reset ([clearCycles]).
+  Logic get clearing => output('clearing');
+
+  late final List<ParticleLutRam> _banks;
+  late final Logic _bank;
+  late final Logic _r14;
+  late final Logic _s14;
 
   RegisterFile({
     required Logic clk,
@@ -67,10 +97,16 @@ class RegisterFile extends Module {
     addInput('wAddr', wAddr, width: ParticleWidths.regAddr);
     addInput('wData', wData, width: ParticleWidths.word);
     addInput('wEn', wEn);
-    addInput('wAddr2', wAddr2 ?? Const(0, width: ParticleWidths.regAddr),
-        width: ParticleWidths.regAddr);
-    addInput('wData2', wData2 ?? Const(0, width: ParticleWidths.word),
-        width: ParticleWidths.word);
+    addInput(
+      'wAddr2',
+      wAddr2 ?? Const(0, width: ParticleWidths.regAddr),
+      width: ParticleWidths.regAddr,
+    );
+    addInput(
+      'wData2',
+      wData2 ?? Const(0, width: ParticleWidths.word),
+      width: ParticleWidths.word,
+    );
     addInput('wEn2', wEn2 ?? Const(0));
     addInput('xchgEn', xchgEn);
     addInput('xchgAllEn', xchgAllEn);
@@ -78,78 +114,160 @@ class RegisterFile extends Module {
     addInput('xchgRegIdx', xchgRegIdx, width: ParticleWidths.regAddr);
     addOutput('rDataA', width: ParticleWidths.word);
     addOutput('rDataB', width: ParticleWidths.word);
+    addOutput('clearing');
     _build();
   }
 
+  /// Register [index]'s value (R0..R15), for tests and debugging; -1 if not
+  /// valid.
+  int regValue(int index) => _value(index, active: true);
+
+  /// Shadow register [index]'s value (S0..S15); -1 if not valid.
+  int shadowValue(int index) => _value(index, active: false);
+
+  int _value(int index, {required bool active}) {
+    if (index == 0) return 0;
+    final Logic flop = active ? _r14 : _s14;
+    if (index == 14) {
+      return flop.value.isValid ? flop.value.toInt() : -1;
+    }
+    final b = _bank.value;
+    if (!b.isValid) return -1;
+    final activeBank = b[index].toBool() ? 1 : 0;
+    return _banks[active ? activeBank : 1 - activeBank].word(index);
+  }
+
   void _build() {
-    const numRegs = 16;
-    final activeRegs = List.generate(
-      numRegs,
-      (i) => Logic(name: 'r$i', width: ParticleWidths.word),
+    const w = ParticleWidths.regAddr;
+    Logic idx(int i) => Const(i, width: w);
+
+    _bank = Logic(name: 'bank', width: 16);
+    _r14 = Logic(name: 'r14', width: ParticleWidths.word);
+    _s14 = Logic(name: 's14', width: ParticleWidths.word);
+    final clearCount = Logic(name: 'clearCount', width: 4);
+    final clear = Logic(name: 'clear');
+    clearing <= clear;
+
+    // Whether register [addr] is swapped this cycle
+    Logic swapped(Logic addr) =>
+        xchgAllEn |
+        (xchgMostEn & ~addr.eq(idx(15))) |
+        (xchgEn & xchgRegIdx.eq(addr));
+    // The bank bit of register [addr]
+    Logic bankOf(Logic addr) =>
+        [for (var i = 0; i < 16; i++) _bank[i]]._select(addr);
+
+    bool inRam(int i) => i != 0 && i != 14;
+    Logic ramReg(Logic addr) => ~addr.eq(idx(0)) & ~addr.eq(idx(14));
+
+    // The one LUT RAM write: port 2's, else port 1's
+    final p2Ram = wEn2 & ramReg(wAddr2);
+    final p1Ram = wEn & ramReg(wAddr) & ~(wEn2 & wAddr2.eq(wAddr));
+    final ramWAddr = mux(p2Ram, wAddr2, wAddr);
+    final ramWData = mux(p2Ram, wData2, wData);
+    final ramWEn = (p2Ram | p1Ram) & ~swapped(ramWAddr);
+    final ramBank = bankOf(ramWAddr);
+
+    final wAddrBanks = mux(clear, clearCount, ramWAddr);
+    final wDataBanks = mux(
+      clear,
+      Const(0, width: ParticleWidths.word),
+      ramWData,
     );
-    final shadowRegs = List.generate(
-      numRegs,
-      (i) => Logic(name: 'shadow_r$i', width: ParticleWidths.word),
+    _banks = [
+      for (var b = 0; b < 2; b++)
+        ParticleLutRam(
+          clk: clk,
+          wAddr: wAddrBanks,
+          wData: wDataBanks,
+          wEn: clear | (ramWEn & (b == 0 ? ~ramBank : ramBank)),
+          rAddrA: rAddrA,
+          rAddrB: rAddrB,
+          width: ParticleWidths.word,
+          name: 'bank$b',
+        ),
+    ];
+
+    Logic read(Logic addr, Logic bank0, Logic bank1) =>
+        mux(addr.eq(idx(14)), _r14, mux(bankOf(addr), bank1, bank0));
+    rDataA <= read(rAddrA, _banks[0].rDataA, _banks[1].rDataA);
+    rDataB <= read(rAddrB, _banks[0].rDataB, _banks[1].rDataB);
+
+    // The bank bits, R14 and S14, and the clear
+    final nextBank = [
+      for (var i = 0; i < 16; i++)
+        inRam(i) ? _bank[i] ^ swapped(idx(i)) : Const(0),
+    ].rswizzle();
+    final swap14 = swapped(idx(14));
+    Sequential(
+      clk,
+      reset: reset,
+      resetValues: {
+        _bank: Const(0, width: 16),
+        _r14: Const(0, width: ParticleWidths.word),
+        _s14: Const(0, width: ParticleWidths.word),
+        clearCount: Const(0, width: 4),
+        clear: Const(1),
+      },
+      [
+        If(
+          clear,
+          then: [
+            clearCount < clearCount + 1,
+            If(clearCount.eq(Const(15, width: 4)), then: [clear < Const(0)]),
+          ],
+          orElse: [
+            _bank < nextBank,
+            If(
+              swap14,
+              then: [_r14 < _s14, _s14 < _r14],
+              orElse: [
+                If(
+                  wEn2 & wAddr2.eq(idx(14)),
+                  then: [_r14 < wData2],
+                  orElse: [
+                    If(wEn & wAddr.eq(idx(14)), then: [_r14 < wData]),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
     );
-    physical = activeRegs;
-    shadow = shadowRegs;
 
-    // Hardwired zero for R0 and S0
-    activeRegs[0] <= Const(0, width: ParticleWidths.word);
-    shadowRegs[0] <= Const(0, width: ParticleWidths.word);
+    // The LUT RAMs take one write a cycle: stop if two are asked for
+    clk.negedge.listen((_) {
+      bool on(Logic l) => l.value.isValid && l.value.toInt() == 1;
+      int? val(Logic l) => l.value.isValid ? l.value.toInt() : null;
+      if (on(clear) || !on(wEn) || !on(wEn2)) return;
+      final a1 = val(wAddr);
+      final a2 = val(wAddr2);
+      if (a1 == null || a2 == null) return;
+      if (a1 != a2 && a1 != 0 && a1 != 14 && a2 != 0 && a2 != 14) {
+        Simulator.throwException(
+          Exception(
+            'RegisterFile: two LUT RAM writes in one cycle '
+            '(R$a1 on port 1, R$a2 on port 2)',
+          ),
+          StackTrace.current,
+        );
+      }
+    });
+  }
+}
 
-    final seqStatements = <Conditional>[];
-
-    for (int i = 1; i < numRegs; i++) {
-      final doXchgSingle = xchgEn & xchgRegIdx.eq(i);
-      final doXchgAll = xchgAllEn;
-      // XCHGMOST swaps R1..R14, keeping R15 (the stack pointer)
-      final doXchgMost = i <= 14 ? xchgMostEn : Const(0);
-      final swapCondition = doXchgSingle | doXchgAll | doXchgMost;
-
-      seqStatements.add(
-        If(swapCondition, then: [
-          activeRegs[i] < shadowRegs[i],
-          shadowRegs[i] < activeRegs[i],
-        ], orElse: [
-          shadowRegs[i] < shadowRegs[i],
-          If(wEn2 & wAddr2.eq(i), then: [
-            activeRegs[i] < wData2,
-          ], orElse: [
-            If(wEn & wAddr.eq(i), then: [
-              activeRegs[i] < wData,
-            ], orElse: [
-              activeRegs[i] < activeRegs[i],
-            ]),
-          ]),
-        ]),
-      );
+extension on List<Logic> {
+  /// The one-bit element selected by [index].
+  Logic _select(Logic index) {
+    var level = this;
+    for (var bit = 0; level.length > 1; bit++) {
+      final sel = index[bit];
+      level = [
+        for (var i = 0; i < level.length; i += 2)
+          mux(sel, level[i + 1], level[i]),
+      ];
     }
-
-    Sequential(clk, reset: reset, resetValues: {
-      for (int i = 1; i < numRegs; i++)
-        activeRegs[i]: Const(0, width: ParticleWidths.word),
-      for (int i = 1; i < numRegs; i++)
-        shadowRegs[i]: Const(0, width: ParticleWidths.word),
-    }, seqStatements);
-
-    // Asynchronous read multiplexing
-    final caseItemsA = <CaseItem>[];
-    final caseItemsB = <CaseItem>[];
-    for (int i = 0; i < numRegs; i++) {
-      caseItemsA.add(CaseItem(Const(i, width: ParticleWidths.regAddr),
-          [rDataA < activeRegs[i]]));
-      caseItemsB.add(CaseItem(Const(i, width: ParticleWidths.regAddr),
-          [rDataB < activeRegs[i]]));
-    }
-
-    Combinational([
-      Case(rAddrA, caseItemsA, defaultItem: [
-        rDataA < Const(0, width: ParticleWidths.word),
-      ]),
-      Case(rAddrB, caseItemsB, defaultItem: [
-        rDataB < Const(0, width: ParticleWidths.word),
-      ]),
-    ]);
+    return level.first;
   }
 }

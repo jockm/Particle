@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 import '../lib/constants.dart';
 import '../lib/cpu_config.dart';
 import '../lib/particle_multi_core.dart';
+import '../lib/register_file.dart';
 
 void main() {
   tearDown(() async {
@@ -61,6 +62,8 @@ void main() {
 
       await stepClocks(2);
       reset.put(0);
+      // The register files clear themselves before the cores start
+      await stepClocks(RegisterFile.clearCycles);
       await stepClocks(1);
     });
 

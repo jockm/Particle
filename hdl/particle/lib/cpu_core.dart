@@ -244,6 +244,8 @@ class ParticleCpuCore extends Module {
       xchgRegIdx: rr,
     );
     registerFile = rf;
+    // The core stays in reset while the register file clears its LUT RAM
+    final coreReset = reset | rf.clearing;
     final dValA = rf.rDataA;
     final dValB = rf.rDataB;
 
@@ -399,7 +401,7 @@ class ParticleCpuCore extends Module {
       final mulA = Logic(name: 'mulA', width: 32);
       final mulB = Logic(name: 'mulB', width: 32);
       final mulModeReg = Logic(name: 'mulModeReg', width: 2);
-      Sequential(clk, reset: reset, resetValues: {
+      Sequential(clk, reset: coreReset, resetValues: {
         mulA: Const(0, width: 32),
         mulB: Const(0, width: 32),
         mulModeReg: Const(0, width: 2),
@@ -447,7 +449,7 @@ class ParticleCpuCore extends Module {
       );
       final divider = ParticleDivider(
         clk: clk,
-        reset: reset,
+        reset: coreReset,
         start: divStart,
         abort: divAbort,
         isSigned: isSignedDiv,
@@ -908,7 +910,7 @@ class ParticleCpuCore extends Module {
     Logic fwdHit(Logic wEn, Logic wAddr, Logic src) =>
         wEn & wAddr.eq(src) & ~src.eq(0);
 
-    Sequential(clk, reset: reset, resetValues: {
+    Sequential(clk, reset: coreReset, resetValues: {
       fPc: Const(trapBase - 2, width: 32),
       fValid: Const(0),
       dValid: Const(0),

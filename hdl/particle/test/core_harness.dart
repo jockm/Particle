@@ -120,6 +120,12 @@ class CoreHarness {
       await clk.nextPosedge;
     }
     reset.inject(0);
+    // The register file clears its LUT RAM before the core starts; cycle
+    // counts start after that
+    final clearing = core.registerFile.clearing;
+    while (clearing.value.isValid && clearing.value.toInt() == 1) {
+      await clk.nextPosedge;
+    }
   }
 
   Future<void> step([int n = 1]) async {
@@ -170,11 +176,10 @@ class CoreHarness {
 
   CoreState snapshot() {
     final rf = core.registerFile;
-    int val(Logic l) => l.value.isValid ? l.value.toInt() : -1;
     return CoreState(
       pc,
-      [for (final r in rf.physical) val(r)],
-      [for (final r in rf.shadow) val(r)],
+      [for (var i = 0; i < 16; i++) rf.regValue(i)],
+      [for (var i = 0; i < 16; i++) rf.shadowValue(i)],
       cycles,
     );
   }

@@ -21,6 +21,7 @@ This revision of the specification is aligned with the reference simulator `psim
     - `XCHG Rr`: Swaps active `Rr` with `Sr` (`XCHG R0` is a no-op).
     - `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
     - `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
+- **Reset**: All registers and shadow registers are zero after reset. (The hardware takes 16 cycles after reset to clear its register file before fetching from the reset vector.)
 - **Flagless Design**: No traditional ALU condition code flags. Branching evaluates registers directly (`FBRA.Z`, `FBRA.NZ`, `FBRA.P`, `BBRA.Z`, etc.), while relational evaluations yield integer boolean results (`0` or `1`) directly in destination registers.
 - **Immediates**: `Imm4` and `Imm8` are zero-extended unless an instruction is marked **(signed imm)**, in which case `Imm4` is sign-extended to $-8 \ldots 7$ and `Imm8` to $-128 \ldots 127$. The `-Imm4` / `-Imm8` forms encode a magnitude ($0 \ldots 15$ / $0 \ldots 255$) and use its negation.
 - **Alignment**: Instruction fetch requires an even PC. 16-bit memory accesses require 2-byte alignment and 32-bit accesses require 4-byte alignment; a misaligned access or fetch raises Vector 14. Byte accesses have no alignment requirement.

@@ -50,6 +50,13 @@ Conditional branches are decided in E rather than D on purpose: testing the regi
 
 The register file has two write ports. Port 1 takes an instruction's result and loaded data; port 2 takes pointer updates (the `(Rr++)`, `(++Rr)`, `(Rr--)` and `(--Rr)` modes), `FIFO.TRYR`'s status in R14, and R14 on trap entry. When an instruction writes the same register twice, the result matches psim: a load through its own pointer (`LD32 R5, (R5++)`) keeps the loaded value, `FIFO.TRYR R14, Rl` keeps the status, and a store through its own pointer (`ST32 (--R15), R15`) stores the updated pointer.
 
+The registers live in LUT RAM rather than flip-flops (about 380 LUT4s, 83 flip-flops and 32 `TRELLIS_DPR16X4` cells, against 2,605 LUT4s and 960 flip-flops before):
+
+* R14 and S14 are flip-flops, with a write port of their own: every second write in a cycle, except a pointer update, goes to R14.
+* The other registers and their shadows are in two 16×32 LUT RAMs (`ParticleLutRam`, `lut_ram.dart`), bank 0 and bank 1, with one write port each. A bank bit per register says which bank holds its active value; `XCHG`, `XCHGALL` and `XCHGMOST` flip bank bits (and swap R14 with S14), so they stay single-cycle. A read reads both banks and picks one with the bank bit.
+* At most one write a cycle may go to the LUT RAMs. A pointer update, the only port-2 write outside R14, never comes in the same cycle as a port-1 write: a load writes its pointer in E and its data in W, when E is empty, and a store writes only its pointer. In simulation the register file stops the run if two such writes ever meet.
+* LUT RAM can't be reset, so after reset the register file writes zeros to both banks for 16 cycles (`clearing`), and holds the rest of the core in reset meanwhile.
+
 ### Traps and interrupts
 
 The trap table base and stride come from `CpuConfig` (`trapTableBase`, default `0x100`; `trapStrideBytes`, 16). On every trap, R14 gets a return address:
@@ -81,7 +88,8 @@ psim and the hardware are allowed to differ in a few places, which the different
 
 | Module | File | Used by | Description |
 |---|---|---|---|
-| `RegisterFile` | `register_file.dart` | the core | 16 32-bit registers (`R0`–`R15`) plus one shadow register for each. Two asynchronous read ports and two synchronous write ports (port 2 wins when both write one register). `R0` and its shadow are always zero. `xchgEn` swaps one register with its shadow, `xchgAllEn` swaps `R1`–`R15` (`XCHGALL`), and `xchgMostEn` swaps `R1`–`R14`, keeping the stack pointer (`XCHGMOST`, used by `FAST_ENTER_TRAP`/`FAST_EXIT_TRAP`). `physical` and `shadow` give tests the register values. |
+| `RegisterFile` | `register_file.dart` | the core | 16 32-bit registers (`R0`–`R15`) plus one shadow register for each. Two asynchronous read ports and two synchronous write ports (port 2 wins when both write one register). `R0` and its shadow are always zero. `xchgEn` swaps one register with its shadow, `xchgAllEn` swaps `R1`–`R15` (`XCHGALL`), and `xchgMostEn` swaps `R1`–`R14`, keeping the stack pointer (`XCHGMOST`, used by `FAST_ENTER_TRAP`/`FAST_EXIT_TRAP`). R14 and S14 are flip-flops; the other registers and their shadows are in two `ParticleLutRam` banks, with a bank bit per register (see *Registers*). `clearing` is high for 16 cycles after reset while it clears them. `regValue(i)` and `shadowValue(i)` give tests the register values. |
+| `ParticleLutRam` | `lut_ram.dart` | `RegisterFile` | A small RAM (default 16 words) with one synchronous write port and two asynchronous read ports, and no reset; it starts at zero. Generated as a plain memory array, which Yosys maps to ECP5 LUT RAM (`TRELLIS_DPR16X4`, one copy per read port); simulated with ROHD registers. |
 | `ParticleAlu` | `alu.dart` | the core | Single-cycle 32-bit ALU: `ADD`, `SUB`, `AND`, `OR`, `XOR`, the shifts and rotates, `CLZ`, `BEXTR`, `BSET`/`BCLR`/`BINV`/`BGET`, `SLT`/`SSLT`, `NOT`, `NEZ`, `NEG`, `REV32`, `SEQ`/`SNE`/`SLE`/`SSLE`, `SEXT8`/`SEXT16`. Outputs the result and `isZero`/`isNegative`. |
 | `ParticleMultiplier` | `multiplier.dart` | the core | 32×32 multiplier for the FPGA's DSP blocks, fed from registers the core loads in E (the result is written in W): one unsigned product, with the signed high words corrected from it, `MULL` (low 32 bits), `MULH` (high 32 bits, unsigned), `SMULH` (high, signed), `MULHSU` (high, signed × unsigned). |
 | `ParticleDivider` | `divider.dart` | the core (when `enableDivider`) | Multi-cycle divider (one bit per cycle, 32 steps): signed and unsigned quotient and remainder, with a one-cycle `done` pulse, division-by-zero and `INT_MIN / -1` handling, and an `abort` input (an MBOX interrupting a divide). |

@@ -13,6 +13,7 @@ import "dart:typed_data";
 import "package:particle_rohd/block_ram_tdp.dart";
 import "package:particle_rohd/cpu_config.dart";
 import "package:particle_rohd/particle_multi_core.dart";
+import "package:particle_rohd/register_file.dart";
 import "package:rohd/rohd.dart";
 import "package:test/test.dart";
 
@@ -117,6 +118,8 @@ void main() {
       unawaited(Simulator.run());
       await step(4);
       reset.inject(0);
+      // The register files clear themselves before the cores start
+      await step(RegisterFile.clearCycles);
     });
 
     tearDown(() async {
