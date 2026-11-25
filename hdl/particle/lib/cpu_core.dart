@@ -483,7 +483,8 @@ class ParticleCpuCore extends Module {
     final incMode = modeOfs.eq(Const(1, width: 4)) | modeOfs.eq(Const(2, width: 4));
     final ptrVal = mux(isStoreOp, valA, valB); // loads: (Rl); stores: (Rr)
     final ptrReg = mux(isStoreOp, rr, rl);
-    final newPtr = mux(incMode, ptrVal + size, ptrVal - size);
+    // One adder for both directions
+    final newPtr = ptrVal + mux(incMode, size, Const(0, width: 32) - size);
     final effAddr = mux(isTas, valA, mux(preMode, newPtr, ptrVal));
     // A store through its own pointer (Rr == Rl) stores the updated pointer
     final storeVal = mux(ptrMode & rr.eq(rl), newPtr, valB);
@@ -553,57 +554,73 @@ class ParticleCpuCore extends Module {
     final isNegative = valA.slice(31, 31).eq(1);
     final isPositive = ~isNegative & ~isZero;
     final isNotZero = ~isZero;
-    final dispImm4 = imm4Val << 1;
-    final dispImm8 = imm8Val << 1;
-    final dispRegB = valB << 1;
-    final signedDispA = valA << 1;
     final pcPlus2 = pc + Const(2, width: 32);
 
     final branchNextPc = Logic(name: 'branchNextPc', width: 32);
     final branchTaken = Logic(name: 'branchTaken');
-    CaseItem cond(int code, Logic taken, Logic target) =>
+    // One adder for every PC-relative target, on halfwords:
+    // pc/2 + offset (+1 for JTBL), or pc/2 - offset for the backward forms
+    final brOffset = Logic(name: 'brOffset', width: 31);
+    final brBack = Logic(name: 'brBack');
+    final brCarry = Logic(name: 'brCarry');
+    final brAbs = Logic(name: 'brAbs'); // JMP: the target is Ra
+    final brCond = Logic(name: 'brCond');
+    CaseItem br(int code, Logic offset,
+            {bool back = false, Logic? cond, bool carry = false}) =>
         CaseItem(Const(code, width: 8), [
-          branchNextPc < mux(taken, target, pcPlus2),
-          branchTaken < taken,
+          brOffset < offset.getRange(0, 31),
+          brBack < Const(back ? 1 : 0),
+          brCarry < Const(back || carry ? 1 : 0),
+          brCond < (cond ?? Const(1)),
+          brAbs < Const(0),
         ]);
-    CaseItem always(int code, Logic target) => CaseItem(
-        Const(code, width: 8), [branchNextPc < target, branchTaken < Const(1)]);
-
+    final o4 = imm4Val, o8 = imm8Val;
     Combinational([
+      brOffset < Const(0, width: 31),
+      brBack < Const(0),
+      brCarry < Const(0),
+      brCond < Const(0),
+      brAbs < Const(0),
       Case(opcode, [
-        always(ParticleOpcodes.jtbl, pcPlus2 + (valA << 1)),
-        always(ParticleOpcodes.branch, pc + signedDispA),
-        always(ParticleOpcodes.jmp, valA),
-        always(ParticleOpcodes.rjump, pc + signedDispA),
-        always(ParticleOpcodes.fbraImm8, pc + dispImm8),
-        always(ParticleOpcodes.bbraImm8, pc - dispImm8),
-        cond(ParticleOpcodes.fbraZR, isZero, pc + dispRegB),
-        cond(ParticleOpcodes.fbraNR, isNegative, pc + dispRegB),
-        cond(ParticleOpcodes.fbraPR, isPositive, pc + dispRegB),
-        cond(ParticleOpcodes.bbraZR, isZero, pc - dispRegB),
-        cond(ParticleOpcodes.bbraNR, isNegative, pc - dispRegB),
-        cond(ParticleOpcodes.bbraPR, isPositive, pc - dispRegB),
-        cond(ParticleOpcodes.fbraZImm4, isZero, pc + dispImm4),
-        cond(ParticleOpcodes.fbraNImm4, isNegative, pc + dispImm4),
-        cond(ParticleOpcodes.fbraPImm4, isPositive, pc + dispImm4),
-        cond(ParticleOpcodes.fbraNZImm4, isNotZero, pc + dispImm4),
-        cond(ParticleOpcodes.fbraZImm8, isZero, pc + dispImm8),
-        cond(ParticleOpcodes.fbraNImm8, isNegative, pc + dispImm8),
-        cond(ParticleOpcodes.fbraPImm8, isPositive, pc + dispImm8),
-        cond(ParticleOpcodes.fbraNZImm8, isNotZero, pc + dispImm8),
-        cond(ParticleOpcodes.bbraZImm4, isZero, pc - dispImm4),
-        cond(ParticleOpcodes.bbraNImm4, isNegative, pc - dispImm4),
-        cond(ParticleOpcodes.bbraPImm4, isPositive, pc - dispImm4),
-        cond(ParticleOpcodes.bbraNZImm4, isNotZero, pc - dispImm4),
-        cond(ParticleOpcodes.bbraZImm8, isZero, pc - dispImm8),
-        cond(ParticleOpcodes.bbraNImm8, isNegative, pc - dispImm8),
-        cond(ParticleOpcodes.bbraPImm8, isPositive, pc - dispImm8),
-        cond(ParticleOpcodes.bbraNZImm8, isNotZero, pc - dispImm8),
-      ], defaultItem: [
-        branchNextPc < pcPlus2,
-        branchTaken < Const(0),
+        br(ParticleOpcodes.jtbl, valA, carry: true),
+        br(ParticleOpcodes.branch, valA),
+        CaseItem(Const(ParticleOpcodes.jmp, width: 8),
+            [brCond < Const(1), brAbs < Const(1)]),
+        br(ParticleOpcodes.rjump, valA),
+        br(ParticleOpcodes.fbraImm8, o8),
+        br(ParticleOpcodes.bbraImm8, o8, back: true),
+        br(ParticleOpcodes.fbraZR, valB, cond: isZero),
+        br(ParticleOpcodes.fbraNR, valB, cond: isNegative),
+        br(ParticleOpcodes.fbraPR, valB, cond: isPositive),
+        br(ParticleOpcodes.bbraZR, valB, back: true, cond: isZero),
+        br(ParticleOpcodes.bbraNR, valB, back: true, cond: isNegative),
+        br(ParticleOpcodes.bbraPR, valB, back: true, cond: isPositive),
+        br(ParticleOpcodes.fbraZImm4, o4, cond: isZero),
+        br(ParticleOpcodes.fbraNImm4, o4, cond: isNegative),
+        br(ParticleOpcodes.fbraPImm4, o4, cond: isPositive),
+        br(ParticleOpcodes.fbraNZImm4, o4, cond: isNotZero),
+        br(ParticleOpcodes.fbraZImm8, o8, cond: isZero),
+        br(ParticleOpcodes.fbraNImm8, o8, cond: isNegative),
+        br(ParticleOpcodes.fbraPImm8, o8, cond: isPositive),
+        br(ParticleOpcodes.fbraNZImm8, o8, cond: isNotZero),
+        br(ParticleOpcodes.bbraZImm4, o4, back: true, cond: isZero),
+        br(ParticleOpcodes.bbraNImm4, o4, back: true, cond: isNegative),
+        br(ParticleOpcodes.bbraPImm4, o4, back: true, cond: isPositive),
+        br(ParticleOpcodes.bbraNZImm4, o4, back: true, cond: isNotZero),
+        br(ParticleOpcodes.bbraZImm8, o8, back: true, cond: isZero),
+        br(ParticleOpcodes.bbraNImm8, o8, back: true, cond: isNegative),
+        br(ParticleOpcodes.bbraPImm8, o8, back: true, cond: isPositive),
+        br(ParticleOpcodes.bbraNZImm8, o8, back: true, cond: isNotZero),
       ]),
     ]);
+    // {0, pc/2, 1} + {0, offset ^ back, carry}: the low bit carries the 1
+    final brSum = Logic(name: 'brSum', width: 33);
+    brSum <=
+        [Const(0), pc.getRange(1, 32), Const(1)].swizzle() +
+            [Const(0), brOffset ^ brBack.replicate(31), brCarry].swizzle();
+    final relTarget = [brSum.getRange(1, 32), pc[0]].swizzle();
+    branchTaken <= brCond;
+    branchNextPc <= mux(brCond, mux(brAbs, valA, relTarget), pcPlus2);
 
     // -------------------------------------------------------------------------
     // Traps and interrupts
@@ -878,7 +895,12 @@ class ParticleCpuCore extends Module {
     final dResolves = dAdvance & (dIsFbra | dIsBbra);
     final dTaken = Const(1);
     final dImm8Disp = dInst.slice(7, 0).zeroExtend(32) << 1;
-    final dTarget = mux(dIsBbra, dPc - dImm8Disp, dPc + dImm8Disp);
+    // One adder for both: dPc + disp, or dPc + ~disp + 1
+    final dSum = Logic(name: 'dSum', width: 34);
+    dSum <=
+        [Const(0), dPc, Const(1)].swizzle() +
+            [Const(0), dImm8Disp ^ dIsBbra.replicate(32), dIsBbra].swizzle();
+    final dTarget = dSum.getRange(1, 33);
     final dRedirect = dResolves & dTaken;
 
     // -------------------------------------------------------------------------
