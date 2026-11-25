@@ -156,7 +156,7 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
   * Costs: 1–2 cycles per hop; credit-based flow control, so nothing is dropped ("full" becomes "no credit", and checks like "fewer than 128 words" change meaning); deadlock avoidance (fixed routing order, `MBOX` packets kept apart from data); routers of a few hundred LUTs each.
   * In order with fixed routes, which Parcore depends on.
   * Steps: (1) the channel table and network interface over today's direct links, with nothing behaving differently; (2) a ring of routers; (3) `MBOX` as packets; (4) a mesh when the core count calls for it. psim already routes channels from a JSON configuration, so it can model the latency first.
-  * A fuller design note (packet format, flow control, the channel table, what `FIFO.STAT` reports) for agreement before any code.
+  * The design note: [noc_design.md](noc_design.md) (packet format, flow control, flush, the channel table, what `FIFO.STAT` reports), for agreement before any code.
 * Message passing as the main model; Particle's FIFOs and `MBOX` already lean that way.
 * One place where coherence is defined; FENCE.I becomes a cache operation.
 * SARF and the conductor fit here.
@@ -188,7 +188,7 @@ Avoid, for the core's speed: instructions that write two registers, read three, 
 | 12 | Stage firmware rewritten with `JTBL`, `BEXTR` and `DIV` | In progress (337), one package per core; the core 1 to core 2 packet may change (350). Core 1 done: `bench.S` went from 285 to 163 cycles per RISC-V instruction. Core 2 done (operation numbers in control-word bits 31:24, one `JTBL`, hardware divide): 121 cycles. Core 2 now runs 20% of the time and core 1 about 80% with 17% bubbles: core 1 is the limit again. Core 1 second pass (353a: hot paths fall through, a 128-entry `JTBL`, a shorter retire): 111.5 cycles. Decoding moved to core 0, with static branch prediction there (353 b + c; core 0's TCM 16 KiB, 358): 87.8 cycles, 3.2 times faster than the 285 at the start. Core 1 now waits about 15% of its time for results, so the result latency through cores 2 and 3 is the next limit (item 10); A return-address stack in core 0 (359b) predicts returns: the calls phase went from 98 to 84 cycles, and the whole benchmark to 83.5. Core 3's fast path for ALU results (361): 75.5. Core 1 is the limit again, running about 80% with 19% bubbles |
 | 13 | Particle ISA additions: 2-word branches, compare-and-branch, immediate `BEXTR`, `JTBL` strides, `WAIT`/`HALT` | Agreed (337): after 12 |
 | 14 | `MBOX` redesign: R14 and `RETI`, masking, no lost messages, any target, through the interconnect | Agreed (338): with 13 |
-| 15 | Network on chip replacing the dedicated FIFOs | Agreed (339): design note first |
+| 15 | Network on chip replacing the dedicated FIFOs | Agreed (339): design note drafted, [noc_design.md](noc_design.md) (questions 374–379) |
 | 16 | Conductor: watchdog over the cores; console on a second UART for loading firmware | Not started |
 | 17 | Action: multi-line `asm` blocks; then the conductor in Action | Not started |
 | 18 | Memory: guest memory in SDRAM with caches in cores 0 and 3; firmware in small local (perhaps Harvard) memories (358) | Not started; core 0's TCM grew to 16 KiB for now |
