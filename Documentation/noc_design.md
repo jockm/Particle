@@ -1,10 +1,10 @@
 # Network on Chip: Design Note (Draft)
 
-Status: agreed design (road map item 15, decisions 339 and 374–380). Nothing here is built yet.
+Status: agreed design (road map item 15, decisions 339 and 374–380). Step 1 is built (385–389): `ParticleNetworkInterface` in `hdl/particle/lib/network_interface.dart`, used by Parcore's four stage cores.
 
 ## Why
 
-Today every pair of cores that talks has its own FIFO: Parcore's `ParcoreInterconnect` holds five, each one block RAM, wired between fixed cores, and `MBOX` goes to one fixed target per core. That doesn't scale: all-to-all needs on the order of N² FIFOs, the wires lengthen as the chip grows, and the connections are fixed when the HDL is generated. A network on chip lets any core send to any other, lets the conductor arrange the cores at boot, and keeps every wire short.
+Before step 1, every pair of cores that talks had its own FIFO: Parcore's `ParcoreInterconnect` held five, each one block RAM, wired between fixed cores, and `MBOX` goes to one fixed target per core. That doesn't scale: all-to-all needs on the order of N² FIFOs, the wires lengthen as the chip grows, and the connections are fixed when the HDL is generated. A network on chip lets any core send to any other, lets the conductor arrange the cores at boot, and keeps every wire short.
 
 What must not change:
 
@@ -124,7 +124,7 @@ Uses: the conductor setting the same table entry everywhere, or telling every co
 
 ## Steps
 
-1. **The NI and the channel table over today's direct links**, with nothing behaving differently. Parcore's FIFOs become NI receive buffers with fixed tables, and every test must give the same cycle counts.
+1. **The NI and the channel table over today's direct links**, with nothing behaving differently. Parcore's FIFOs become NI receive buffers with fixed tables, and every test must give the same cycle counts. *Done:* the links are direct wires and credits come back in the same cycle (386); the tables are fixed by `ParcoreTop` (387); `pipelineFlush` stays a wire, an input of the NI (388); one block RAM per input, as before (389). The single-core ULX3S design keeps its FIFO subsystem for now (385).
 2. **The one-way ring of routers**, with credits and `FLUSH`. Parcore moves onto it, and the profile shows what the extra hops cost.
 3. **`MBOX` as packets** (with item 14), and `CONFIG` from the conductor.
 4. **A two-way ring or a mesh** when the core count calls for it.

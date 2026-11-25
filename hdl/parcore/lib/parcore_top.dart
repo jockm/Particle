@@ -8,9 +8,9 @@ import 'dart:math';
 import 'package:rohd/rohd.dart';
 import 'package:particle_rohd/constants.dart';
 import 'package:particle_rohd/cpu_core.dart';
+import 'package:particle_rohd/network_interface.dart';
 import 'package:particle_rohd/uart.dart';
 import 'package:parcore_rohd/parcore_config.dart';
-import 'package:parcore_rohd/parcore_interconnect.dart';
 import 'package:parcore_rohd/parcore_tcm.dart';
 import 'package:parcore_rohd/spi_controller.dart';
 
@@ -276,48 +276,134 @@ class ParcoreTop extends Module {
       portBRData <= tcm.rDataB;
     }
 
-    // Interconnect wires
-    final ifToIdPush = Logic(name: 'ifToIdPush');
-    final ifToIdData = Logic(name: 'ifToIdData', width: 32);
-    final ifToIdPop = Logic(name: 'ifToIdPop');
+    // -------------------------------------------------------------------------
+    // The network (step 1 of Documentation/noc_design.md): each stage core
+    // has a network interface holding its receive buffers, the credits of
+    // its output links and its channel table; the links between them are
+    // direct wires. FIFO.STAT, FIFO.TRYW and the cycle counts are as with
+    // the shared FIFOs this replaces.
+    // -------------------------------------------------------------------------
+    // A link: the sender's word and valid strobe, and the receiver's credit
+    // return
+    (Logic, Logic, Logic) link(String n) => (
+          Logic(name: '${n}_valid'),
+          Logic(name: '${n}_data', width: ParticleWidths.word),
+          Logic(name: '${n}_credit'),
+        );
+    final ifToId = link('ifToId');
+    final idToEx = link('idToEx');
+    final exToMem = link('exToMem');
+    final memToWb = link('memToWb');
+    final memToIf = link('memToIf');
 
-    final idToExPush = Logic(name: 'idToExPush');
-    final idToExData = Logic(name: 'idToExData', width: 32);
-    final idToExPop = Logic(name: 'idToExPop');
+    // Each core's FIFO port, driven once the core exists
+    (Logic, Logic, Logic, Logic) fifoPort(String n) => (
+          Logic(name: '${n}_fifo_chan', width: 2),
+          Logic(name: '${n}_fifo_push_data', width: ParticleWidths.word),
+          Logic(name: '${n}_fifo_push_en'),
+          Logic(name: '${n}_fifo_pop_en'),
+        );
+    final c0Port = fifoPort('c0');
+    final c1Port = fifoPort('c1');
+    final c2Port = fifoPort('c2');
+    final c3Port = fifoPort('c3');
 
-    final exToMemPush = Logic(name: 'exToMemPush');
-    final exToMemData = Logic(name: 'exToMemData', width: 32);
-    final exToMemPop = Logic(name: 'exToMemPop');
-
-    final memToWbPush = Logic(name: 'memToWbPush');
-    final memToWbData = Logic(name: 'memToWbData', width: 32);
-    final memToWbPop = Logic(name: 'memToWbPop');
-
-    final memToIfPush = Logic(name: 'memToIfPush');
-    final memToIfData = Logic(name: 'memToIfData', width: 32);
-    final memToIfPop = Logic(name: 'memToIfPop');
-
+    // pipelineFlush empties ifToId (core 1's input 0) and gives core 0 its
+    // credits back
     final pipelineFlush = Logic(name: 'pipeline_flush');
-    final interconnect = ParcoreInterconnect(
-      clk: clk,
-      reset: reset,
-      pipelineFlush: pipelineFlush,
-      ifToIdPush: ifToIdPush,
-      ifToIdData: ifToIdData,
-      ifToIdPop: ifToIdPop,
-      idToExPush: idToExPush,
-      idToExData: idToExData,
-      idToExPop: idToExPop,
-      exToMemPush: exToMemPush,
-      exToMemData: exToMemData,
-      exToMemPop: exToMemPop,
-      memToWbPush: memToWbPush,
-      memToWbData: memToWbData,
-      memToWbPop: memToWbPop,
-      memToIfPush: memToIfPush,
-      memToIfData: memToIfData,
-      memToIfPop: memToIfPop,
-    );
+
+    ParticleNetworkInterface ni(
+      String n,
+      (Logic, Logic, Logic, Logic) port,
+      List<NiChannel> channels, {
+      List<(Logic, Logic, Logic)> rx = const [],
+      List<(Logic, Logic, Logic)> tx = const [],
+      List<String> bufferNames = const [],
+      List<Logic>? rxFlush,
+      List<Logic>? txReset,
+      Logic? devPopData,
+      Logic? devStatus,
+    }) {
+      final iface = ParticleNetworkInterface(
+        clk: clk,
+        reset: reset,
+        chanSelect: port.$1,
+        pushData: port.$2,
+        pushEn: port.$3,
+        popEn: port.$4,
+        channels: channels,
+        rxValid: [for (final l in rx) l.$1],
+        rxData: [for (final l in rx) l.$2],
+        rxFlush: rxFlush,
+        txCredit: [for (final l in tx) l.$3],
+        txReset: txReset,
+        devPopData: devPopData,
+        devStatus: devStatus,
+        bufferNames: bufferNames,
+        name: '${n}_ni',
+      );
+      for (var i = 0; i < rx.length; i++) {
+        rx[i].$3 <= iface.rxTaken(i);
+      }
+      for (var j = 0; j < tx.length; j++) {
+        tx[j].$1 <= iface.txValid(j);
+        tx[j].$2 <= iface.txData(j);
+      }
+      return iface;
+    }
+
+    // Core 0: channel 1 sends to core 1 (FIFO.STAT: its room, checked before
+    // each packet); channel 2 receives core 3's mirrored stores
+    final ni0 = ni('core0', c0Port, const [
+      NiChannel.unused,
+      NiChannel(tx: 0, status: NiStatus.tx(0)),
+      NiChannel(rx: 0, status: NiStatus.rx(0)),
+      NiChannel.unused,
+    ], rx: [memToIf], tx: [ifToId], bufferNames: ['parcore_fifo_mem_to_if'],
+        txReset: [pipelineFlush]);
+
+    // Core 1: channel 0 receives from core 0, channel 1 sends to core 2
+    // (FIFO.STAT: its room, checked before decoding), channel 2 receives the
+    // writebacks from core 3; channel 3 reports channel 0's status
+    final ni1 = ni('core1', c1Port, const [
+      NiChannel(rx: 0, status: NiStatus.rx(0)),
+      NiChannel(tx: 0, status: NiStatus.tx(0)),
+      NiChannel(rx: 1, status: NiStatus.rx(1)),
+      NiChannel(status: NiStatus.rx(0)),
+    ], rx: [ifToId, memToWb], tx: [idToEx],
+        bufferNames: ['parcore_fifo_if_to_id', 'parcore_fifo_mem_to_wb'],
+        rxFlush: [pipelineFlush, Const(0)]);
+
+    // Core 2: every channel receives from core 1 and reports that input's
+    // status; channel 1 also sends to core 3
+    const c2In = NiChannel(rx: 0, status: NiStatus.rx(0));
+    final ni2 = ni('core2', c2Port, const [
+      c2In,
+      NiChannel(rx: 0, tx: 0, status: NiStatus.rx(0)),
+      c2In,
+      c2In,
+    ], rx: [idToEx], tx: [exToMem], bufferNames: ['parcore_fifo_id_to_ex']);
+
+    // Core 3: channels 0-2 receive from core 2; channel 1 sends the
+    // writebacks to core 1, channel 2 mirrors stores to core 0 (FIFO.STAT:
+    // its room); channel 3 is the FTDI UART
+    final c3DevPopData = Logic(name: 'c3_dev_pop_data', width: ParticleWidths.word);
+    final c3DevStatus = Logic(name: 'c3_dev_status', width: ParticleWidths.word);
+    final ni3 = ni('core3', c3Port, const [
+      NiChannel(rx: 0, status: NiStatus.rx(0)),
+      NiChannel(rx: 0, tx: 0, status: NiStatus.rx(0)),
+      NiChannel(rx: 0, tx: 1, status: NiStatus.tx(1)),
+      NiChannel(device: true, status: NiStatus.device()),
+    ], rx: [exToMem], tx: [memToWb, memToIf],
+        bufferNames: ['parcore_fifo_ex_to_mem'],
+        devPopData: c3DevPopData, devStatus: c3DevStatus);
+
+    void drivePort((Logic, Logic, Logic, Logic) port, ParticleCpuCore core) {
+      port.$1 <= core.fifoChanSelect;
+      port.$2 <= core.fifoPushData;
+      port.$3 <= core.fifoPushEn;
+      port.$4 <= core.fifoPopEn;
+    }
 
     // -------------------------------------------------------------------------
     // Core 0: IF & UART
@@ -330,7 +416,6 @@ class ParcoreTop extends Module {
 
     final c0FifoPopData = Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
     final c0FifoStatus  = Logic(name: 'c0_fifo_status', width: ParticleWidths.word);
-    final c0FifoPopEn   = Logic(name: 'c0_fifo_pop_en');
 
     final core0 = ParticleCpuCore(
       clk: clk,
@@ -361,22 +446,9 @@ class ParcoreTop extends Module {
       initialBytes: core0Binary,
     );
 
-    ifToIdPush <= core0.fifoPushEn & core0.fifoChanSelect.eq(Const(1, width: 2));
-    ifToIdData <= core0.fifoPushData;
-
-    // Channel 2: the stores core 3 mirrors into core 0's guest area
-    c0FifoPopEn <= core0.fifoPopEn & core0.fifoChanSelect.eq(Const(2, width: 2));
-    memToIfPop <= c0FifoPopEn;
-
-    // FIFO.STAT: channel 1 ifToId (core 0 checks for room before pushing a
-    // packet), channel 2 memToIf
-    c0FifoStatus <= mux(
-      core0.fifoChanSelect.eq(Const(1, width: 2)),
-      interconnect.ifToIdStatus,
-      mux(core0.fifoChanSelect.eq(Const(2, width: 2)),
-          interconnect.memToIfStatus, Const(0, width: ParticleWidths.word)),
-    );
-    c0FifoPopData <= interconnect.memToIfOut;
+    drivePort(c0Port, core0);
+    c0FifoStatus <= ni0.statusWord;
+    c0FifoPopData <= ni0.popData;
 
     // -------------------------------------------------------------------------
     // Core 1: ID & Register Scoreboard
@@ -384,27 +456,11 @@ class ParcoreTop extends Module {
     final c1MemARData = Logic(name: 'c1_mem_a_rdata', width: ParticleWidths.halfWord);
     final c1MemBRData = Logic(name: 'c1_mem_b_rdata', width: ParticleWidths.word);
 
-    final c1ChanSelect = Logic(name: 'c1ChanSelect', width: 2);
     final c1PopData = Logic(name: 'c1PopData', width: 32);
     final c1FifoStatus = Logic(name: 'c1FifoStatus', width: 32);
-    final c1PopEn = Logic(name: 'c1PopEn');
 
-    ifToIdPop <= c1PopEn & c1ChanSelect.eq(Const(0, width: 2));
-    memToWbPop <= c1PopEn & c1ChanSelect.eq(Const(2, width: 2));
-
-    c1PopData <= mux(
-      c1ChanSelect.eq(Const(2, width: 2)),
-      interconnect.memToWbOut,
-      interconnect.ifToIdOut,
-    );
-    // FIFO.STAT: channel 0 ifToId, 1 idToEx (what core 1 sends: it checks
-    // for room before decoding), 2 memToWb
-    c1FifoStatus <= mux(
-      c1ChanSelect.eq(Const(2, width: 2)),
-      interconnect.memToWbStatus,
-      mux(c1ChanSelect.eq(Const(1, width: 2)), interconnect.idToExStatus,
-          interconnect.ifToIdStatus),
-    );
+    c1PopData <= ni1.popData;
+    c1FifoStatus <= ni1.statusWord;
 
     final core1 = ParticleCpuCore(
       clk: clk,
@@ -419,8 +475,7 @@ class ParcoreTop extends Module {
       name: 'core1_id',
     );
 
-    c1ChanSelect <= core1.fifoChanSelect;
-    c1PopEn <= core1.fifoPopEn;
+    drivePort(c1Port, core1);
 
     buildTcm(
       coreIndex: 1,
@@ -437,8 +492,6 @@ class ParcoreTop extends Module {
       initialBytes: core1Binary,
     );
 
-    idToExPush <= core1.fifoPushEn & core1.fifoChanSelect.eq(Const(1, width: 2));
-    idToExData <= core1.fifoPushData;
 
     // -------------------------------------------------------------------------
     // Core 2: EX & Branch Resolution
@@ -453,13 +506,13 @@ class ParcoreTop extends Module {
       memPortBRData: c2MemBRData,
       mboxStrobeIn: Const(0),
       mboxVectorIn: Const(0, width: 4),
-      fifoPopData: interconnect.idToExOut,
-      fifoStatus: interconnect.idToExStatus,
+      fifoPopData: ni2.popData,
+      fifoStatus: ni2.statusWord,
       config: ParcoreConfig.core2Ex,
       name: 'core2_ex',
     );
 
-    idToExPop <= core2.fifoPopEn;
+    drivePort(c2Port, core2);
 
     buildTcm(
       coreIndex: 2,
@@ -476,8 +529,6 @@ class ParcoreTop extends Module {
       initialBytes: core2Binary,
     );
 
-    exToMemPush <= core2.fifoPushEn & core2.fifoChanSelect.eq(Const(1, width: 2));
-    exToMemData <= core2.fifoPushData;
 
     pipelineFlush <= core2.mboxStrobeOut | condFifoFlush;
     c0MboxStrobe <= core2.mboxStrobeOut;
@@ -511,8 +562,7 @@ class ParcoreTop extends Module {
       name: 'core3_mem',
     );
 
-    final c3UartChannel = core3.fifoChanSelect.eq(Const(3, width: 2));
-    exToMemPop <= core3.fifoPopEn & ~c3UartChannel;
+    drivePort(c3Port, core3);
 
     buildTcm(
       coreIndex: 3,
@@ -556,10 +606,6 @@ class ParcoreTop extends Module {
 
     leds <= mux(regStatus[8], guestLeds, regStatus.slice(7, 0));
 
-    memToWbPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(1, width: 2));
-    memToWbData <= core3.fifoPushData;
-    memToIfPush <= core3.fifoPushEn & core3.fifoChanSelect.eq(Const(2, width: 2));
-    memToIfData <= core3.fifoPushData;
 
     // Core 3's channel 3 is the FTDI UART: the guest's memory-mapped UART
     // (core 3 does every guest load and store). FIFO.W/FIFO.TRYW send the
@@ -570,24 +616,17 @@ class ParcoreTop extends Module {
       clk: clk,
       reset: reset,
       rxPin: uartRx,
-      txData: core3.fifoPushData.slice(7, 0),
-      txValid: core3.fifoPushEn & c3UartChannel,
-      rxReady: core3.fifoPopEn & c3UartChannel,
+      txData: ni3.devPushData.slice(7, 0),
+      txValid: ni3.devPushEn,
+      rxReady: ni3.devPopEn,
       baudDivisor: Const(ftdiDivisor, width: 16),
       name: 'parcore_ftdi_uart',
     );
     uartTx <= ftdiUart.output('txPin');
 
-    c3FifoStatus <= mux(
-      c3UartChannel,
-      [Const(0, width: 30), ~ftdiUart.output('txReady'), ~ftdiUart.output('rxValid')].swizzle(),
-      mux(core3.fifoChanSelect.eq(Const(2, width: 2)),
-          interconnect.memToIfStatus, interconnect.exToMemStatus),
-    );
-    c3FifoPopData <= mux(
-      c3UartChannel,
-      [Const(0, width: 24), ftdiUart.output('rxData')].swizzle(),
-      interconnect.exToMemOut,
-    );
+    c3DevStatus <= [Const(0, width: 30), ~ftdiUart.output('txReady'), ~ftdiUart.output('rxValid')].swizzle();
+    c3DevPopData <= [Const(0, width: 24), ftdiUart.output('rxData')].swizzle();
+    c3FifoStatus <= ni3.statusWord;
+    c3FifoPopData <= ni3.popData;
   }
 }

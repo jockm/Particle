@@ -50,7 +50,6 @@ With no shadow bank, every firmware file defines `NO_SHADOW_BANK` before includi
 | File | Contents |
 |---|---|
 | `lib/parcore_top.dart` | `ParcoreTop`: the conductor, the four stage cores, their TCMs, the interconnect, the FTDI UART, and the SPI controller |
-| `lib/parcore_interconnect.dart` | `ParcoreInterconnect`: the four stage-to-stage FIFOs, the store-mirror FIFO for FENCE.I, and the flush logic |
 | `lib/parcore_tcm.dart` | `ParcoreTcm`: a core's TCM, a synchronous `ParticleBlockRamTdp` (16-bit fetch port, 32-bit data port with byte enables), preloaded with a binary at `0x100` |
 | `lib/parcore_config.dart` | The `CpuConfig` of each core |
 | `lib/spi_controller.dart` | `SpiController`: the conductor's SPI master |
@@ -80,9 +79,9 @@ The constructor takes `clkFreqMhz` (default 25) and optional binaries for each c
 
 ## Interconnect
 
-`ParcoreInterconnect` holds five `ParticleFifoSubsystem` instances, each with one channel of 256 32-bit words in one block RAM:
+Each stage core has a network interface (`ParticleNetworkInterface`, step 1 of the [network on chip](noc_design.md)) on its FIFO port. It holds the receive buffers of the links that come to the core (each 256 32-bit words in one block RAM), a credit count for each link it sends on, and a channel table saying what each of the core's channels 0–3 reads, writes and reports. The links are direct wires, and a credit comes back in the cycle its word is read, so a sender's credits are always 256 minus what the receiver holds: `FIFO.STAT` and the cycle counts are what they were with one shared FIFO per link. The five links:
 
-| FIFO | Writer (channel) | Reader (channel) | Contents |
+| Link (receive buffer) | Writer (channel) | Reader (channel) | Contents |
 |---|---|---|---|
 | `ifToId` | core 0 (ch 1) | core 1 (ch 0) | 5 words per instruction: control word, w1, w2, B, W3 (see [Packets](#packets)) |
 | `idToEx` | core 1 (ch 1) | core 2 (any) | 4 words: control word, operand A, operand B, word 3 (see [Packets](#packets)) |
@@ -90,7 +89,7 @@ The constructor takes `clkFreqMhz` (default 25) and optional binaries for each c
 | `memToWb` | core 3 (ch 1) | core 1 (ch 2) | 2 words: destination register (plus `0x20` for a cancel), value |
 | `memToIf` | core 3 (ch 2) | core 0 (ch 2) | Guest stores into core 0's guest area, and FENCE.I markers, one word each (see [FENCE.I](#fencei)) |
 
-Because each FIFO has one channel, the FIFO's own channel number is always 0 (`chanSelect: Const(0)`); `ParcoreTop` decodes each core's `fifoChanSelect` to decide which FIFO a push or pop goes to. Core 2 and core 3 have a single input FIFO, so their pops aren't decoded by channel.
+The channel tables are in `ParcoreTop`. Core 2 reads `idToEx` on every channel, and core 3 reads `exToMem` on every channel but 3 (the UART, the network interface's local device). `pipelineFlush` empties `ifToId`'s receive buffer in core 1's interface and gives core 0's interface its 256 credits back.
 
 A `FIFO.W` to a full FIFO is dropped, so the writers that can get ahead check for room first with `FIFO.STAT`: core 0 pushes a packet only while `ifToId` holds fewer than 128 words, and core 1 decodes an instruction only while `idToEx` does (it keeps retiring writebacks while it waits). `FIFO.STAT` on core 0's channels 1 and 2 reads `ifToId`'s and `memToIf`'s status, on core 1's channels 0, 1 and 2 reads `ifToId`, `idToEx` and `memToWb`, and on core 3's channel 2 reads `memToIf` (any other channel reads `exToMem`). Core 3 mirrors a store only while `memToIf` holds fewer than 128 words.
 
