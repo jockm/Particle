@@ -255,6 +255,8 @@ ulx3s-term:
 	fi
 	@$(PYTHON) $(ROHD_DIR)/boards/ulx3s/ulx3s_term.py $(ULX3S_PORT) $(ULX3S_BAUD)
 
+term: ulx3s-term
+
 # ------------------------------------------------------------------------------
 # Parcore on the ULX3S: the conductor loads the stage firmware and a RISC-V
 # guest program (PARCORE_GUEST, built with a RISC-V GCC or LLVM toolchain) from the
