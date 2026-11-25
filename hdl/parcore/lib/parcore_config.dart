@@ -16,6 +16,11 @@ class ParcoreConfig {
     enableDivider: false,
     enableUlx3sFtdiUart: false,
     trapTableBase: 0x00000100,
+    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    enablePointerModes: true,
+    enableSubword: false,
+    enableMboxReceive: false,
+    enableShadowBank: false,
   );
 
   /// Core 0: Instruction Fetch Stage (IF)
@@ -29,6 +34,11 @@ class ParcoreConfig {
     enableMultiplier: false,
     enableDivider: false,
     enableUlx3sFtdiUart: false,
+    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    enablePointerModes: false,
+    enableSubword: true,
+    enableMboxReceive: true,
+    enableShadowBank: false,
   );
 
   /// Core 1: Instruction Decode Stage (ID) & Register Scoreboard
@@ -39,6 +49,11 @@ class ParcoreConfig {
     fifoDepth: 256,
     enableMultiplier: false,
     enableDivider: false,
+    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    enablePointerModes: false,
+    enableSubword: true,
+    enableMboxReceive: false,
+    enableShadowBank: false,
   );
 
   /// Core 2: Execute Stage (EX)
@@ -49,6 +64,11 @@ class ParcoreConfig {
     fifoDepth: 256,
     enableMultiplier: true,
     enableDivider: true,
+    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    enablePointerModes: false,
+    enableSubword: false,
+    enableMboxReceive: false,
+    enableShadowBank: false,
   );
 
   /// Core 3: Memory Access Stage (MEM) + FTDI Console UART (guest I/O)
@@ -63,6 +83,11 @@ class ParcoreConfig {
     enableDivider: false,
     enableUlx3sFtdiUart: true,
     ulx3sUartFifoChannel: 3,
+    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    enablePointerModes: false,
+    enableSubword: true,
+    enableMboxReceive: false,
+    enableShadowBank: false,
   );
 
   /// Core 4: Writeback Stage (WB)

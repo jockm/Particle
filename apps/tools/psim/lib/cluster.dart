@@ -78,6 +78,16 @@ class Cluster {
       }
       final core = ParticleCore(memSize: memSize);
       core.exitOnReset = exitOnReset;
+      // Optional features, as the hardware's CpuConfig (all on by default)
+      bool feature(String key) {
+        final v = entry[key] ?? true;
+        if (v is! bool) throw ClusterConfigError("$key of core $id must be true or false");
+        return v;
+      }
+      core.pointerModes = feature("pointer_modes");
+      core.subword = feature("subword");
+      core.shadowBank = feature("shadow_bank");
+      core.mboxReceive = feature("mbox_receive");
       final name = (entry["name"] as String?) ?? "core$id";
       core.label = name;
       if (shared != null) {
@@ -150,7 +160,7 @@ class Cluster {
           return;
         }
         final dest = cores[t];
-        if (!dest.halted) {
+        if (!dest.halted && dest.mboxReceive) {
           dest.pendingTrap = vector & 0x0F;
           dest.pendingMboxValue = value;
         }

@@ -21,6 +21,8 @@
 ; word 3 (the PC, or a store's data, or a branch's other address); the result goes
 ; in R15 and the address or target in R14.
 ; ==============================================================================
+; This core is built without the shadow bank (ParcoreConfig)
+.define NO_SHADOW_BANK 1
 .include "lib/vectors.inc"
 .include "parcore_ops.inc"
 
@@ -53,7 +55,8 @@ _reset_vector:
     LD      R5, 15
     ADD     R5, 1               ; 16 words
 ._zero_csr_loop:
-    ST32    (R4++), R0
+    ST32    (R4), R0          ; no pointer modes in this core
+    ADD     R4, 4
     SUB     R5, 1
     BBRA.NZ R5, ._zero_csr_loop
 

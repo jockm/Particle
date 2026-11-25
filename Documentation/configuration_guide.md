@@ -17,6 +17,10 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | `coreId` | `0` | The core's identifier in multi-core topologies |
 | `enableMultiplier` | `true` | Include the DSP multiplier (2 cycles). When `false`, the multiply opcodes take the illegal-opcode trap (vector 15) |
 | `enableDivider` | `true` | Include the divider (34 cycles per divide). When `false`, the divide and remainder opcodes take the illegal-opcode trap (vector 15) |
+| `enablePointerModes` | `true` | The loads and stores that pre/post increment or decrement their pointer register (modes 1–4 and 6–9 of `LD8`/`ST8`/`LD16`/`ST16`/`LD32`/`ST32`). When `false` they take the illegal-opcode trap (vector 15). |
+| `enableSubword` | `true` | Byte and halfword loads and stores (`LD8`, `ST8`, `LD16`, `ST16`, every mode). When `false` they take vector 15. |
+| `enableMboxReceive` | `true` | Taking `MBOX` traps from other cores. When `false` an incoming strobe is ignored; the core can still send. |
+| `enableShadowBank` | `true` | The shadow registers S1–S15. When `false` `XCHG`, `XCHGALL` and `XCHGMOST` take vector 15, and the register file has one LUT-RAM bank. Firmware for such a core defines `NO_SHADOW_BANK` before including `lib/vectors.inc` (see that file). |
 | `tcmSizeBytes` | `65536` | On-chip tightly coupled block RAM, in bytes (64 KiB) |
 | `mmioBaseAddr` | `0xF0000000` | Base address of the memory-mapped I/O and external memory window |
 | `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleUlx3sTop`, which always has it) |

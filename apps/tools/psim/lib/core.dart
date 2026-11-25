@@ -71,6 +71,32 @@ class ParticleCore {
   /// The channel this core is waiting on while [stalled], for messages.
   int? waitingChannel;
 
+  // ---------------- Optional features (as the hardware's CpuConfig) ----------------
+
+  /// Loads and stores that pre/post increment or decrement their pointer
+  /// register. When false they are illegal (vector 15).
+  bool pointerModes = true;
+
+  /// Byte and halfword loads and stores. When false they are illegal.
+  bool subword = true;
+
+  /// The shadow bank. When false XCHG, XCHGALL and XCHGMOST are illegal.
+  bool shadowBank = true;
+
+  /// Taking MBOX traps from other cores. When false they are ignored.
+  bool mboxReceive = true;
+
+  /// Whether [opcode] belongs to a feature this core leaves out.
+  bool _leftOut(int opcode) {
+    final group = opcode >> 4;
+    final mode = opcode & 0x0F;
+    final isMem = group >= 1 && group <= 3 && mode <= 9;
+    if (!pointerModes && isMem && mode != 0 && mode != 5) return true;
+    if (!subword && isMem && group != 3) return true;
+    if (!shadowBank && opcode >= 0xD0 && opcode <= 0xD2) return true;
+    return false;
+  }
+
   // ---------------- Multi-core (cluster) connections ----------------
 
   /// The core's name in messages, set in a cluster.
@@ -267,6 +293,13 @@ class ParticleCore {
 
     final inst = read16(pc);
     final opcode = (inst >> 8) & 0xFF;
+    if (_leftOut(opcode)) {
+      // A left-out feature's instruction: vector 15, as an undefined opcode
+      triggerTrap(15, pc);
+      _trapTaken = false;
+      cycleCount++;
+      return true;
+    }
     final rr = (inst >> 4) & 0x0F;
     final rl = inst & 0x0F;
     final imm8 = inst & 0xFF;

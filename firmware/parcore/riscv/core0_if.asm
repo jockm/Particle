@@ -27,6 +27,8 @@
 ; For each instruction: R5 the instruction, R3 the control word, R4 w1, R6
 ; w2, R7 B, R13 W3, R15 the next PC; R2 and R14 scratch.
 ; ==============================================================================
+; This core is built without the shadow bank (ParcoreConfig)
+.define NO_SHADOW_BANK 1
 .include "lib/vectors.inc"
 .include "parcore_ops.inc"
 

@@ -75,7 +75,7 @@ An incoming `MBOX` strobe (and its value) is held until the core is between inst
 
 ### Configuration
 
-`CpuConfig.enableMultiplier` and `enableDivider` decide whether the multiplier and divider are built. Without them, their opcodes raise vector 15.
+`CpuConfig.enableMultiplier` and `enableDivider` decide whether the multiplier and divider are built. Without them, their opcodes raise vector 15. In the same way `enablePointerModes`, `enableSubword` and `enableShadowBank` leave out the pointer modes, the byte and halfword accesses and the shadow bank (their opcodes raise vector 15, and their logic is tied off so synthesis removes it), and `enableMboxReceive` leaves out taking `MBOX` traps. The opcode lists are `ParticleOpcodes.pointerModeOps`, `subwordOps` and `shadowOps`; `test/isa/13_left_out.asm` checks them against psim with `; config: no-pointer-modes no-subword no-shadow-bank`.
 
 ### Differences from psim
 

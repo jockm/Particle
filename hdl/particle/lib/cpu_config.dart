@@ -29,6 +29,24 @@ class CpuConfig {
   /// Enable multi-cycle non-restoring divider hardware (if false, traps to soft emulation)
   final bool enableDivider;
 
+  /// The pointer modes: loads and stores that pre/post increment or
+  /// decrement their pointer register. When false they trap as illegal
+  /// (vector 15). Default: true.
+  final bool enablePointerModes;
+
+  /// Byte and halfword loads and stores (LD8, ST8, LD16, ST16 in every
+  /// mode). When false they trap as illegal (vector 15). Default: true.
+  final bool enableSubword;
+
+  /// Taking MBOX traps from other cores. When false an incoming MBOX strobe
+  /// is ignored (the core can still send one). Default: true.
+  final bool enableMboxReceive;
+
+  /// The shadow register bank (S1-S15). When false XCHG, XCHGALL and
+  /// XCHGMOST trap as illegal (vector 15) and the register file has no
+  /// second bank. Default: true.
+  final bool enableShadowBank;
+
   /// On-chip tightly-coupled BRAM size in bytes (Default: 64 KB)
   final int tcmSizeBytes;
 
@@ -63,6 +81,10 @@ class CpuConfig {
     this.coreId = 0,
     this.enableMultiplier = true,
     this.enableDivider = true,
+    this.enablePointerModes = true,
+    this.enableSubword = true,
+    this.enableMboxReceive = true,
+    this.enableShadowBank = true,
     this.tcmSizeBytes = 65536,
     this.mmioBaseAddr = 0xF0000000,
     this.enableUlx3sFtdiUart = true,

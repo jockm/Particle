@@ -3,6 +3,8 @@
 ; Architecture: Particle 32-bit RISC Assembly
 ; File: firmware/parcore/riscv/core3_mem.asm
 ; ==============================================================================
+; This core is built without the shadow bank (ParcoreConfig)
+.define NO_SHADOW_BANK 1
 .include "lib/vectors.inc"
 
 ; FENCE.I coherence: core 0 fetches guest instructions from its own TCM, so

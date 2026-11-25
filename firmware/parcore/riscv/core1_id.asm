@@ -19,6 +19,8 @@
 ; For each packet: R4 the control word, R15 rs1, R7 rs2, R13 rd (0: none),
 ; R5 operand A, R9 operand B, R10 word 3; R11 and R12 a writeback.
 ; ==============================================================================
+; This core is built without the shadow bank (ParcoreConfig)
+.define NO_SHADOW_BANK 1
 .include "lib/vectors.inc"
 .include "parcore_ops.inc"
 
@@ -122,13 +124,15 @@ _reset_vector:
     LD      R4, 0
     LDI     R6, 32
 ._clear_regs:
-    ST32    (R4++), R0
+    ST32    (R4), R0          ; no pointer modes in this core
+    ADD     R4, 4
     SUB     R6, 1
     BBRA.NZ R6, ._clear_regs
     LD      R4, R1
     LD      R6, 8
 ._clear_counts:
-    ST32    (R4++), R0
+    ST32    (R4), R0          ; no pointer modes in this core
+    ADD     R4, 4
     SUB     R6, 1
     BBRA.NZ R6, ._clear_counts
     JUMP    _id_main_loop

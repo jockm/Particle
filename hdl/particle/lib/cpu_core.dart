@@ -242,6 +242,7 @@ class ParticleCpuCore extends Module {
       xchgAllEn: rfXchgAllEn,
       xchgMostEn: rfXchgMostEn,
       xchgRegIdx: rr,
+      shadowBank: config.enableShadowBank,
     );
     registerFile = rf;
     // The core stays in reset while the register file clears its LUT RAM
@@ -478,18 +479,26 @@ class ParticleCpuCore extends Module {
         mux(group.eq(Const(2, width: 4)), Const(2, width: 32), Const(4, width: 32)));
     // Load modes 1..4 and store modes 6..9 change the pointer register
     final modeOfs = mux(isStoreOp, mode - Const(5, width: 4), mode);
-    final ptrMode = (isLoadOp | isStoreOp) & ~modeOfs.eq(Const(0, width: 4));
+    // Without pointer modes those opcodes are illegal and never run
+    final ptrMode = config.enablePointerModes
+        ? (isLoadOp | isStoreOp) & ~modeOfs.eq(Const(0, width: 4))
+        : Const(0);
     final preMode = modeOfs.eq(Const(1, width: 4)) | modeOfs.eq(Const(3, width: 4));
     final incMode = modeOfs.eq(Const(1, width: 4)) | modeOfs.eq(Const(2, width: 4));
     final ptrVal = mux(isStoreOp, valA, valB); // loads: (Rl); stores: (Rr)
     final ptrReg = mux(isStoreOp, rr, rl);
     // One adder for both directions
     final newPtr = ptrVal + mux(incMode, size, Const(0, width: 32) - size);
-    final effAddr = mux(isTas, valA, mux(preMode, newPtr, ptrVal));
+    final effAddr = mux(isTas, valA,
+        config.enablePointerModes ? mux(preMode, newPtr, ptrVal) : ptrVal);
     // A store through its own pointer (Rr == Rl) stores the updated pointer
     final storeVal = mux(ptrMode & rr.eq(rl), newPtr, valB);
-    final isSize2 = group.eq(Const(2, width: 4));
-    final isSize4 = group.eq(Const(3, width: 4)) | isTas;
+    // Without byte and halfword accesses every access that runs is a word
+    final isSize2 =
+        config.enableSubword ? group.eq(Const(2, width: 4)) : Const(0);
+    final isSize4 = config.enableSubword
+        ? group.eq(Const(3, width: 4)) | isTas
+        : Const(1);
     final memAccess = isLoadOp | isStoreOp | isTas;
     final misaligned = memAccess &
         ((isSize2 & effAddr.slice(0, 0).eq(1)) |
@@ -628,7 +637,13 @@ class ParticleCpuCore extends Module {
     final validOpcode = anyOp([
       for (final code in ParticleOpcodes.all)
         if ((config.enableMultiplier || !mulOps.contains(code)) &&
-            (config.enableDivider || !divOps.contains(code)))
+            (config.enableDivider || !divOps.contains(code)) &&
+            (config.enablePointerModes ||
+                !ParticleOpcodes.pointerModeOps.contains(code)) &&
+            (config.enableSubword ||
+                !ParticleOpcodes.subwordOps.contains(code)) &&
+            (config.enableShadowBank ||
+                !ParticleOpcodes.shadowOps.contains(code)))
           code,
     ]);
     final illegal = ~validOpcode;
@@ -649,7 +664,9 @@ class ParticleCpuCore extends Module {
         Logic(name: 'mboxPendingData', width: ParticleWidths.word);
     final mboxValueAddr = Const(config.trapTableBase - 4, width: 32);
     final divWaiting = eValid & eDivStarted;
-    final mboxTake = mboxPending & eValid;
+    // Without MBOX receive an incoming strobe is ignored
+    final mboxTake =
+        config.enableMboxReceive ? mboxPending & eValid : Const(0);
     final mboxTarget = vectorAddr(mboxPendingVec);
 
     final fifoEmpty = fifoStatus.slice(0, 0);
@@ -965,7 +982,7 @@ class ParticleCpuCore extends Module {
     }, [
       // MBOX: a new strobe is remembered (a newer one replaces an older
       // one); a taken one is cleared
-      If(mboxStrobeIn, then: [
+      If(config.enableMboxReceive ? mboxStrobeIn : Const(0), then: [
         mboxPending < Const(1),
         mboxPendingVec < mboxVectorIn,
         mboxPendingData < mboxDataIn,

@@ -31,6 +31,8 @@
 //     until it falls.
 //   * As before, a swap and a write to the same register in one cycle keep
 //     the swap.
+//   * Without the shadow bank ([shadowBank] false) there is one LUT RAM,
+//     no bank bits and no S14; the swap inputs are ignored.
 
 import 'package:rohd/rohd.dart';
 
@@ -68,6 +70,10 @@ class RegisterFile extends Module {
   /// High while the register file clears itself after reset ([clearCycles]).
   Logic get clearing => output('clearing');
 
+  /// Whether the shadow bank exists. Without it there is one LUT RAM bank,
+  /// the swap inputs are ignored and the shadows read as zero.
+  final bool shadowBank;
+
   late final List<ParticleLutRam> _banks;
   late final Logic _bank;
   late final Logic _r14;
@@ -88,6 +94,7 @@ class RegisterFile extends Module {
     Logic? wAddr2,
     Logic? wData2,
     Logic? wEn2,
+    this.shadowBank = true,
     super.name = 'register_file',
   }) {
     addInput('clk', clk);
@@ -126,13 +133,14 @@ class RegisterFile extends Module {
   int shadowValue(int index) => _value(index, active: false);
 
   int _value(int index, {required bool active}) {
-    if (index == 0) return 0;
+    if (index == 0 || (!active && !shadowBank)) return 0;
     final Logic flop = active ? _r14 : _s14;
     if (index == 14) {
       return flop.value.isValid ? flop.value.toInt() : -1;
     }
     final b = _bank.value;
     if (!b.isValid) return -1;
+    if (!shadowBank) return _banks[0].word(index);
     final activeBank = b[index].toBool() ? 1 : 0;
     return _banks[active ? activeBank : 1 - activeBank].word(index);
   }
@@ -149,13 +157,15 @@ class RegisterFile extends Module {
     clearing <= clear;
 
     // Whether register [addr] is swapped this cycle
-    Logic swapped(Logic addr) =>
-        xchgAllEn |
-        (xchgMostEn & ~addr.eq(idx(15))) |
-        (xchgEn & xchgRegIdx.eq(addr));
+    Logic swapped(Logic addr) => shadowBank
+        ? xchgAllEn |
+            (xchgMostEn & ~addr.eq(idx(15))) |
+            (xchgEn & xchgRegIdx.eq(addr))
+        : Const(0);
     // The bank bit of register [addr]
-    Logic bankOf(Logic addr) =>
-        [for (var i = 0; i < 16; i++) _bank[i]]._select(addr);
+    Logic bankOf(Logic addr) => shadowBank
+        ? [for (var i = 0; i < 16; i++) _bank[i]]._select(addr)
+        : Const(0);
 
     bool inRam(int i) => i != 0 && i != 14;
     Logic ramReg(Logic addr) => ~addr.eq(idx(0)) & ~addr.eq(idx(14));
@@ -175,7 +185,7 @@ class RegisterFile extends Module {
       ramWData,
     );
     _banks = [
-      for (var b = 0; b < 2; b++)
+      for (var b = 0; b < (shadowBank ? 2 : 1); b++)
         ParticleLutRam(
           clk: clk,
           wAddr: wAddrBanks,
@@ -190,8 +200,9 @@ class RegisterFile extends Module {
 
     Logic read(Logic addr, Logic bank0, Logic bank1) =>
         mux(addr.eq(idx(14)), _r14, mux(bankOf(addr), bank1, bank0));
-    rDataA <= read(rAddrA, _banks[0].rDataA, _banks[1].rDataA);
-    rDataB <= read(rAddrB, _banks[0].rDataB, _banks[1].rDataB);
+    final last = _banks.length - 1;
+    rDataA <= read(rAddrA, _banks[0].rDataA, _banks[last].rDataA);
+    rDataB <= read(rAddrB, _banks[0].rDataB, _banks[last].rDataB);
 
     // The bank bits, R14 and S14, and the clear
     final nextBank = [

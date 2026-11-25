@@ -311,6 +311,8 @@ void main(List<String> args) {
   var baseAddr = 0x00000100;
   var exitOnReset = true;
   var maxCycles = defaultMaxCycles;
+  // Features left out of the core (a cluster file sets them per core)
+  final leftOut = <String>{};
 
   for (var i = 0; i < args.length; i++) {
     final arg = args[i];
@@ -326,6 +328,14 @@ void main(List<String> args) {
       baseAddr = value;
     } else if (arg == "--no-exit-on-reset") {
       exitOnReset = false;
+    } else if (arg == "--no-pointer-modes") {
+      leftOut.add("pointer_modes");
+    } else if (arg == "--no-subword") {
+      leftOut.add("subword");
+    } else if (arg == "--no-shadow-bank") {
+      leftOut.add("shadow_bank");
+    } else if (arg == "--no-mbox-receive") {
+      leftOut.add("mbox_receive");
     } else if (arg == "-C" || arg == "--cluster") {
       if (i + 1 >= args.length) {
         stderr.writeln("[ERROR] $arg needs a cluster file");
@@ -356,12 +366,21 @@ void main(List<String> args) {
       exitCode = exitPsimError;
       return;
     }
+    if (leftOut.isNotEmpty) {
+      stderr.writeln("[ERROR] With -C, set pointer_modes, subword, shadow_bank and mbox_receive per core in the cluster file");
+      exitCode = exitPsimError;
+      return;
+    }
     runCluster(clusterFile, debug: debug, exitOnReset: exitOnReset, maxCycles: maxCycles);
     return;
   }
 
   final core = ParticleCore();
   core.exitOnReset = exitOnReset;
+  core.pointerModes = !leftOut.contains("pointer_modes");
+  core.subword = !leftOut.contains("subword");
+  core.shadowBank = !leftOut.contains("shadow_bank");
+  core.mboxReceive = !leftOut.contains("mbox_receive");
 
   if (binary != null) {
     final file = File(binary);

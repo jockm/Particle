@@ -1,6 +1,6 @@
 # Network on Chip: Design Note (Draft)
 
-Status: agreed design (road map item 15, decisions 339 and 374–379); broadcast (380) is open. Nothing here is built yet.
+Status: agreed design (road map item 15, decisions 339 and 374–380). Nothing here is built yet.
 
 ## Why
 
@@ -106,7 +106,7 @@ The conductor writes the tables at boot by sending `CONFIG` packets, one per ent
 * What happens on arrival is the `MBOX` redesign (item 14): masking, no lost messages (a small queue instead of "a newer one replaces an older one"), and any target. Until then, it keeps today's behaviour.
 * The destination comes from the core's `MBOX` table entry, as psim's `mbox_target` does today.
 
-## Broadcast (proposed, 380)
+## Broadcast (380)
 
 Destination core `0xFF` means every core. On a one-way ring a broadcast is cheap: the packet goes once round the ring, every router hands a copy to its NI and passes it on, and the sender's router takes it off when it comes back (its source core is the router's own).
 
@@ -139,7 +139,4 @@ psim models each step first. It already routes channels between cores from a JSO
 * **377:** the conductor writes the channel tables with `CONFIG` packets; the HDL gives defaults at reset.
 * **378:** a `FIFO.W` without a credit is dropped, as today.
 * **379:** the packet fields as above: 8 bits of core, 4 bits of channel, a 32-bit payload; 55 bits per link.
-
-## Open
-
-**380.** Broadcast: destination core `0xFF` for `MBOX` and `CONFIG` only, as above?
+* **380:** broadcast to destination core `0xFF`, for `MBOX` and `CONFIG` only.

@@ -22,6 +22,7 @@ import 'dart:io';
 
 import 'package:rohd/rohd.dart';
 import 'package:test/test.dart';
+import 'package:particle_rohd/cpu_config.dart';
 
 import 'core_harness.dart';
 import 'isa_random.dart';
@@ -51,7 +52,8 @@ class PsimResult {
 
 /// Runs [binary] in psim for [maxCycles] and reads its state through the
 /// debugger's `r` and `m` commands.
-PsimResult runPsim(String binary, int maxCycles, List<(int, int)> areas) {
+PsimResult runPsim(String binary, int maxCycles, List<(int, int)> areas,
+    [List<String> options = const []]) {
   final commands = StringBuffer('c\nr\n');
   for (final (addr, len) in areas) {
     commands.writeln('m 0x${addr.toRadixString(16)} $len');
@@ -61,12 +63,13 @@ PsimResult runPsim(String binary, int maxCycles, List<(int, int)> areas) {
     'bash',
     [
       '-c',
-      'printf "%s" "\$1" | "\$2" "\$3" -d --max-cycles "\$4"',
+      'printf "%s" "\$1" | "\$2" "\$3" -d --max-cycles "\$4" "\${@:5}"',
       'psim-run',
       commands.toString(),
       '$toolDir/psim',
       binary,
       '$maxCycles',
+      ...options,
     ],
   );
   final out = '${proc.stdout}';
@@ -111,11 +114,28 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
   final maxM = RegExp(r';\s*max-cycles:\s*(\d+)').firstMatch(text);
   final maxCycles = maxM == null ? 20000 : int.parse(maxM.group(1)!);
 
+  // "; config: no-pointer-modes no-subword no-shadow-bank" leaves features
+  // out of both the core and psim
+  final configM = RegExp(r';\s*config:([^\n]*)').firstMatch(text);
+  final leftOut = configM == null
+      ? <String>{}
+      : configM.group(1)!.trim().split(RegExp(r'\s+')).toSet();
+  const known = {'no-pointer-modes', 'no-subword', 'no-shadow-bank'};
+  if (!known.containsAll(leftOut)) {
+    throw ArgumentError('Unknown config in ${source.path}: $leftOut');
+  }
+  final config = CpuConfig(
+    enablePointerModes: !leftOut.contains('no-pointer-modes'),
+    enableSubword: !leftOut.contains('no-subword'),
+    enableShadowBank: !leftOut.contains('no-shadow-bank'),
+  );
+
   final binary = assemble(source, workDir);
   final name = source.uri.pathSegments.last.replaceAll('.asm', '');
-  final ref = runPsim('${workDir.path}/$name.bin', maxCycles, areas);
+  final ref = runPsim('${workDir.path}/$name.bin', maxCycles, areas,
+      [for (final o in leftOut) '--$o']);
 
-  final hw = CoreHarness(binary);
+  final hw = CoreHarness(binary, config: config);
   await hw.start();
   await hw.runToHalt(maxCycles: maxCycles);
   final st = hw.snapshot();

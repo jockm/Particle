@@ -262,4 +262,63 @@ void main() {
       expect(read(2), equals(0));
     });
   });
+
+  test('Without the Shadow Bank: XCHG Is Ignored, Shadows Read Zero', () async {
+    final clkGen = SimpleClockGenerator(10);
+    Logic l(String n, [int w = 1]) => Logic(name: n, width: w);
+    final reset = l('reset');
+    final rAddrA = l('rAddrA', 4), wAddr = l('wAddr', 4);
+    final wData = l('wData', ParticleWidths.word), wEn = l('wEn');
+    final xchgEn = l('xchgEn'), xchgAllEn = l('xchgAllEn');
+    final xchgMostEn = l('xchgMostEn'), xchgRegIdx = l('xchgRegIdx', 4);
+    final rf = RegisterFile(
+      clk: clkGen.clk,
+      reset: reset,
+      rAddrA: rAddrA,
+      rAddrB: Const(0, width: 4),
+      wAddr: wAddr,
+      wData: wData,
+      wEn: wEn,
+      xchgEn: xchgEn,
+      xchgAllEn: xchgAllEn,
+      xchgMostEn: xchgMostEn,
+      xchgRegIdx: xchgRegIdx,
+      shadowBank: false,
+    );
+    await rf.build();
+    unawaited(Simulator.run());
+    for (final x in [wEn, xchgEn, xchgAllEn, xchgMostEn]) {
+      x.put(0);
+    }
+    for (final x in [rAddrA, wAddr, wData, xchgRegIdx]) {
+      x.put(0);
+    }
+    reset.put(1);
+    for (var i = 0; i < 2; i++) {
+      await clkGen.clk.nextPosedge;
+    }
+    reset.put(0);
+    for (var i = 0; i < RegisterFile.clearCycles; i++) {
+      await clkGen.clk.nextPosedge;
+    }
+    for (final (reg, value) in [(5, 0x55), (14, 0xEE), (15, 0xFF)]) {
+      wAddr.put(reg);
+      wData.put(value);
+      wEn.put(1);
+      await clkGen.clk.nextPosedge;
+    }
+    wEn.put(0);
+    xchgAllEn.put(1);
+    xchgRegIdx.put(5);
+    xchgEn.put(1);
+    await clkGen.clk.nextPosedge;
+    xchgAllEn.put(0);
+    xchgEn.put(0);
+    for (final (reg, value) in [(5, 0x55), (14, 0xEE), (15, 0xFF)]) {
+      rAddrA.put(reg);
+      expect(rf.rDataA.value.toInt(), equals(value), reason: 'R$reg');
+      expect(rf.regValue(reg), equals(value));
+      expect(rf.shadowValue(reg), equals(0));
+    }
+  });
 }

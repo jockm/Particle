@@ -31,6 +31,18 @@ This document describes the design as it is in `hdl/parcore` and `firmware/parco
 
 The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.conductorConfig`, `core0If`, `core1Id`, `core2Ex`, `core3Mem`). Every stage core has its trap table at `0x100`, so it starts at `0x100` after reset.
 
+Each core leaves out what its firmware doesn't use (`CpuConfig`; a left-out instruction raises vector 15):
+
+| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank |
+|---|---|---|---|---|
+| Conductor | yes | no | no | no |
+| Core 0 | no | yes | yes | no |
+| Core 1 | no | yes | no | no |
+| Core 2 | no | no | no | no |
+| Core 3 | no | yes | no | no |
+
+With no shadow bank, every firmware file defines `NO_SHADOW_BANK` before including `lib/vectors.inc`, so its unexpected-trap slots use no `XCHG*`. Cores 1 and 2 clear their memory at start-up with plain stores and an `ADD`, not `ST32 (R4++)`.
+
 `parcore_config.dart` also has `core4Wb` (4 KiB) and `core5Cache` (32 KiB), and `firmware/parcore/riscv` has `core4_wb.asm`, `core5_cache_mem.asm` and `core1_dispatch.asm`. `make firmware` assembles them, but `ParcoreTop` doesn't instantiate cores 4 and 5, so `core4_wb.asm` and `core5_cache_mem.asm` aren't loaded. `core1_dispatch.asm` is used only by a Particle test (`hdl/particle/test/multicore_firmware_test.dart`).
 
 ## Source Files

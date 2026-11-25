@@ -24,6 +24,10 @@ build/tools/psim -C <cluster.json> [options]
 | `-d`, `--debug` | — | Start the `p4db` debugger instead of running (§4). |
 | `--max-cycles` | `<n>` | Stop after `n` cycles (default 10,000,000). |
 | `--no-exit-on-reset` | — | `TRAP 0` jumps to the reset vector like any other trap, instead of ending the run. |
+| `--no-pointer-modes` | — | The core has no pointer modes: those loads and stores raise vector 15, as in a core built with `enablePointerModes: false`. |
+| `--no-subword` | — | No byte or halfword loads and stores (vector 15). |
+| `--no-shadow-bank` | — | No shadow bank: `XCHG`, `XCHGALL` and `XCHGMOST` raise vector 15. |
+| `--no-mbox-receive` | — | The core ignores `MBOX` traps from other cores. In a cluster, set these per core in the cluster file instead (below). |
 
 ### Exit codes
 
@@ -104,6 +108,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 | `initial_registers` | none | Starting values: `R0`–`R15` or `SP`. |
 | `fifo_connections.tx` | none | Routes: local `channel` (0–3) to `target_channel` (0–3, default the same) on `target_core`. |
 | `mbox_target` | the other core of a pair | The core this core's `MBOX` signals. |
+| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive` | `true` | The core's optional features, as the options above: `false` leaves one out. |
 
 Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields, such as `topology`, are ignored.
 

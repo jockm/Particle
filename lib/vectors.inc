@@ -26,6 +26,12 @@
 ;   UNEXPECTED_TRAP_ROUTINE   the _unexpected_trap routine, at 0x200: it stores
 ;                             the return PC at UNEXPECTED_TRAP_PC and the vector
 ;                             number at UNEXPECTED_TRAP_VECTOR, then spins
+;
+; A core built without the shadow bank (CpuConfig.enableShadowBank false) has
+; no XCHG*: define NO_SHADOW_BANK before including this file. Then
+; TRAP_SLOT_UNEXPECTED loads R1 and branches (FBRA) to _unexpected_trap, which
+; records the same two words without saving R1 and R2 (it spins anyway), and
+; TRAP_SLOT, which needs the shadow bank, fails to assemble.
 ; ==============================================================================
 .ifndef _VECTORS_INC_
 .define _VECTORS_INC_ 1
@@ -44,9 +50,13 @@
 
 .macro TRAP_SLOT n, handler
 .org TRAP_TABLE_BASE + (%n) * TRAP_STRIDE_BYTES
+.ifdef NO_SHADOW_BANK
+    LD      R14, TRAP_SLOT_NEEDS_THE_SHADOW_BANK    ; an error: use TRAP_SLOT_BRANCH
+.else
     FAST_ENTER_TRAP
     LOAD_R14_32 %handler
     JMP     R14, R0
+.endif
 .endmacro
 
 .macro TRAP_SLOT_BRANCH n, handler
@@ -56,16 +66,23 @@
 
 .macro TRAP_SLOT_UNEXPECTED n
 .org TRAP_TABLE_BASE + (%n) * TRAP_STRIDE_BYTES
+.ifdef NO_SHADOW_BANK
+    LD      R1, %n
+    FBRA    _unexpected_trap    ; R14 is still the return PC
+.else
     FAST_ENTER_TRAP
     LD      R1, %n
     LOAD_R14_32 _unexpected_trap
     JMP     R14, R0
+.endif
 .endmacro
 
 .macro UNEXPECTED_TRAP_ROUTINE
 .org TRAP_TABLE_BASE + 16 * TRAP_STRIDE_BYTES
 _unexpected_trap:
+.ifndef NO_SHADOW_BANK
     XCHG    R14                 ; R14 = the trap's return PC (from the shadow)
+.endif
     LDI     R2, UNEXPECTED_TRAP_PC
     ST32    (R2), R14
     ADD     R2, 4               ; UNEXPECTED_TRAP_VECTOR

@@ -3,6 +3,8 @@
 ; Architecture: Parcore System Lifecycle & Firmware Boot Supervisor
 ; Target: Particle Conductor Core (Minimal Config: No Mul/Div/FIFO, 2 KB TCM)
 ; ==============================================================================
+; This core is built without the shadow bank (ParcoreConfig)
+.define NO_SHADOW_BANK 1
 .include "lib/vectors.inc"
 
 ; ------------------------------------------------------------------------------

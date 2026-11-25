@@ -234,6 +234,29 @@ abstract class ParticleOpcodes {
   static const int fifoTryR = 0xE6;
   static const int fifoTryW = 0xE7;
 
+  /// The loads and stores that change their pointer register (pre/post
+  /// increment and decrement): left out with `CpuConfig.enablePointerModes`.
+  static const List<int> pointerModeOps = [
+    ld8PreInc, ld8PostInc, ld8PreDec, ld8PostDec,
+    st8PreInc, st8PostInc, st8PreDec, st8PostDec,
+    ld16PreInc, ld16PostInc, ld16PreDec, ld16PostDec,
+    st16PreInc, st16PostInc, st16PreDec, st16PostDec,
+    ld32PreInc, ld32PostInc, ld32PreDec, ld32PostDec,
+    st32PreInc, st32PostInc, st32PreDec, st32PostDec,
+  ];
+
+  /// The byte and halfword loads and stores: left out with
+  /// `CpuConfig.enableSubword`.
+  static const List<int> subwordOps = [
+    ld8, ld8PreInc, ld8PostInc, ld8PreDec, ld8PostDec,
+    st8, st8PreInc, st8PostInc, st8PreDec, st8PostDec,
+    ld16, ld16PreInc, ld16PostInc, ld16PreDec, ld16PostDec,
+    st16, st16PreInc, st16PostInc, st16PreDec, st16PostDec,
+  ];
+
+  /// The shadow-bank swaps: left out with `CpuConfig.enableShadowBank`.
+  static const List<int> shadowOps = [xchg, xchgAll, xchgMost];
+
   /// Every opcode in particle_spec.md. Any other opcode raises vector 15.
   static const List<int> all = [
     ld,
