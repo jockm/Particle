@@ -3,6 +3,8 @@
 // Architecture: Particle 32-bit RISC
 // =============================================================================
 
+import 'dart:math';
+
 import 'package:rohd/rohd.dart';
 import 'package:test/test.dart';
 import '../lib/alu.dart';
@@ -140,6 +142,32 @@ void main() {
       Simulator.tick();
       expect(alu.result.value.toInt(), equals(1));
     });
+
+    test('Every operation against a reference model (random and edge values)',
+        () {
+      final rnd = Random(365);
+      int r32() => (rnd.nextInt(1 << 16) << 16) | rnd.nextInt(1 << 16);
+      const edges = [
+        0, 1, 2, 31, 32, 0x7FFFFFFF, 0x80000000, 0x80000001, //
+        0xFFFFFFFE, 0xFFFFFFFF, 0x0000FFFF, 0x00010000, 0x12345678,
+      ];
+      for (var op = 0; op < 32; op++) {
+        final cases = <(int, int)>[
+          for (final x in edges) for (final y in edges) (x, y),
+          // Every shift amount, and every BEXTR position and length
+          for (final x in edges) for (var y = 0; y < 1024; y++) (x, y),
+          for (var i = 0; i < 2000; i++) (r32(), r32()),
+        ];
+        for (final (x, y) in cases) {
+          aluOp.put(op);
+          operandA.put(x);
+          operandB.put(y);
+          expect(alu.result.value.toInt(), equals(_aluModel(op, x, y)),
+              reason: 'op $op, A 0x${x.toRadixString(16)}, '
+                  'B 0x${y.toRadixString(16)}');
+        }
+      }
+    });
   });
   group('Particle ALU Tests', () {
     test('NOT and NEZ operations', () async {
@@ -228,4 +256,79 @@ void main() {
       expect(alu.result.value.toInt(), equals(1));
     });
 });
+}
+
+/// What the ALU should return for [op] on [a] and [b] (32-bit unsigned).
+int _aluModel(int op, int a, int b) {
+  const m = 0xFFFFFFFF;
+  int s32(int x) => x >= 0x80000000 ? x - 0x100000000 : x;
+  int b2i(bool v) => v ? 1 : 0;
+  final s = b & 31;
+  final len = (b >> 5) & 31;
+  switch (op) {
+    case AluOps.add:
+      return (a + b) & m;
+    case AluOps.sub:
+      return (a - b) & m;
+    case AluOps.and:
+      return a & b;
+    case AluOps.or:
+      return a | b;
+    case AluOps.xor:
+      return a ^ b;
+    case AluOps.shiftl:
+      return (a << s) & m;
+    case AluOps.shiftr:
+      return a >> s;
+    case AluOps.ashiftr:
+      return (s32(a) >> s) & m;
+    case AluOps.rotl:
+      return ((a << s) | (a >> ((32 - s) & 31))) & m;
+    case AluOps.rotr:
+      return ((a >> s) | (a << ((32 - s) & 31))) & m;
+    case AluOps.clz:
+      for (var i = 0; i < 32; i++) {
+        if ((a >> (31 - i)) & 1 == 1) return i;
+      }
+      return 32;
+    case AluOps.bextr:
+      return (a >> s) & ((1 << len) - 1);
+    case AluOps.bset:
+      return a | (1 << s);
+    case AluOps.bclr:
+      return a & ~(1 << s) & m;
+    case AluOps.binv:
+      return a ^ (1 << s);
+    case AluOps.bget:
+      return (a >> s) & 1;
+    case AluOps.slt:
+      return b2i(a < b);
+    case AluOps.sslt:
+      return b2i(s32(a) < s32(b));
+    case AluOps.not:
+      return ~a & m;
+    case AluOps.nez:
+      return b2i(a != 0);
+    case AluOps.neg:
+      return (-a) & m;
+    case AluOps.rev32:
+      return ((a & 0xFF) << 24) |
+          ((a & 0xFF00) << 8) |
+          ((a >> 8) & 0xFF00) |
+          ((a >> 24) & 0xFF);
+    case AluOps.seq:
+      return b2i(a == b);
+    case AluOps.sne:
+      return b2i(a != b);
+    case AluOps.sle:
+      return b2i(a <= b);
+    case AluOps.ssle:
+      return b2i(s32(a) <= s32(b));
+    case AluOps.sext8:
+      return (a & 0x80) != 0 ? (a & 0xFF) | 0xFFFFFF00 : a & 0xFF;
+    case AluOps.sext16:
+      return (a & 0x8000) != 0 ? (a & 0xFFFF) | 0xFFFF0000 : a & 0xFFFF;
+    default:
+      return 0;
+  }
 }

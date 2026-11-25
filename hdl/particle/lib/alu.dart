@@ -4,6 +4,17 @@
 // Description: Combinational ALU with 32-bit logic, shifts, math, comparisons,
 //              and extended native instructions (NEG, REV32, SEQ, SNE, SLE, SSLE).
 // =============================================================================
+//
+// The units are shared so the ALU stays small:
+//   * One 33-bit adder does ADD and SUB, and its carry gives every less-than
+//     (SLT, SSLT, SLE, SSLE); one equality compare gives SEQ, SNE and the
+//     "or equal" of SLE and SSLE.
+//   * One right-rotator does every shift and rotate, BEXTR and BGET: a left
+//     shift or rotate by s is a right rotate by -s, and masks then clear (or,
+//     for ASHIFTR, fill with the sign) the bits shifted in.
+//   * One logic unit does AND, OR, XOR and NOT, and BSET, BCLR and BINV with a
+//     one-hot bit made from the shift masks.
+//   * The one-bit results (comparisons, NEZ, BGET) share one flag.
 
 import 'package:rohd/rohd.dart';
 import 'constants.dart';
@@ -31,156 +42,187 @@ class ParticleAlu extends Module {
   }
 
   void _build() {
-    final operandA = input('operandA');
-    final operandB = input('operandB');
+    const w = ParticleWidths.word;
+    final a = input('operandA');
+    final b = input('operandB');
     final aluOp = input('aluOp');
-    final aluRes = Logic(name: 'alu_res', width: ParticleWidths.word);
 
-    final shiftAmt5 = operandB.slice(4, 0);
-    final bextrLen5 = operandB.slice(9, 5);
-    final bextrMask =
-        ((Const(1, width: 33) << bextrLen5.zeroExtend(33)) - Const(1, width: 33))
-            .slice(31, 0);
+    Logic isOp(int code) => aluOp.eq(Const(code, width: 5));
+    Logic anyOp(List<int> codes) =>
+        codes.map(isOp).reduce((x, y) => x | y);
+    Logic ones(Logic bit) => bit.replicate(w);
 
-    // Unsigned and Signed Less-Than Primitives
-    final sltVal = mux(
-      operandA.lt(operandB),
-      Const(1, width: ParticleWidths.word),
-      Const(0, width: ParticleWidths.word),
-    );
-
-    final signA = operandA.slice(31, 31);
-    final signB = operandB.slice(31, 31);
-    final ssltVal = mux(
-      signA ^ signB,
-      mux(signA, Const(1, width: ParticleWidths.word), Const(0, width: ParticleWidths.word)),
-      sltVal,
-    );
-
-    // Unsigned and Signed Less-Than-or-Equal Primitives
-    final sleVal = mux(
-      operandA.lte(operandB),
-      Const(1, width: ParticleWidths.word),
-      Const(0, width: ParticleWidths.word),
-    );
-
-    final ssleVal = mux(
-      signA ^ signB,
-      mux(signA, Const(1, width: ParticleWidths.word), Const(0, width: ParticleWidths.word)),
-      sleVal,
-    );
-
-    // Equality Primitives
-    final eqVal = mux(
-      operandA.eq(operandB),
-      Const(1, width: ParticleWidths.word),
-      Const(0, width: ParticleWidths.word),
-    );
-
-    final neVal = mux(
-      operandA.neq(operandB),
-      Const(1, width: ParticleWidths.word),
-      Const(0, width: ParticleWidths.word),
-    );
-
-    // Arithmetic Negate and 32-bit Byte Swap
-    final negVal = Const(0, width: ParticleWidths.word) - operandA;
-    final rev32Val = [
-      operandA.slice(7, 0),
-      operandA.slice(15, 8),
-      operandA.slice(23, 16),
-      operandA.slice(31, 24),
-    ].swizzle();
-
-    // Leading Zero Count
-    final clzList = <Logic>[];
-    for (var i = 0; i < 32; i++) {
-      clzList.add(operandA.slice(31 - i, 31 - i));
-    }
-    final clzVal = Logic(name: 'clz_val', width: ParticleWidths.word);
-    final clzCases = <CaseItem>[];
-    for (var i = 0; i < 32; i++) {
-      clzCases.add(CaseItem(clzList[i], [clzVal < Const(i, width: ParticleWidths.word)]));
-    }
-
-    Combinational([
-      clzVal < Const(32, width: ParticleWidths.word),
-      Case(Const(1), clzCases, defaultItem: [
-        clzVal < Const(32, width: ParticleWidths.word),
-      ]),
+    // ---- Adder: ADD, SUB, and the less-than comparisons ----
+    final subtract = anyOp([
+      AluOps.sub,
+      AluOps.slt,
+      AluOps.sslt,
+      AluOps.sle,
+      AluOps.ssle,
     ]);
+    // {0, A, 1} + {0, B ^ sub, sub}: the low bit carries sub in
+    final addX = [Const(0), a, Const(1)].swizzle();
+    final addY = [Const(0), b ^ ones(subtract), subtract].swizzle();
+    final sum = Logic(name: 'alu_sum', width: w + 2);
+    sum <= addX + addY;
+    final addOut = sum.getRange(1, w + 1);
+    // For a subtraction the carry out is 1 when A >= B (unsigned)
+    final ltu = ~sum[w + 1];
+    final signA = a[w - 1];
+    final signB = b[w - 1];
+    final lts = mux(signA ^ signB, signA, ltu);
+    final eq = a.eq(b);
 
+    // ---- Rotator: shifts, rotates, BEXTR, BGET ----
+    final s = b.getRange(0, 5);
+    final left = anyOp([AluOps.shiftl, AluOps.rotl]);
+    final amount = mux(left, Const(0, width: 5) - s, s);
+    var rot = a;
+    for (var k = 0; k < 5; k++) {
+      final c = 1 << k;
+      final rotated = [rot.getRange(0, c), rot.getRange(c, w)].swizzle();
+      rot = mux(amount[k], rotated, rot);
+    }
+    // leftMask bit i = (i >= s): the bits a left shift by s keeps.
+    // rightMask is its mirror image: the bits a right shift by s keeps.
+    final leftMaskBits = [
+      for (var i = 0; i < w; i++) s.lte(Const(i, width: 5)),
+    ];
+    final leftMask = leftMaskBits.rswizzle();
+    final rightMask = leftMaskBits.swizzle();
+    // BEXTR's length mask: bit i = (i < len)
+    final len = b.getRange(5, 10);
+    final lenMask = [
+      for (var i = 0; i < w; i++) Const(i, width: 5).lt(len),
+    ].rswizzle();
+    final shiftMask = mux(
+      isOp(AluOps.shiftl),
+      leftMask,
+      mux(
+        anyOp([AluOps.rotl, AluOps.rotr]),
+        ones(Const(1)),
+        mux(isOp(AluOps.bextr), rightMask & lenMask, rightMask),
+      ),
+    );
+    final signFill = ~rightMask & ones(isOp(AluOps.ashiftr) & signA);
+    final shiftOut = (rot & shiftMask) | signFill;
+
+    // ---- Logic unit: AND, OR, XOR, NOT, BSET, BCLR, BINV ----
+    // The one-hot bit s: bit i of leftMask without bit i-1
+    final oneHot = [
+      for (var i = 0; i < w; i++)
+        i == 0 ? leftMaskBits[0] : leftMaskBits[i] & ~leftMaskBits[i - 1],
+    ].rswizzle();
+    final bitOp = anyOp([AluOps.bset, AluOps.bclr, AluOps.binv]);
+    final logicB =
+        mux(bitOp, oneHot, mux(isOp(AluOps.not), ones(Const(1)), b));
+    // Two-bit function: 0 AND, 1 OR (OR, BSET), 2 XOR (XOR, NOT, BINV),
+    // 3 AND NOT (BCLR); one LUT per bit
+    final fn1 = anyOp([AluOps.xor, AluOps.not, AluOps.binv, AluOps.bclr]);
+    final fn0 = anyOp([AluOps.or, AluOps.bset, AluOps.bclr]);
+    final logicOut = mux(
+      fn1,
+      mux(fn0, a & ~logicB, a ^ logicB),
+      mux(fn0, a | logicB, a & logicB),
+    );
+
+    // ---- One-bit results ----
+    final flag = Logic(name: 'alu_flag');
     Combinational([
       Case(aluOp, [
-        // 0: ADD
-        CaseItem(Const(0, width: 5), [aluRes < (operandA + operandB)]),
-        // 1: SUB
-        CaseItem(Const(1, width: 5), [aluRes < (operandA - operandB)]),
-        // 2: AND
-        CaseItem(Const(2, width: 5), [aluRes < (operandA & operandB)]),
-        // 3: OR
-        CaseItem(Const(3, width: 5), [aluRes < (operandA | operandB)]),
-        // 4: XOR
-        CaseItem(Const(4, width: 5), [aluRes < (operandA ^ operandB)]),
-        // 5: SHIFTL
-        CaseItem(Const(5, width: 5), [aluRes < (operandA << shiftAmt5)]),
-        // 6: SHIFTR
-        CaseItem(Const(6, width: 5), [aluRes < (operandA >>> shiftAmt5)]),
-        // 7: ASHIFTR
-        CaseItem(Const(7, width: 5), [aluRes < (operandA >> shiftAmt5)]),
-        // 8: ROTL
-        CaseItem(Const(8, width: 5), [
-          aluRes < ((operandA << shiftAmt5) | (operandA >>> (Const(32, width: 6) - shiftAmt5.zeroExtend(6)).slice(4, 0))),
-        ]),
-        // 9: ROTR
-        CaseItem(Const(9, width: 5), [
-          aluRes < ((operandA >>> shiftAmt5) | (operandA << (Const(32, width: 6) - shiftAmt5.zeroExtend(6)).slice(4, 0))),
-        ]),
-        // 10: CLZ
-        CaseItem(Const(10, width: 5), [aluRes < clzVal]),
-        // 11: BEXTR (bit-field extract: pos = operandB[4:0], len = operandB[9:5])
-        CaseItem(Const(11, width: 5), [aluRes < ((operandA >>> shiftAmt5) & bextrMask)]),
-        // 12: BSET
-        CaseItem(Const(12, width: 5), [aluRes < (operandA | (Const(1, width: ParticleWidths.word) << shiftAmt5))]),
-        // 13: BCLR
-        CaseItem(Const(13, width: 5), [aluRes < (operandA & ~(Const(1, width: ParticleWidths.word) << shiftAmt5))]),
-        // 14: BINV
-        CaseItem(Const(14, width: 5), [aluRes < (operandA ^ (Const(1, width: ParticleWidths.word) << shiftAmt5))]),
-        // 15: BGET
-        CaseItem(Const(15, width: 5), [aluRes < ((operandA >>> shiftAmt5) & Const(1, width: ParticleWidths.word))]),
-        // 16: SLT
-        CaseItem(Const(16, width: 5), [aluRes < sltVal]),
-        // 17: SSLT
-        CaseItem(Const(17, width: 5), [aluRes < ssltVal]),
-        // 18: NOT
-        CaseItem(Const(18, width: 5), [aluRes < ~operandA]),
-        // 19: NEZ
-        CaseItem(Const(19, width: 5), [
-          aluRes < mux(operandA.neq(0), Const(1, width: ParticleWidths.word), Const(0, width: ParticleWidths.word)),
-        ]),
-        // 20: NEG
-        CaseItem(Const(20, width: 5), [aluRes < negVal]),
-        // 21: REV32
-        CaseItem(Const(21, width: 5), [aluRes < rev32Val]),
-        // 22: SEQ
-        CaseItem(Const(22, width: 5), [aluRes < eqVal]),
-        // 23: SNE
-        CaseItem(Const(23, width: 5), [aluRes < neVal]),
-        // 24: SLE
-        CaseItem(Const(24, width: 5), [aluRes < sleVal]),
-        // 25: SSLE
-        CaseItem(Const(25, width: 5), [aluRes < ssleVal]),
-        // 26: SEXT8
-        CaseItem(Const(26, width: 5), [aluRes < operandA.slice(7, 0).signExtend(32)]),
-        // 27: SEXT16
-        CaseItem(Const(27, width: 5), [aluRes < operandA.slice(15, 0).signExtend(32)]),
+        CaseItem(Const(AluOps.slt, width: 5), [flag < ltu]),
+        CaseItem(Const(AluOps.sslt, width: 5), [flag < lts]),
+        CaseItem(Const(AluOps.sle, width: 5), [flag < (ltu | eq)]),
+        CaseItem(Const(AluOps.ssle, width: 5), [flag < (lts | eq)]),
+        CaseItem(Const(AluOps.seq, width: 5), [flag < eq]),
+        CaseItem(Const(AluOps.sne, width: 5), [flag < ~eq]),
+        CaseItem(Const(AluOps.nez, width: 5), [flag < a.neq(0)]),
+        CaseItem(Const(AluOps.bget, width: 5), [flag < rot[0]]),
       ], defaultItem: [
-        aluRes < Const(0, width: ParticleWidths.word),
+        flag < Const(0),
       ]),
     ]);
+
+    // ---- The rest ----
+    final negOut = Const(0, width: w) - a;
+    final rev32Out = [
+      a.getRange(0, 8),
+      a.getRange(8, 16),
+      a.getRange(16, 24),
+      a.getRange(24, 32),
+    ].swizzle();
+    final clzOut = _countLeadingZeros(a);
+
+    // ---- Result: one group per unit, ORed together ----
+    final groups = <(Logic, Logic)>[
+      (anyOp([AluOps.add, AluOps.sub]), addOut),
+      (
+        anyOp([
+          AluOps.and,
+          AluOps.or,
+          AluOps.xor,
+          AluOps.not,
+          AluOps.bset,
+          AluOps.bclr,
+          AluOps.binv,
+        ]),
+        logicOut
+      ),
+      (
+        anyOp([
+          AluOps.shiftl,
+          AluOps.shiftr,
+          AluOps.ashiftr,
+          AluOps.rotl,
+          AluOps.rotr,
+          AluOps.bextr,
+        ]),
+        shiftOut
+      ),
+      (isOp(AluOps.neg), negOut),
+      (isOp(AluOps.rev32), rev32Out),
+      (isOp(AluOps.clz), clzOut),
+      (isOp(AluOps.sext8), a.getRange(0, 8).signExtend(w)),
+      (isOp(AluOps.sext16), a.getRange(0, 16).signExtend(w)),
+    ];
+    final aluRes = Logic(name: 'alu_res', width: w);
+    aluRes <=
+        groups
+            .map((g) => g.$2 & ones(g.$1))
+            .reduce((x, y) => x | y) |
+        flag.zeroExtend(w);
 
     output('result') <= aluRes;
     output('isZero') <= aluRes.eq(0);
-    output('isNegative') <= aluRes.slice(31, 31);
+    output('isNegative') <= aluRes[w - 1];
+  }
+
+  /// The number of leading zeros of [x] (32 when x is 0), as a tree: each
+  /// level joins two halves, keeping whether each is all zero and the count
+  /// of leading zeros within it.
+  static Logic _countLeadingZeros(Logic x) {
+    // Pairs of bits, most significant first: count is 1 when the high bit is 0
+    var groups = <(Logic, Logic)>[
+      for (var i = x.width - 1; i > 0; i -= 2)
+        (~x[i] & ~x[i - 1], ~x[i]),
+    ];
+    while (groups.length > 1) {
+      groups = [
+        for (var i = 0; i < groups.length; i += 2)
+          (
+            groups[i].$1 & groups[i + 1].$1,
+            // High half all zero: its size plus the low half's count
+            mux(
+              groups[i].$1,
+              [Const(1), groups[i + 1].$2].swizzle(),
+              [Const(0), groups[i].$2].swizzle(),
+            ),
+          ),
+      ];
+    }
+    final (allZero, count) = groups.first;
+    // count is 5 bits (0..31); all zero gives 32
+    return mux(allZero, Const(32, width: ParticleWidths.word),
+        count.zeroExtend(ParticleWidths.word));
   }
 }
