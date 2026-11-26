@@ -28,6 +28,8 @@ class ParcoreConfig {
     enableSubword: false,
     enableMboxReceive: false,
     enableShadowBank: false,
+    // Its firmware is assembled with -D __NO_LONG_BRANCHES (the Makefile)
+    enableLongBranches: false,
   );
 
   /// Core 0: Instruction Fetch Stage (IF)
@@ -61,6 +63,9 @@ class ParcoreConfig {
     enableSubword: true,
     enableMboxReceive: false,
     enableShadowBank: false,
+    // Its firmware uses none of the 2-word instructions: it is assembled
+    // with -D __NO_LONG_BRANCHES (the Makefile)
+    enableLongBranches: false,
   );
 
   /// Core 2: Execute Stage (EX)
@@ -95,6 +100,9 @@ class ParcoreConfig {
     enableSubword: true,
     enableMboxReceive: false,
     enableShadowBank: false,
+    // Its firmware uses none of the 2-word instructions: it is assembled
+    // with -D __NO_LONG_BRANCHES (the Makefile)
+    enableLongBranches: false,
   );
 
   /// Core 4: Writeback Stage (WB)

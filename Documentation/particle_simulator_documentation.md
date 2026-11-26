@@ -27,6 +27,7 @@ build/tools/psim -C <cluster.json> [options]
 | `--no-pointer-modes` | — | The core has no pointer modes: those loads and stores raise vector 15, as in a core built with `enablePointerModes: false`. |
 | `--no-subword` | — | No byte or halfword loads and stores (vector 15). |
 | `--no-shadow-bank` | — | No shadow bank: `XCHG`, `XCHGALL` and `XCHGMOST` raise vector 15. |
+| `--no-long-branches` | — | No 2-word PC-relative instructions (`BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, `LEA`): they raise vector 15. |
 | `--no-mbox-receive` | — | The core ignores `MBOX` traps from other cores. In a cluster, set these per core in the cluster file instead (below). |
 
 ### Exit codes
@@ -108,7 +109,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 | `initial_registers` | none | Starting values: `R0`–`R15` or `SP`. |
 | `fifo_connections.tx` | none | Routes: local `channel` (0–3) to `target_channel` (0–3, default the same) on `target_core`. |
 | `mbox_target` | the other core of a pair | The core this core's `MBOX` signals. |
-| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive` | `true` | The core's optional features, as the options above: `false` leaves one out. |
+| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive`, `long_branches` | `true` | The core's optional features, as the options above: `false` leaves one out. |
 
 Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields are ignored.
 
@@ -120,7 +121,7 @@ Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields are ignore
 * `FIFO.STAT` on a routed channel gives the words held (256 minus the credits, so it counts words in flight and read words not yet credited), full when a write wouldn't be taken (no credit, or the queue is full), and empty when every credit is back.
 * A store of a channel number to `0xFFFF_FF00` (the network interface's `FLUSH` register) sends a `FLUSH` on that channel. It follows the words sent before it; the receiver empties that channel's buffer and owes the sender a credit for each word it discarded.
 * An `MBOX` is a packet. The receiver answers `ACK`, or `NACK` when its queue is full; the sender keeps its `MBOX` until the answer, sends it again 8 cycles after a `NACK`, and waits with its next `MBOX` until then. A broadcast goes round the ring once (each core takes a copy) and needs no answer.
-* A store to `0xFFFF_FF0C` (`NI_CONFIG`) sends a `CONFIG` packet setting one entry of a core's table. The word: bits 31:24 the core (`0xFF`: every core), 23:20 the entry (0 a channel's route, 1 the sender of a channel's input, 2 the default `MBOX` target), 19:16 the channel, 15:8 a core and 3:0 a channel, the new value. A new route gets 256 credits. (In the HDL only the conductor will have this register; psim lets any core use it.)
+* A store to `0xFFFF_FF0C` (`NI_CONFIG`) sends a `CONFIG` packet setting one entry of a core's table. The word: bits 31:24 the core (`0xFF`: every core), 23:20 the entry (0 a channel's route, 1 the sender of a channel's input, 2 the default `MBOX` target), 19:16 the channel, 15:8 a core and 3:0 a channel, the new value. A new route gets 256 credits. (In the HDL only an interface built with `configSender`, in Parcore the conductor's, has this register; psim lets any core use it.)
 * The run prints the number of packet hops.
 
 

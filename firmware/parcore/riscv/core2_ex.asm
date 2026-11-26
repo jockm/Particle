@@ -599,17 +599,12 @@ _dispatch_system:
     LOAD16  R7, 2
     LD      R14, CSR_BASE+CSR_OFS_MCAUSE
     ST32    (R14), R7
-    LOAD16  R14, ._system_trap_redirect
-    JMP     R14, R0
+    JUMP    ._system_trap_redirect
 ._not_illegal:
 
     ; 0x40: ECALL
     LOAD16  R4, 0x40
-    LD      R5, R3
-    SUB     R5, R4
-    FBRA.Z  R5, ._do_ecall
-    LOAD16  R14, ._chk_ebreak
-    JMP     R14, R0
+    BNE     R3, R4, ._chk_ebreak
 
 ._do_ecall:
     LD      R14, CSR_BASE+CSR_OFS_MEPC
@@ -617,17 +612,12 @@ _dispatch_system:
     LOAD16  R7, 11
     LD      R14, CSR_BASE+CSR_OFS_MCAUSE
     ST32    (R14), R7
-    LOAD16  R14, ._system_trap_redirect
-    JMP     R14, R0
+    JUMP    ._system_trap_redirect
 
 ._chk_ebreak:
     ; 0x41: EBREAK
     LOAD16  R4, 0x41
-    LD      R5, R3
-    SUB     R5, R4
-    FBRA.Z  R5, ._do_ebreak
-    LOAD16  R14, ._chk_mret
-    JMP     R14, R0
+    BNE     R3, R4, ._chk_mret
 
 ._do_ebreak:
     LD      R14, CSR_BASE+CSR_OFS_MEPC
@@ -635,17 +625,12 @@ _dispatch_system:
     LOAD16  R7, 3
     LD      R14, CSR_BASE+CSR_OFS_MCAUSE
     ST32    (R14), R7
-    LOAD16  R14, ._system_trap_redirect
-    JMP     R14, R0
+    JUMP    ._system_trap_redirect
 
 ._chk_mret:
     ; 0x42: MRET
     LOAD16  R4, 0x42
-    LD      R5, R3
-    SUB     R5, R4
-    FBRA.Z  R5, ._do_mret
-    LOAD16  R14, ._chk_csr_ops
-    JMP     R14, R0
+    BNE     R3, R4, ._chk_csr_ops
 
 ._do_mret:
     LD      R14, CSR_BASE+CSR_OFS_MEPC
@@ -657,8 +642,7 @@ _dispatch_system:
     LD      R14, CSR_BASE+CSR_OFS_MTVEC
     LD32    R14, (R14)
     FBRA.Z  R14, ._use_default_mtvec
-    LOAD16  R4, ._do_trap_strobe
-    JMP     R4, R0
+    JUMP    ._do_trap_strobe      ; R14 (the target) is kept
 
 ._use_default_mtvec:
     LOAD32  R14, 0x00000480
@@ -668,113 +652,69 @@ _dispatch_system:
     JUMP    _ex_main_loop
 
 ._chk_csr_ops:
-    ; R6 holds the CSR's address: R14 is overwritten by every LOAD16 / JMP
+    ; R6 holds the CSR's address
     ; 0xC00: cycle
     LOAD16  R6, CSR_BASE+CSR_OFS_CYCLE
     LOAD16  R7, 0xC00
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c1
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c1:
     ; 0xC01: time
     LOAD16  R7, 0xC01
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c2
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c2:
     ; 0xC80: cycleh
     LOAD16  R6, CSR_BASE+CSR_OFS_CYCLEH
     LOAD16  R7, 0xC80
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c3
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c3:
     ; 0xC81: timeh
     LOAD16  R7, 0xC81
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c4
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c4:
     ; 0xC02: instret
     LOAD16  R6, CSR_BASE+CSR_OFS_INSTRET
     LOAD16  R7, 0xC02
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c5
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c5:
     ; 0x300: mstatus
     LOAD16  R6, CSR_BASE+CSR_OFS_STATUS
     LOAD16  R7, 0x300
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c6
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c6:
     ; 0x305: mtvec
     LOAD16  R6, CSR_BASE+CSR_OFS_MTVEC
     LOAD16  R7, 0x305
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c7
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c7:
     ; 0x340: mscratch
     LOAD16  R6, CSR_BASE+CSR_OFS_MSCRATCH
     LOAD16  R7, 0x340
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c8
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c8:
     ; 0x341: mepc
     LOAD16  R6, CSR_BASE+CSR_OFS_MEPC
     LOAD16  R7, 0x341
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c9
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c9:
     ; 0x342: mcause
     LOAD16  R6, CSR_BASE+CSR_OFS_MCAUSE
     LOAD16  R7, 0x342
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._c10
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._c10:
     ; 0x343: mtval
     LOAD16  R6, CSR_BASE+CSR_OFS_MTVAL
     LOAD16  R7, 0x343
-    LD      R8, R12
-    SUB     R8, R7
-    FBRA.NZ R8, ._csr_unmapped
-    LOAD16  R14, ._read_csr_val
-    JMP     R14, R0
+    BEQ     R12, R7, ._read_csr_val
 
 ._csr_unmapped:
     LD      R15, 0
@@ -785,30 +725,20 @@ _dispatch_system:
 
     ; Compute New CSR Value in R4 based on uop in R3
     LOAD16  R7, 0x43            ; CSRRW
-    LD      R8, R3
-    SUB     R8, R7
-    FBRA.Z  R8, ._is_csrrw
-    LOAD16  R14, ._try_csrrs
-    JMP     R14, R0
+    BNE     R3, R7, ._try_csrrs
 
 ._is_csrrw:
     LD      R4, R11
-    LOAD16  R14, ._do_st_csr    ; CSRRW always writes, even a value of 0
-    JMP     R14, R0
+    JUMP    ._do_st_csr    ; CSRRW always writes, even a value of 0
 
 ._try_csrrs:
     LOAD16  R7, 0x44            ; CSRRS
-    LD      R8, R3
-    SUB     R8, R7
-    FBRA.Z  R8, ._is_csrrs
-    LOAD16  R14, ._try_csrrc
-    JMP     R14, R0
+    BNE     R3, R7, ._try_csrrc
 
 ._is_csrrs:
     LD      R4, R15
     OR      R4, R11
-    LOAD16  R14, ._writeback_csr
-    JMP     R14, R0
+    JUMP    ._writeback_csr
 
 ._try_csrrc:
     LD      R8, R11             ; CSRRC
@@ -819,8 +749,7 @@ _dispatch_system:
 ._writeback_csr:
     ; CSRRS / CSRRC with nothing to set or clear don't write
     FBRA.NZ R11, ._do_st_csr
-    LOAD16  R14, ._finish_csr
-    JMP     R14, R0
+    JUMP    ._finish_csr
 
 ._do_st_csr:
     ST32    (R6), R4

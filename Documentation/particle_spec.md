@@ -22,7 +22,7 @@ This revision of the specification is aligned with the reference simulator `psim
     - `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
     - `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
 - **Reset**: All registers and shadow registers are zero after reset. (The hardware takes 16 cycles after reset to clear its register file before fetching from the reset vector.)
-- **Optional features**: A core may be built without the pointer modes (load and store modes that change the pointer register), without byte and halfword loads and stores, or without the shadow bank. The instructions of a feature a core leaves out raise Vector 15, as an undefined opcode does. A core may also be built not to take `MBOX` traps. (`CpuConfig` in the HDL; psim's `--no-pointer-modes`, `--no-subword`, `--no-shadow-bank` and `--no-mbox-receive`.)
+- **Optional features**: A core may be built without the pointer modes (load and store modes that change the pointer register), without byte and halfword loads and stores, or without the shadow bank. The instructions of a feature a core leaves out raise Vector 15, as an undefined opcode does. A core may also be built without the 2-word PC-relative instructions (§4.9: `BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, and `LEA`), or not to take `MBOX` traps. (`CpuConfig` in the HDL; psim's `--no-pointer-modes`, `--no-subword`, `--no-shadow-bank`, `--no-long-branches` and `--no-mbox-receive`; pasm's `--no-long-branches` assembles for a core without the 2-word instructions.)
 - **Flagless Design**: No traditional ALU condition code flags. Branching evaluates registers directly (`FBRA.Z`, `FBRA.NZ`, `FBRA.P`, `BBRA.Z`, etc.), while relational evaluations yield integer boolean results (`0` or `1`) directly in destination registers.
 - **Immediates**: `Imm4` and `Imm8` are zero-extended unless an instruction is marked **(signed imm)**, in which case `Imm4` is sign-extended to $-8 \ldots 7$ and `Imm8` to $-128 \ldots 127$. The `-Imm4` / `-Imm8` forms encode a magnitude ($0 \ldots 15$ / $0 \ldots 255$) and use its negation.
 - **Alignment**: Instruction fetch requires an even PC. 16-bit memory accesses require 2-byte alignment and 32-bit accesses require 4-byte alignment; a misaligned access or fetch raises Vector 14. Byte accesses have no alignment requirement.
@@ -48,7 +48,7 @@ A slot holds 8 instructions, which is enough to jump anywhere: `lib/vectors.inc`
 
 **Trap entry**: $R14 \leftarrow \text{return PC}$; $PC \leftarrow \text{Target}$. For `TRAP` instructions the return PC is the following instruction ($PC + 2$). For a misalignment fault the return PC is the address of the faulting instruction.
 
-**`MBOX` traps** (`Documentation/mbox_design.md`; implemented in psim and in the HDL, where `CONFIG` and broadcast come in step 3b):
+**`MBOX` traps** (`Documentation/mbox_design.md`; implemented in psim and in the HDL):
 - An `MBOX` from another core waits in the core's network interface (a queue of 4, and one slot for broadcasts) and is taken before the next instruction unless `MBOX` traps are masked.
 - Taking it: the return PC goes to `EPC` (R14 and memory are left alone), `MBOX` traps are masked, and the PC goes to the vector. The handler reads the value and the sending core from the network interface's registers: `0xFFFF_FF04` (`NI_MBOX_VALUE` in `lib/common.inc`, loaded with `LDIS`) and `0xFFFF_FF08` (`NI_MBOX_SOURCE`).
 - `RETI` returns to `EPC` and unmasks. `DI` masks and `EI` unmasks. They cover every asynchronous trap: today `MBOX`, later a timer (see [Road to GHz](road_to_ghz.md)); faults and `TRAP` are never masked. After reset the asynchronous traps are unmasked.
@@ -61,9 +61,9 @@ A slot holds 8 instructions, which is enough to jump anywhere: `lib/vectors.inc`
 ---
 
 ## 4. Complete Instruction Set Architecture (ISA) Map
-Standard instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. Imm8 forms use `[7:0]` for the immediate and operate implicitly on `R14`. `LDI` (`0x07`) and `LDIS` (`0x08`) are 32 bits wide (2 little-endian 16-bit words): Word 0 encodes `[15:8] Opcode`, `[7:4] 0000`, `[3:0] Rl`, and Word 1 (`PC + 2`) holds the 16-bit immediate `Imm16`. In `pasm`, stores are assembled using load mnemonics with a memory destination (`LD32 (Rr), Rl`) or `ST*` mnemonics.
+Standard instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. Imm8 forms use `[7:0]` for the immediate and operate implicitly on `R14`. `LDI` (`0x07`), `LDIS` (`0x08`), `LEA` (`0x09`) and the long branches (`0xBC`–`0xBF`, `0xCC`–`0xCF`) are 32 bits wide (2 little-endian 16-bit words): Word 0 encodes `[15:8] Opcode`, `[7:4] Rr` (`0000` for `LDI`, `LDIS`, `LEA`, `BRA` and `RJUMP disp16`), `[3:0] Rl` (`0000` where unused), and Word 1 (`PC + 2`) holds the 16-bit immediate `Imm16` or signed displacement `disp16`. In `pasm`, stores are assembled using load mnemonics with a memory destination (`LD32 (Rr), Rl`) or `ST*` mnemonics.
 
-### 4.1 Loads & Immediates (0x00 - 0x08)
+### 4.1 Loads & Immediates (0x00 - 0x09)
 - `0x00`: `LD Rr, Rl` — $Rr \leftarrow Rl$ (`LD R0, R0` = `0x0000` is the canonical NOP)
 - `0x01`: `LD Rr, Imm4` — $Rr \leftarrow \text{zero\_ext}(Imm4)$
 - `0x02`: `LD R14, Imm8` — $R14 \leftarrow \text{zero\_ext}(Imm8)$
@@ -73,6 +73,7 @@ Standard instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl /
 - `0x06`: `PUSH8 R14, Imm8` — $R14 \leftarrow (R14 \ll 8) \mid Imm8$
 - `0x07`: `LDI Rl, Imm16` — 32-bit (2-word) unsigned immediate load: $Rl \leftarrow \text{zero\_ext}(\text{Mem16}[PC + 2]);\ PC \leftarrow PC + 4$
 - `0x08`: `LDIS Rl, Imm16` — 32-bit (2-word) signed immediate load: $Rl \leftarrow \text{sign\_ext}(\text{Mem16}[PC + 2]);\ PC \leftarrow PC + 4$
+- `0x09`: `LEA Rl, disp16` — 32-bit (2-word) PC-relative address: $Rl \leftarrow PC + \text{sign\_ext}(disp16);\ PC \leftarrow PC + 4$, with $PC$ the `LEA`'s own address and $disp16$ in bytes (±32 KiB), so code that finds its data with it runs wherever it is loaded
 
 ### 4.2 Memory Loads & Stores (0x10 - 0x39)
 Register-indirect addressing only (no displacement modes). Each width uses the same ten-slot layout; increment/decrement steps equal the access size (1, 2, or 4 bytes). Loads write `Rr` from memory addressed by `Rl`; stores write `Rl` to memory addressed by `Rr`. Byte and halfword loads zero-extend.
@@ -219,7 +220,7 @@ All PC-relative targets below are relative to the address of the instruction its
 - `0xA3`: `TRAP Imm4` — Enter trap vector $Imm4$; $R14 \leftarrow PC + 2$
 - `0xA4`: `BRANCH Rr` — Relative branch without linking: $PC \leftarrow PC + (\text{signed}(Rr) \times 2)$
 
-### 4.9 Relative Branches (0xB0 - 0xCB)
+### 4.9 Relative Branches (0xB0 - 0xCF)
 Displacements are unsigned halfword counts added to (forward) or subtracted from (backward) the address of the branch instruction itself. A displacement of 0 branches to itself.
 
 #### Forward Branches (0xB0 - 0xBB)
@@ -249,6 +250,17 @@ Displacements are unsigned halfword counts added to (forward) or subtracted from
 - `0xC9`: `BBRA.P R14, Imm8` — If $R14 > 0$: $PC \leftarrow PC - (Imm8 \times 2)$
 - `0xCA`: `BBRA.NZ Rr, Imm4` — If $Rr \ne 0$: $PC \leftarrow PC - (Imm4 \times 2)$
 - `0xCB`: `BBRA.NZ R14, Imm8` — If $R14 \ne 0$: $PC \leftarrow PC - (Imm8 \times 2)$
+
+#### Long Branches (0xBC - 0xBF, 0xCC - 0xCF)
+2-word instructions: the second word is a signed displacement $disp16$ in halfwords from the instruction's own address, so they reach ±32K halfwords (±64 KiB) either way. Not taken, execution goes on at $PC + 4$. `RJUMP disp16` links $PC + 4$. With these, code can be moved anywhere in memory and still run (with `LEA`, §4.1, for its data).
+- `0xBC`: `BRA.Z Rr, disp16` — If $Rr == 0$: $PC \leftarrow PC + (disp16 \times 2)$
+- `0xBD`: `BRA.NZ Rr, disp16` — If $Rr \ne 0$: $PC \leftarrow PC + (disp16 \times 2)$
+- `0xBE`: `BRA.N Rr, disp16` — If $Rr < 0$: $PC \leftarrow PC + (disp16 \times 2)$
+- `0xBF`: `BRA.P Rr, disp16` — If $Rr > 0$: $PC \leftarrow PC + (disp16 \times 2)$
+- `0xCC`: `BRA disp16` — $PC \leftarrow PC + (disp16 \times 2)$
+- `0xCD`: `RJUMP disp16, Rl` — Relative jump and link: $Rl \leftarrow PC + 4;\ PC \leftarrow PC + (disp16 \times 2)$ (pasm: `RJUMP label, Rl`; `RCALL label` is `RJUMP label, R14`)
+- `0xCE`: `BEQ Rr, Rl, disp16` — If $Rr == Rl$: $PC \leftarrow PC + (disp16 \times 2)$
+- `0xCF`: `BNE Rr, Rl, disp16` — If $Rr \ne Rl$: $PC \leftarrow PC + (disp16 \times 2)$
 
 ### 4.10 Context & Interconnect Operations (0xD0 - 0xE7)
 - `0xD0`: `XCHG Rr` — Exchange active $Rr$ with shadow register $Sr$
@@ -299,6 +311,9 @@ Aligned with `psim` (then `psim.py`):
 Merged from the retired `particle_processor_architecture_specification.md`, and aligned with the hardware:
 - §2: Memory system and multi-core summary. §3: Interruptible stalls.
 - §4.10: `0xE5` is `MBOX Rr, Imm4`, as in the hardware; the immediate-channel `FIFO.STAT Rr, Chan` form was removed. `FIFO.R` and `FIFO.W` take the channel in a register (`Rl`), as in the hardware, instead of an immediate.
+
+Added the 2-word PC-relative instructions (item 13 of Road to GHz, 420–433):
+- §4.1: `LEA` (`0x09`). §4.9: the long branches `0xBC`–`0xBF` and `0xCC`–`0xCF`. §2: they can be left out of a core.
 
 Removed `RBASE` (register windowing):
 - §2: 16 registers and 16 shadow registers; `XCHGALL` swaps `R1`–`R15`.

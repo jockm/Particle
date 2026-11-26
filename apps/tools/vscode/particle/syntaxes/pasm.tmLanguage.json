@@ -72,7 +72,7 @@
       "patterns": [
         {
           "name": "keyword.control.branch.pasm",
-          "match": "(?i)\\b(FBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BRANCH|JMP|JUMP|RJUMP|JTBL|RCALL|RRET|TRAP|FAST_ENTER_TRAP|FAST_EXIT_TRAP)\\b"
+          "match": "(?i)\\b(FBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BBRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BRA(?:\\.Z|\\.NZ|\\.P|\\.N)?|BEQ|BNE|JUMP(?:\\.Z|\\.NZ|\\.P|\\.N)?|BRANCH|JMP|RJUMP|JTBL|RCALL|RRET|TRAP|FAST_ENTER_TRAP|FAST_EXIT_TRAP)\\b"
         },
         {
           "name": "support.function.macro.pasm",
@@ -80,7 +80,7 @@
         },
         {
           "name": "keyword.operator.mnemonic.pasm",
-          "match": "(?i)\\b(NOP|LD|LD8|LD16|LD32|ST8|ST16|ST32|PUSH4|PUSH8|TAS|ADD|SUB|DIV|MOD|SADD|SSUB|SDIV|SMOD|NEG|AND|OR|XOR|NOT|NEZ|SHIFTL|SHIFTR|ASHIFTR|ROTL|ROTR|SEXT8|SEXT16|MULL|MULH|SMULH|MULHU|MULHSU|BEXTR|CLZ|BSET|BCLR|BINV|BGET|REV32|SLT|SSLT|SEQ|SNE|SLE|SSLE|XCHG|XCHGALL|XCHGMOST|FIFO\\.W|FIFO\\.R|FIFO\\.STAT|FIFO\\.TRYW|FIFO\\.TRYR|MBOX)\\b"
+          "match": "(?i)\\b(NOP|LD|LDI|LDIS|LEA|LD8|LD16|LD32|ST8|ST16|ST32|PUSH4|PUSH8|TAS|ADD|SUB|DIV|MOD|SADD|SSUB|SDIV|SMOD|NEG|AND|OR|XOR|NOT|NEZ|SHIFTL|SHIFTR|ASHIFTR|ROTL|ROTR|SEXT8|SEXT16|MULL|MULH|SMULH|MULHU|MULHSU|BEXTR|CLZ|BSET|BCLR|BINV|BGET|REV32|SLT|SSLT|SEQ|SNE|SLE|SSLE|XCHG|XCHGALL|XCHGMOST|FIFO\\.W|FIFO\\.R|FIFO\\.STAT|FIFO\\.TRYW|FIFO\\.TRYR|MBOX|RETI|EI|DI)\\b"
         }
       ]
     },

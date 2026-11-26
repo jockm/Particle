@@ -31,11 +31,12 @@ const toolDir = '../../build/tools';
 const libDir = '../../lib';
 
 /// Assembles [source] into a binary next to it in [workDir].
-List<int> assemble(File source, Directory workDir) {
+List<int> assemble(File source, Directory workDir,
+    [List<String> options = const []]) {
   final name = source.uri.pathSegments.last.replaceAll('.asm', '');
   final out = '${workDir.path}/$name.bin';
   final res = Process.runSync(
-      '$toolDir/pasm', [source.path, '-I', libDir, '-o', out]);
+      '$toolDir/pasm', [source.path, '-I', libDir, '-o', out, ...options]);
   if (res.exitCode != 0) {
     throw StateError('pasm failed for ${source.path}:\n${res.stdout}${res.stderr}');
   }
@@ -120,7 +121,9 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
   final leftOut = configM == null
       ? <String>{}
       : configM.group(1)!.trim().split(RegExp(r'\s+')).toSet();
-  const known = {'no-pointer-modes', 'no-subword', 'no-shadow-bank'};
+  const known = {
+    'no-pointer-modes', 'no-subword', 'no-shadow-bank', 'no-long-branches',
+  };
   if (!known.containsAll(leftOut)) {
     throw ArgumentError('Unknown config in ${source.path}: $leftOut');
   }
@@ -128,9 +131,11 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
     enablePointerModes: !leftOut.contains('no-pointer-modes'),
     enableSubword: !leftOut.contains('no-subword'),
     enableShadowBank: !leftOut.contains('no-shadow-bank'),
+    enableLongBranches: !leftOut.contains('no-long-branches'),
   );
 
-  final binary = assemble(source, workDir);
+  final binary = assemble(source, workDir,
+      [if (leftOut.contains('no-long-branches')) '--no-long-branches']);
   final name = source.uri.pathSegments.last.replaceAll('.asm', '');
   final ref = runPsim('${workDir.path}/$name.bin', maxCycles, areas,
       [for (final o in leftOut) '--$o']);

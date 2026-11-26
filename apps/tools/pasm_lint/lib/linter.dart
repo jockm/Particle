@@ -57,6 +57,14 @@ const Set<String> branchBackward = {
   "BBRA.N",
 };
 
+/// Branches that go either way (the 2-word forms, and the JUMP pseudo-ops):
+/// the target, the last operand (the first for RJUMP label, Rl), must be
+/// defined.
+const Set<String> branchEitherWay = {
+  "BRA", "BRA.Z", "BRA.NZ", "BRA.N", "BRA.P", "BEQ", "BNE",
+  "JUMP.Z", "JUMP.NZ", "JUMP.N", "JUMP.P",
+};
+
 /// 2-operand shift and rotate instructions that accept a 4-bit immediate (0..15).
 const Set<String> imm4Shifts = {
   "SHIFTL",
@@ -108,6 +116,7 @@ const Set<String> writesFirstOperand = {
   ...imm4Shifts, ...imm4ArithLogic,
   "REV32", "NEG", "NOT", "NEZ", "CLZ", "SEXT8", "SEXT16", "BEXTR",
   "LDI", "LDIS", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R", "XCHG",
+  "LEA",
 };
 
 /// Macros that leave R14 holding something else (they build values in it).
@@ -116,7 +125,7 @@ const Set<String> r14Clobbers = {"LOAD16", "LOAD24", "LOAD32", "RCALL"};
 /// Instructions after which execution never continues on the next line.
 const Set<String> unconditionalTransfers = {
   "FBRA", "BBRA", "RRET", "RET", "RETI", "JMP", "JUMP", "RJUMP", "BRANCH",
-  "FAST_EXIT_TRAP", "HALT",
+  "FAST_EXIT_TRAP", "HALT", "BRA",
 };
 
 /// Full canonical set of valid native Particle RISC mnemonics.
@@ -128,6 +137,7 @@ const Set<String> allValidMnemonics = {
   // PC-Relative Branching
   "FBRA", "FBRA.Z", "FBRA.NZ", "FBRA.P", "FBRA.N",
   "BBRA", "BBRA.Z", "BBRA.NZ", "BBRA.P", "BBRA.N",
+  ...branchEitherWay, "LEA",
 
   // Multi-byte Pseudo-ops / Macros
   "LOAD16", "LOAD24", "LOAD32", "PUSH32", "POP32",
@@ -207,7 +217,10 @@ const Map<String, List<String>> instructionForms = {
   "SLT": ["R,R", "R14,V:-255:255", "R,V:-15:15"],
   "SSLT": ["R,R", "R14,V:-255:127", "R,V:-15:7"],
   "SEQ": ["R,R"], "SNE": ["R,R"], "SLE": ["R,R"], "SSLE": ["R,R"],
-  "JMP": ["R,R"], "RJUMP": ["R,R"],
+  "JMP": ["R,R"], "RJUMP": ["R,R", "V,R"],
+  "BRA": ["V"], "BRA.Z": ["R,V"], "BRA.NZ": ["R,V"], "BRA.N": ["R,V"], "BRA.P": ["R,V"],
+  "BEQ": ["R,R,V"], "BNE": ["R,R,V"], "LEA": ["R,V"],
+  "JUMP.Z": ["R,V"], "JUMP.NZ": ["R,V"], "JUMP.N": ["R,V"], "JUMP.P": ["R,V"],
   "FIFO.R": ["R,R"], "FIFO.W": ["R,R"],
   "FIFO.STAT": ["R,R"], "FIFO.TRYR": ["R,R"], "FIFO.TRYW": ["R,R"],
   "MBOX": ["R,R", "R,V:0:15"],
@@ -753,6 +766,20 @@ LintResult lintLines(String filepath, List<String> lines, List<String> includeDi
         }
       }
     }
+
+    // 11b. The targets of the branches that go either way must be defined
+    final eitherTarget = branchEitherWay.contains(mnem) && ops.isNotEmpty
+        ? ops.last
+        : (mnem == "RJUMP" && ops.length == 2 && !validRegisters.contains(ops[0].toUpperCase()))
+            ? ops[0]
+            : null;
+    if (eitherTarget != null &&
+        !validRegisters.contains(eitherTarget.toUpperCase()) &&
+        _isName(eitherTarget) &&
+        !labels.containsKey(eitherTarget) &&
+        !defines.contains(eitherTarget)) {
+      errors.add((lno, "undefined-symbol", "Branch target label '$eitherTarget' is undefined in this module."));
+    }
   }
 
   // Checks that follow the code from line to line
@@ -1003,14 +1030,14 @@ bool _isMem(String op) => op.startsWith("(") && op.endsWith(")");
       continue;
     }
     if (!_isR14(op)) continue;
-    if (k == 1 && mnem == "JMP") {
-      // JMP Rr, Rl: the link register is only written
+    if (k == 1 && (mnem == "JMP" || mnem == "RJUMP")) {
+      // JMP and RJUMP: the link register is only written
       writes = true;
       continue;
     }
     if (k == 0) {
       // A destination that is only written
-      final pureWrite = const {"LDI", "LDIS", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||
+      final pureWrite = const {"LDI", "LDIS", "LEA", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||
           (mnem == "LD" && ops.length == 2) ||
           (const {"LD8", "LD16", "LD32"}.contains(mnem) && ops.length == 2 && _isMem(ops[1]));
       if (pureWrite) {
@@ -1204,7 +1231,7 @@ void checkStackBalance(List<ParsedLine> lines, List<LintMessage> warnings) {
       depth = null; // the routine manages the stack itself
       continue;
     }
-    if (branchForward.contains(mnem) || branchBackward.contains(mnem)) {
+    if (branchForward.contains(mnem) || branchBackward.contains(mnem) || branchEitherWay.contains(mnem)) {
       final target = ops.isEmpty ? null : ops.last;
       if (target != null && target.startsWith(".")) {
         final prev = atLabel[target];

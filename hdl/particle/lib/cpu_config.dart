@@ -47,6 +47,12 @@ class CpuConfig {
   /// second bank. Default: true.
   final bool enableShadowBank;
 
+  /// The 2-word PC-relative instructions (item 13): BRA, BRA.Z/NZ/N/P,
+  /// RJUMP disp16, BEQ, BNE and LEA. When false they trap as illegal
+  /// (vector 15), and code for the core is assembled with pasm's
+  /// --no-long-branches. Default: true.
+  final bool enableLongBranches;
+
   /// On-chip tightly-coupled BRAM size in bytes (Default: 64 KB)
   final int tcmSizeBytes;
 
@@ -85,6 +91,7 @@ class CpuConfig {
     this.enableSubword = true,
     this.enableMboxReceive = true,
     this.enableShadowBank = true,
+    this.enableLongBranches = true,
     this.tcmSizeBytes = 65536,
     this.mmioBaseAddr = 0xF0000000,
     this.enableUlx3sFtdiUart = true,

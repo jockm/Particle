@@ -33,13 +33,15 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 
 Each core leaves out what its firmware doesn't use (`CpuConfig`; a left-out instruction raises vector 15):
 
-| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank |
-|---|---|---|---|---|
-| Conductor | yes | no | no | no |
-| Core 0 | no | yes | yes | no |
-| Core 1 | no | yes | no | no |
-| Core 2 | no | no | no | no |
-| Core 3 | no | yes | no | no |
+| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank | 2-word branches |
+|---|---|---|---|---|---|
+| Conductor | yes | no | no | no | no |
+| Core 0 | no | yes | yes | no | yes |
+| Core 1 | no | yes | no | no | no |
+| Core 2 | no | no | no | no | yes |
+| Core 3 | no | yes | no | no | no |
+
+The firmware of a core without the 2-word branches is assembled with `-D __NO_LONG_BRANCHES` (the Makefile), so its `JUMP`, `JUMP.cc` and `RCALL` use the forms without them.
 
 With no shadow bank, every firmware file defines `NO_SHADOW_BANK` before including `lib/vectors.inc`, so its unexpected-trap slots use no `XCHG*`. Cores 1 and 2 clear their memory at start-up with plain stores and an `ADD`, not `ST32 (R4++)`.
 

@@ -12,7 +12,7 @@ import "package:pasm/assembler.dart";
 
 /// Prints exact CLI usage matching tools/pasm.py
 void printUsage() {
-  stdout.writeln("usage: pasm [-h] [-I INCLUDE] [-o OUTPUT] [-D DEFINE] [--format {bin,hex}] source [source ...]");
+  stdout.writeln("usage: pasm [-h] [-I INCLUDE] [-o OUTPUT] [-D DEFINE] [--format {bin,hex}] [--no-long-branches] source [source ...]");
   stdout.writeln("");
   stdout.writeln("Particle Two-Pass Macro Assembler");
   stdout.writeln("");
@@ -28,6 +28,7 @@ void printUsage() {
   stdout.writeln("  -D DEFINE, --define DEFINE");
   stdout.writeln("                        Define symbol (NAME or NAME=VAL)");
   stdout.writeln("  --format {bin,hex}    Output format (default: bin)");
+  stdout.writeln("  --no-long-branches    For a core without the 2-word branches, RJUMP label and LEA");
 }
 
 void main(List<String> args) {
@@ -69,6 +70,9 @@ void main(List<String> args) {
       }
     } else if (arg == "--format") {
       if (i + 1 < args.length) format = args[++i];
+    } else if (arg == "--no-long-branches") {
+      // For a core without the 2-word PC-relative instructions
+      defines[ParticleAssembler.noLongBranchesSymbol] = 1;
     } else if (!arg.startsWith("-")) {
       sources.add(arg);
     }

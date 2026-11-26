@@ -66,6 +66,7 @@ abstract class ParticleOpcodes {
   static const int push8 = 0x06;
   static const int ldi = 0x07;
   static const int ldis = 0x08;
+  static const int lea = 0x09; // 2-word: Rl <- PC + sext(disp16), bytes
 
   // 4.2 Memory Loads & Stores (0x10 - 0x39)
   static const int ld8 = 0x10;
@@ -219,6 +220,17 @@ abstract class ParticleOpcodes {
   static const int bbraNZImm4 = 0xCA;
   static const int bbraNZImm8 = 0xCB;
 
+  // 2-word PC-relative forms (item 13): the second word is a signed
+  // displacement in halfwords from the instruction itself
+  static const int braZDisp16 = 0xBC;
+  static const int braNZDisp16 = 0xBD;
+  static const int braNDisp16 = 0xBE;
+  static const int braPDisp16 = 0xBF;
+  static const int braDisp16 = 0xCC;
+  static const int rjumpDisp16 = 0xCD; // Rl <- PC + 4
+  static const int beqDisp16 = 0xCE;
+  static const int bneDisp16 = 0xCF;
+
   // 4.11 Context Exchange (0xD0 - 0xD2)
   static const int xchg = 0xD0;
   static const int xchgAll = 0xD1;
@@ -261,6 +273,16 @@ abstract class ParticleOpcodes {
   /// The shadow-bank swaps: left out with `CpuConfig.enableShadowBank`.
   static const List<int> shadowOps = [xchg, xchgAll, xchgMost];
 
+  /// The 2-word PC-relative instructions: left out with
+  /// `CpuConfig.enableLongBranches`.
+  static const List<int> longBranchOps = [
+    braZDisp16, braNZDisp16, braNDisp16, braPDisp16,
+    braDisp16, rjumpDisp16, beqDisp16, bneDisp16, lea,
+  ];
+
+  /// The 2-word instructions: the second word is an immediate.
+  static const List<int> twoWordOps = [ldi, ldis, ...longBranchOps];
+
   /// Every opcode in particle_spec.md. Any other opcode raises vector 15.
   static const List<int> all = [
     ld,
@@ -272,6 +294,7 @@ abstract class ParticleOpcodes {
     push8,
     ldi,
     ldis,
+    lea,
     ld8,
     ld8PreInc,
     ld8PostInc,
@@ -403,6 +426,14 @@ abstract class ParticleOpcodes {
     bbraPImm8,
     bbraNZImm4,
     bbraNZImm8,
+    braZDisp16,
+    braNZDisp16,
+    braNDisp16,
+    braPDisp16,
+    braDisp16,
+    rjumpDisp16,
+    beqDisp16,
+    bneDisp16,
     xchg,
     xchgAll,
     xchgMost,

@@ -138,6 +138,21 @@ class ParticleCore {
   /// Taking MBOX traps from other cores. When false they are ignored.
   bool mboxReceive = true;
 
+  /// The 2-word PC-relative instructions (BRA, BRA.Z/NZ/N/P, RJUMP disp16,
+  /// BEQ, BNE, LEA). When false they are illegal.
+  bool longBranches = true;
+
+  /// The opcodes of [longBranches].
+  static const longBranchOps = {
+    0xBC, 0xBD, 0xBE, 0xBF, 0xCC, 0xCD, 0xCE, 0xCF, 0x09,
+  };
+
+  /// The signed 16-bit second word of the instruction at [pc].
+  int _disp16() {
+    final w = read16((pc + 2) & mask32);
+    return w < 0x8000 ? w : w - 0x10000;
+  }
+
   /// Whether [opcode] belongs to a feature this core leaves out.
   bool _leftOut(int opcode) {
     final group = opcode >> 4;
@@ -146,6 +161,7 @@ class ParticleCore {
     if (!pointerModes && isMem && mode != 0 && mode != 5) return true;
     if (!subword && isMem && group != 3) return true;
     if (!shadowBank && opcode >= 0xD0 && opcode <= 0xD2) return true;
+    if (!longBranches && longBranchOps.contains(opcode)) return true;
     return false;
   }
 
@@ -184,8 +200,7 @@ class ParticleCore {
   (int, int, int)? mboxBroadcastSlot;
 
   /// Masks the asynchronous traps (today MBOX): set by DI and by taking an
-  /// MBOX trap; cleared by EI and
-  /// RETI.
+  /// MBOX trap; cleared by EI and RETI.
   bool mboxMasked = false;
 
   /// Where RETI returns: the instruction an MBOX trap interrupted.
@@ -457,6 +472,13 @@ class ParticleCore {
       if (!_trapTaken) {
         final immS = (imm16 < 0x8000) ? imm16 : imm16 - 0x10000;
         r[rl] = toUnsigned32(immS);
+        nextPc = (pc + 4) & mask32;
+      }
+    } else if (opcode == 0x09) {
+      // LEA Rl, disp16: the address PC + disp16 (bytes)
+      final d = _disp16();
+      if (!_trapTaken) {
+        r[rl] = (pc + d) & mask32;
         nextPc = (pc + 4) & mask32;
       }
 
@@ -848,6 +870,27 @@ class ParticleCore {
       if (r[rr] != 0) nextPc = (pc - (imm4 * 2)) & mask32;
     } else if (opcode == 0xCB) {
       if (r[14] != 0) nextPc = (pc - (imm8 * 2)) & mask32;
+
+    // ---------------- 2-word PC-relative branches (item 13) ----------------
+    // The second word is a signed halfword displacement from this
+    // instruction; not taken, execution goes on at PC + 4
+    } else if (longBranchOps.contains(opcode)) {
+      final d = _disp16();
+      if (!_trapTaken) {
+        final target = (pc + d * 2) & mask32;
+        final taken = switch (opcode) {
+          0xBC => r[rr] == 0,
+          0xBD => r[rr] != 0,
+          0xBE => toSigned32(r[rr]) < 0,
+          0xBF => toSigned32(r[rr]) > 0,
+          0xCE => r[rr] == r[rl],
+          0xCF => r[rr] != r[rl],
+          _ => true, // BRA, RJUMP
+        };
+        nextPc = (pc + 4) & mask32;
+        if (opcode == 0xCD) r[rl] = nextPc; // RJUMP disp16, Rl: link PC + 4
+        if (taken) nextPc = target;
+      }
 
     // ---------------- Shadow Bank (0xD0 - 0xD2) ----------------
     // (0xD3 and 0xD4 are reserved: vector 15, like any undefined opcode)

@@ -132,8 +132,7 @@ _fence_i_handler:
     AND     R4, 3
     SUB     R4, 3               ; kind 3: the marker
     FBRA.Z  R4, ._fence_done
-    LDI     R14, _apply_mirror
-    JMP     R14, R12
+    RJUMP   _apply_mirror, R12
     BBRA    ._fence_drain
 ._fence_done:
     LD      R11, 0
@@ -177,8 +176,7 @@ _if_main_loop:
     AND     R4, 1               ; bit 0: empty
     FBRA.NZ R4, ._room
     FIFO.R  R11, R8
-    LDI     R14, _apply_mirror
-    JMP     R14, R12
+    RJUMP   _apply_mirror, R12
     BBRA    _if_main_loop
 ._room:
     ; Fewer than 16 words queued in ifToId (bits 16:8 of its status)?

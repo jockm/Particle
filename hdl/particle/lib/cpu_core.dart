@@ -601,6 +601,12 @@ class ParticleCpuCore extends Module {
     final isPositive = ~isNegative & ~isZero;
     final isNotZero = ~isZero;
     final pcPlus2 = pc + Const(2, width: 32);
+    // After a 2-word instruction: RJUMP disp16's link
+    final pcPlus4 = (pc + Const(4, width: 32)).named('pcPlus4');
+    // The second word of a 2-word branch: signed halfwords
+    final disp16 = eImm16.signExtend(32);
+    // BEQ/BNE
+    final isEqual = (valA ^ valB).eq(0);
 
     final branchNextPc = Logic(name: 'branchNextPc', width: 32);
     final branchTaken = Logic(name: 'branchTaken');
@@ -659,6 +665,21 @@ class ParticleCpuCore extends Module {
         br(ParticleOpcodes.bbraNImm8, o8, back: true, cond: isNegative),
         br(ParticleOpcodes.bbraPImm8, o8, back: true, cond: isPositive),
         br(ParticleOpcodes.bbraNZImm8, o8, back: true, cond: isNotZero),
+        if (config.enableLongBranches) ...[
+          br(ParticleOpcodes.braDisp16, disp16),
+          br(ParticleOpcodes.rjumpDisp16, disp16),
+          br(ParticleOpcodes.braZDisp16, disp16, cond: isZero),
+          br(ParticleOpcodes.braNZDisp16, disp16, cond: isNotZero),
+          br(ParticleOpcodes.braNDisp16, disp16, cond: isNegative),
+          br(ParticleOpcodes.braPDisp16, disp16, cond: isPositive),
+          br(ParticleOpcodes.beqDisp16, disp16, cond: isEqual),
+          br(ParticleOpcodes.bneDisp16, disp16, cond: ~isEqual),
+          // LEA: bytes, so the adder takes disp >> 1 and bit 0 comes from
+          // disp (the PC is even); no branch
+          CaseItem(Const(ParticleOpcodes.lea, width: 8), [
+            brOffset < disp16.getRange(1, 32),
+          ]),
+        ],
       ]),
     ]);
     // {0, pc/2, 1} + {0, offset ^ back, carry}: the low bit carries the 1
@@ -667,6 +688,7 @@ class ParticleCpuCore extends Module {
         [Const(0), pc.getRange(1, 32), Const(1)].swizzle() +
             [Const(0), brOffset ^ brBack.replicate(31), brCarry].swizzle();
     final relTarget = [brSum.getRange(1, 32), pc[0]].swizzle();
+    final leaAddr = [brSum.getRange(1, 32), eImm16[0]].swizzle();
     branchTaken <= brCond;
     branchNextPc <= mux(brCond,
         mux(brAbs, mux(op(ParticleOpcodes.reti), epc, valA), relTarget), pcPlus2);
@@ -683,7 +705,9 @@ class ParticleCpuCore extends Module {
             (config.enableSubword ||
                 !ParticleOpcodes.subwordOps.contains(code)) &&
             (config.enableShadowBank ||
-                !ParticleOpcodes.shadowOps.contains(code)))
+                !ParticleOpcodes.shadowOps.contains(code)) &&
+            (config.enableLongBranches ||
+                !ParticleOpcodes.longBranchOps.contains(code)))
           code,
     ])).named('validOpcode');
     final illegal = ~validOpcode;
@@ -807,6 +831,12 @@ class ParticleCpuCore extends Module {
               [rfWEn < Const(1), rfWAddr < rl, rfWData < pcPlus2]),
           CaseItem(Const(ParticleOpcodes.rjump, width: 8),
               [rfWEn < Const(1), rfWAddr < rl, rfWData < pcPlus2]),
+          if (config.enableLongBranches) ...[
+            CaseItem(Const(ParticleOpcodes.rjumpDisp16, width: 8),
+                [rfWEn < Const(1), rfWAddr < rl, rfWData < pcPlus4]),
+            CaseItem(Const(ParticleOpcodes.lea, width: 8),
+                [rfWEn < Const(1), rfWAddr < rl, rfWData < leaAddr]),
+          ],
           CaseItem(Const(ParticleOpcodes.fifoR, width: 8),
               [rfWEn < ~fifoEmpty, rfWData < fifoPopData]),
           CaseItem(Const(ParticleOpcodes.fifoTryR, width: 8),
@@ -956,8 +986,13 @@ class ParticleCpuCore extends Module {
     // -------------------------------------------------------------------------
     // D: advance into E, and the unconditional branches D can decide
     // -------------------------------------------------------------------------
-    final dIsLdi = dAnyOp([ParticleOpcodes.ldi, ParticleOpcodes.ldis]);
-    // LDI's immediate is the halfword arriving now
+    // The 2-word instructions (LDI, LDIS, and the long branches and LEA when
+    // the core has them): the second word is the halfword arriving now
+    final dIsLdi = dAnyOp([
+      ParticleOpcodes.ldi,
+      ParticleOpcodes.ldis,
+      if (config.enableLongBranches) ...ParticleOpcodes.longBranchOps,
+    ]);
     final dImmReady = fValid & fPc.eq(dPc + Const(2, width: 32));
     final eFree = (~eValid | eDone).named('eFree');
     final dAdvance = (dValid &

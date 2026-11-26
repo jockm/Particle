@@ -30,6 +30,39 @@ class ParticleAssembler {
 
   ParticleAssembler(this.prep);
 
+  /// Defined (by pasm's --no-long-branches, or -D) when the code is for a
+  /// core without the 2-word PC-relative instructions: they are rejected,
+  /// JUMP and JUMP.cc use the forms without them, and lib/common.inc's
+  /// RCALL uses LDI and JMP.
+  static const noLongBranchesSymbol = '__NO_LONG_BRANCHES';
+
+  /// Whether the 2-word PC-relative instructions may be used.
+  bool get longBranches => !prep.defines.containsKey(noLongBranchesSymbol);
+
+  /// The 2-word instructions with a fixed size.
+  static const twoWordMnemonics = {
+    'LDI', 'LDIS', 'LEA', 'BRA', 'BRA.Z', 'BRA.NZ', 'BRA.N', 'BRA.P',
+    'BEQ', 'BNE',
+  };
+
+  /// JUMP and JUMP.Z/.NZ/.N/.P: their size depends on the distance.
+  static bool isSizedJump(String mnem) =>
+      mnem == 'JUMP' || const {'JUMP.Z', 'JUMP.NZ', 'JUMP.N', 'JUMP.P'}.contains(mnem);
+
+  /// The bytes of an instruction line (without its labels) that isn't a
+  /// sized JUMP.
+  int _instBytes(String line) {
+    final tokens = line.split(RegExp(r'\s+'));
+    final mnem = tokens[0].toUpperCase();
+    if (twoWordMnemonics.contains(mnem)) return 4;
+    if (mnem == 'RJUMP') {
+      // RJUMP Rr, Rl is 1 word; RJUMP label, Rl is 2
+      final first = line.substring(tokens[0].length).split(',')[0].trim();
+      return regMap.containsKey(first.toLowerCase()) ? 2 : 4;
+    }
+    return 2;
+  }
+
   /// Resolves a register token (e.g. "R0", "r14", "sp") to its 4-bit index.
   int parseReg(String token, String fname, int lno) {
     final t = token.trim().toLowerCase();
@@ -163,9 +196,9 @@ class ParticleAssembler {
       imageEnd = _pass1(processedLines, jumpAddrs);
       var grew = false;
       for (final j in jumpAddrs.entries) {
-        final target = _tryJumpTarget(processedLines[j.key].$3);
-        if (target == null) continue;
-        final need = jumpSize(j.value, target);
+        final jump = _tryJump(processedLines[j.key].$3);
+        if (jump == null) continue;
+        final need = jumpSize(jump.$1, jump.$2, j.value, jump.$3);
         if (need > (_jumpSizes[j.key] ?? 2)) {
           _jumpSizes[j.key] = need;
           grew = true;
@@ -286,7 +319,7 @@ class ParticleAssembler {
                 'instruction at odd address 0x${pc.toRadixString(16).toUpperCase().padLeft(8, '0')}',
                 fname, lno, 'misaligned');
           }
-          final isJump = line.split(RegExp(r'\s+'))[0].toUpperCase() == 'JUMP';
+          final isJump = isSizedJump(line.split(RegExp(r'\s+'))[0].toUpperCase());
           final words = isJump
               ? _encodeJump(line, pc, _jumpSizes[index] ?? 2, fname, lno)
               : encodeInstructionWords(line, pc, fname, lno);
@@ -336,8 +369,8 @@ class ParticleAssembler {
       return 0;
     }
     final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
-    if (mnem == 'JUMP') return _jumpSizes[index] ?? 2;
-    return (mnem == 'LDI' || mnem == 'LDIS') ? 4 : 2;
+    if (isSizedJump(mnem)) return _jumpSizes[index] ?? 2;
+    return _instBytes(line);
   }
 
   /// Bytes chosen for each JUMP, by its index in the processed lines.
@@ -419,12 +452,11 @@ class ParticleAssembler {
         }
       } else {
         final mnem = line.split(RegExp(r'\s+'))[0].toUpperCase();
-        if (mnem == 'JUMP') {
+        if (isSizedJump(mnem)) {
           jumpAddrs[index] = pc;
           pc += _jumpSizes[index] ?? 2;
         } else {
-          // LDI and LDIS are 32-bit (2-word / 4-byte) instructions; all others are 16-bit
-          pc += (mnem == 'LDI' || mnem == 'LDIS') ? 4 : 2;
+          pc += _instBytes(line);
         }
       }
       // Highest address reached; an .org back to a lower address does not
@@ -434,62 +466,116 @@ class ParticleAssembler {
     return imageEnd;
   }
 
-  /// The address a JUMP line goes to, or null while its label is not yet
-  /// defined (in an early run of pass 1).
-  int? _tryJumpTarget(String line) {
+  /// A JUMP or JUMP.cc line's mnemonic, condition register (-1 for JUMP)
+  /// and target, or null while its label is not yet defined (in an early
+  /// run of pass 1) or its register is wrong (pass 2 reports it).
+  (String, int, int)? _tryJump(String line) {
     var rest = line;
     while (true) {
       final (lbl, r) = splitLabel(rest);
       if (lbl == null) break;
       rest = r;
     }
-    final op = rest.trim().substring(4).trim();
+    rest = rest.trim();
+    final mnem = rest.split(RegExp(r'\s+'))[0].toUpperCase();
+    final ops = rest.substring(mnem.length).split(',').map((o) => o.trim()).toList();
     try {
-      return prep.parseExpr(op, symbols);
+      if (mnem == 'JUMP') return (mnem, -1, prep.parseExpr(ops[0], symbols));
+      final reg = regMap[ops[0].toLowerCase()];
+      if (reg == null || ops.length != 2) return null;
+      return (mnem, reg, prep.parseExpr(ops[1], symbols));
     } catch (_) {
       return null;
     }
   }
 
-  /// Bytes a JUMP at [from] needs to reach [to]: 2 for a branch (FBRA or
-  /// BBRA, up to 255 halfwords away), 6 for LDI R14 + JMP (a target below
-  /// 64K) and 10 for LDI R14 + 2 PUSH8 + JMP (any target).
-  static int jumpSize(int from, int to) {
-    final halfwords = (to - from).abs() ~/ 2;
-    if (halfwords <= 255) return 2;
-    if (to >= 0 && to <= 0xFFFF) return 6;
-    return 10;
+  /// The bytes the far forms of JUMP use without the 2-word branches: 6 for
+  /// LDI R14 + JMP (a target below 64K), 10 for LDI R14 + 2 PUSH8 + JMP.
+  static int _farBytes(int to) => (to >= 0 && to <= 0xFFFF) ? 6 : 10;
+
+  /// Bytes a JUMP ([reg] -1) or JUMP.cc Rreg at [from] needs to reach [to].
+  /// JUMP: 2 for FBRA/BBRA (up to 255 halfwords away), 4 for BRA disp16
+  /// (up to 32K halfwords), else the far form. JUMP.cc: 2 for the short
+  /// conditional branch (15 halfwords, or 255 for R14), 4 for BRA.cc
+  /// disp16, else a short branch around the far form (Z and NZ invert the
+  /// condition; N and P have no inverse, so they branch over an FBRA).
+  int jumpSize(String mnem, int reg, int from, int to) {
+    final hw = (to - from) ~/ 2;
+    final short = mnem == 'JUMP' ? 255 : (reg == 14 ? 255 : 15);
+    if (hw.abs() <= short) return 2;
+    if (longBranches && hw >= -32768 && hw <= 32767) return 4;
+    if (mnem == 'JUMP') return _farBytes(to);
+    final around = (mnem == 'JUMP.Z' || mnem == 'JUMP.NZ') ? 2 : 4;
+    return around + _farBytes(to);
   }
 
-  /// Encodes `JUMP label` at [curPc] in [size] bytes (see [jumpSize]).
+  /// Encodes a JUMP or JUMP.cc line at [curPc] in [size] bytes (see
+  /// [jumpSize]).
   List<int> _encodeJump(String line, int curPc, int size, String fname, int lno) {
     final tokens = line.split(RegExp(r'\s+'));
+    final mnem = tokens[0].toUpperCase();
     final opStr = line.substring(tokens[0].length).trim();
-    if (opStr.isEmpty || opStr.contains(',')) {
+    final ops = opStr.isEmpty ? <String>[] : opStr.split(',').map((o) => o.trim()).toList();
+    final cond = mnem == 'JUMP' ? '' : mnem.substring(4); // .Z, .NZ, .N, .P
+    if (cond.isEmpty && ops.length != 1) {
       throw AssemblerError('JUMP expects 1 operand: JUMP <label>', fname, lno);
     }
-    final to = prep.parseExpr(opStr, symbols) & 0xFFFFFFFF;
+    if (cond.isNotEmpty && ops.length != 2) {
+      throw AssemblerError('$mnem expects 2 operands: $mnem Rr, <label>', fname, lno);
+    }
+    final reg = cond.isEmpty ? 0 : parseReg(ops[0], fname, lno);
+    final to = prep.parseExpr(ops.last, symbols) & 0xFFFFFFFF;
     if (to.isOdd) {
-      throw AssemblerError('JUMP target 0x${to.toRadixString(16)} is not even', fname, lno, 'jump');
+      throw AssemblerError('$mnem target 0x${to.toRadixString(16)} is not even', fname, lno, 'jump');
     }
+    final back = to < curPc;
+    final hw = (to - curPc).abs() ~/ 2;
+    // The far forms (R14 holds the target)
     const jmpR14 = (0xA0 << 8) | (14 << 4); // JMP R14, R0
-    switch (size) {
-      case 2:
-        final back = to < curPc;
-        final halfwords = (to - curPc).abs() ~/ 2;
-        return [((back ? 0xC0 : 0xB0) << 8) | halfwords];
-      case 6:
-        return [(0x07 << 8) | 14, to & 0xFFFF, jmpR14];
-      default:
-        return [
-          (0x07 << 8) | 14, (to >> 16) & 0xFFFF, // LDI   R14, to >> 16
-          (0x06 << 8) | ((to >> 8) & 0xFF), // PUSH8 R14, (to >> 8) & 0xFF
-          (0x06 << 8) | (to & 0xFF), // PUSH8 R14, to & 0xFF
-          jmpR14,
-        ];
+    List<int> far(int bytes) => bytes == 6
+        ? [(0x07 << 8) | 14, to & 0xFFFF, jmpR14]
+        : [
+            (0x07 << 8) | 14, (to >> 16) & 0xFFFF, // LDI   R14, to >> 16
+            (0x06 << 8) | ((to >> 8) & 0xFF), // PUSH8 R14, (to >> 8) & 0xFF
+            (0x06 << 8) | (to & 0xFF), // PUSH8 R14, to & 0xFF
+            jmpR14,
+          ];
+    final disp = ((to - curPc) ~/ 2) & 0xFFFF;
+    if (cond.isEmpty) {
+      switch (size) {
+        case 2:
+          return [((back ? 0xC0 : 0xB0) << 8) | hw];
+        case 4:
+          return [0xCC00, disp]; // BRA disp16
+        default:
+          return far(size);
+      }
     }
+    // Short conditional forms: Imm4 for any register, Imm8 for R14
+    int shortBranch(String c, bool backward, int halfwords) {
+      final imm8 = reg == 14 && halfwords > 15;
+      final fwd = {
+        '.Z': imm8 ? 0xB7 : 0xB4, '.N': imm8 ? 0xB8 : 0xB5,
+        '.P': imm8 ? 0xB9 : 0xB6, '.NZ': imm8 ? 0xBB : 0xBA,
+      }[c]!;
+      final op = backward ? fwd + 0x10 : fwd;
+      return imm8 ? (op << 8) | halfwords : (op << 8) | (reg << 4) | halfwords;
+    }
+    if (size == 2) return [shortBranch(cond, back, hw)];
+    if (size == 4) {
+      final op = {'.Z': 0xBC, '.NZ': 0xBD, '.N': 0xBE, '.P': 0xBF}[cond]!;
+      return [(op << 8) | (reg << 4), disp];
+    }
+    if (cond == '.Z' || cond == '.NZ') {
+      // The inverted condition branches past the far form
+      final farWords = far(size - 2);
+      return [shortBranch(cond == '.Z' ? '.NZ' : '.Z', false, 1 + farWords.length), ...farWords];
+    }
+    // .N/.P: taken, branch over the FBRA to the far form; not taken, the FBRA
+    // skips it
+    final farWords = far(size - 4);
+    return [shortBranch(cond, false, 2), (0xB0 << 8) | (1 + farWords.length), ...farWords];
   }
-
 
   /// Decodes escape sequences (\n, \r, \t, \0, \\, \", \') inside string literals.
   List<int> _unescapeAsciz(String s) {
@@ -594,7 +680,65 @@ class ParticleAssembler {
         return [(0x08 << 8) | rl, val & 0xFFFF];
       }
     }
+    if (twoWordMnemonics.contains(mnem) ||
+        (mnem == 'RJUMP' && _instBytes(line) == 4)) {
+      return _encodeLong(line, mnem, curPc, fname, lno);
+    }
     return [encodeInstruction(line, curPc, fname, lno)];
+  }
+
+  /// Encodes the 2-word PC-relative instructions: BRA, BRA.Z/NZ/N/P,
+  /// RJUMP label, Rl, BEQ, BNE (a halfword displacement) and LEA (bytes).
+  List<int> _encodeLong(String line, String mnem, int curPc, String fname, int lno) {
+    final opStr = line.substring(line.split(RegExp(r'\s+'))[0].length).trim();
+    final ops = opStr.isEmpty ? <String>[] : opStr.split(',').map((o) => o.trim()).toList();
+    final form = switch (mnem) {
+      'BRA' => 'BRA <label>',
+      'LEA' => 'LEA Rl, <label>',
+      'RJUMP' => 'RJUMP <label>, Rl',
+      'BEQ' || 'BNE' => '$mnem Rr, Rl, <label>',
+      _ => '$mnem Rr, <label>',
+    };
+    final want = form.split(',').length;
+    if (ops.length != want || ops.any((o) => o.isEmpty)) {
+      throw AssemblerError('$mnem expects $want ${want == 1 ? 'operand' : 'operands'}: $form', fname, lno);
+    }
+    if (!longBranches) {
+      throw AssemblerError(
+          '$mnem needs a core with the 2-word branches (this is assembled with --no-long-branches)',
+          fname, lno, 'long-branch');
+    }
+    int reg(int i) => parseReg(ops[i], fname, lno);
+    final targetOp = mnem == 'RJUMP' ? ops[0] : ops.last;
+    if (regMap.containsKey(targetOp.toLowerCase())) {
+      throw AssemblerError('$mnem takes a label or address, not a register: $form', fname, lno);
+    }
+    final to = prep.parseExpr(targetOp, symbols);
+    final bytes = to - curPc;
+    if (mnem == 'LEA') {
+      if (bytes < -32768 || bytes > 32767) {
+        throw AssemblerError('LEA target out of range ($bytes bytes; -32768..32767)', fname, lno, 'branch-range');
+      }
+      return [(0x09 << 8) | reg(0), bytes & 0xFFFF];
+    }
+    if (to.isOdd) {
+      throw AssemblerError('$mnem target 0x${(to & 0xFFFFFFFF).toRadixString(16)} is not even', fname, lno, 'jump');
+    }
+    final hw = bytes ~/ 2;
+    if (hw < -32768 || hw > 32767) {
+      throw AssemblerError('$mnem target out of range ($hw halfwords; -32768..32767)', fname, lno, 'branch-range');
+    }
+    final d = hw & 0xFFFF;
+    return switch (mnem) {
+      'BRA' => [0xCC00, d],
+      'RJUMP' => [(0xCD << 8) | reg(1), d],
+      'BEQ' => [(0xCE << 8) | (reg(0) << 4) | reg(1), d],
+      'BNE' => [(0xCF << 8) | (reg(0) << 4) | reg(1), d],
+      _ => [
+          ({'BRA.Z': 0xBC, 'BRA.NZ': 0xBD, 'BRA.N': 0xBE, 'BRA.P': 0xBF}[mnem]! << 8) | (reg(0) << 4),
+          d,
+        ],
+    };
   }
 
   /// Encodes a single instruction into a 16-bit machine word.

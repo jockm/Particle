@@ -336,6 +336,8 @@ void main(List<String> args) {
       leftOut.add("shadow_bank");
     } else if (arg == "--no-mbox-receive") {
       leftOut.add("mbox_receive");
+    } else if (arg == "--no-long-branches") {
+      leftOut.add("long_branches");
     } else if (arg == "-C" || arg == "--cluster") {
       if (i + 1 >= args.length) {
         stderr.writeln("[ERROR] $arg needs a cluster file");
@@ -367,7 +369,7 @@ void main(List<String> args) {
       return;
     }
     if (leftOut.isNotEmpty) {
-      stderr.writeln("[ERROR] With -C, set pointer_modes, subword, shadow_bank and mbox_receive per core in the cluster file");
+      stderr.writeln("[ERROR] With -C, set pointer_modes, subword, shadow_bank, mbox_receive and long_branches per core in the cluster file");
       exitCode = exitPsimError;
       return;
     }
@@ -381,6 +383,7 @@ void main(List<String> args) {
   core.subword = !leftOut.contains("subword");
   core.shadowBank = !leftOut.contains("shadow_bank");
   core.mboxReceive = !leftOut.contains("mbox_receive");
+  core.longBranches = !leftOut.contains("long_branches");
 
   if (binary != null) {
     final file = File(binary);

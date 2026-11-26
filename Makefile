@@ -588,9 +588,14 @@ build: firmware apps
 firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS)
 	@$(DOT_CLEAN_CMD)
 
+# The conductor and cores 1 and 3 are built without the 2-word branches
+# (ParcoreConfig), so their firmware is assembled for that: JUMP, JUMP.cc and
+# RCALL use the other forms
+$(PARCORE_BLD)/conductor/%.bin: FIRMWARE_FLAGS := -D __NO_LONG_BRANCHES
+$(PARCORE_BLD)/riscv/core1_id.bin $(PARCORE_BLD)/riscv/core3_mem.bin: FIRMWARE_FLAGS := -D __NO_LONG_BRANCHES
 $(PARCORE_BLD)/%.bin: firmware/parcore/%.asm $(wildcard firmware/parcore/riscv/*.inc) $(PASM_BIN)
 	@mkdir -p $(dir $@)
-	@$(PBUILD) "$<" -o "$@"
+	@$(PBUILD) $(FIRMWARE_FLAGS) "$<" -o "$@"
 
 apps: $(PASM_BIN) $(PASM_LINT_BIN) $(ACTION_BIN) $(APP_ASM_BINS) $(APP_ACT_BINS) $(MULTI_BINS)
 	@$(DOT_CLEAN_CMD)

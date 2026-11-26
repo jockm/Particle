@@ -19,6 +19,7 @@ build/tools/pasm [options] <source.asm> [<source.asm> ...]
 * `--format {bin,hex}`: Output format (default: `bin`):
   * `bin`: Raw little-endian machine code binary.
   * `hex`: One 16-bit hexadecimal word per line (for FPGA Block RAM initialization).
+* `--no-long-branches`: Assemble for a core built without the 2-word PC-relative instructions (`CpuConfig.enableLongBranches` off). `BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP label, Rl`, `BEQ`, `BNE` and `LEA` are errors (`long-branch`); `JUMP`, `JUMP.cc` and `RCALL` use the forms without them. It predefines `__NO_LONG_BRANCHES`, which `-D __NO_LONG_BRANCHES` does too, and which macros can test with `.ifdef`.
 
 A listing, with each line's address, bytes and source line number, each label with its address, and a symbol table, is always written beside the output, with the same name and the extension `.lst`.
 
@@ -67,6 +68,16 @@ A conditional branch's second operand is its target or, for `.Z`, `.N` and `.P`,
 | `BBRA.N R3, R5` | The register form (`0xC2`): branch to PC − `R5` × 2 when `R3` is negative |
 
 `FBRA.NZ` and `BBRA.NZ` have no register form.
+
+The 2-word branches take a target either way, up to 32K halfwords off (`branch-range` beyond that), and a target at an odd address is an error (`jump`):
+
+| Written | Encodes |
+|---|---|
+| `BRA label` | `0xCC` |
+| `BRA.Z R3, label` (`.NZ`, `.N`, `.P`) | `0xBC`–`0xBF`: branch when `R3` is zero (not zero, negative, positive) |
+| `BEQ R3, R5, label`, `BNE R3, R5, label` | `0xCE`, `0xCF`: branch when `R3` equals (doesn't equal) `R5` |
+| `RJUMP label, R9` | `0xCD`: jump, with `R9` = the address after it (PC + 4). `RJUMP R2, R9` is still the 1-word register form (`0xA1`) |
+| `LEA R6, label` | `0x09`: `R6` = the address of `label`, up to 32 KiB either way (in bytes; `branch-range` beyond) |
 
 ---
 
@@ -153,7 +164,8 @@ Every error and warning, from `pasm` and from `pasm_lint`, ends with a code in b
 | `expression` | error | A malformed expression |
 | `branch-range` | error | A branch target too far away |
 | `branch-direction` | error | A forward branch that goes backward, or a backward branch that goes forward |
-| `jump` | error | A `JUMP` to an odd address, or `JUMP` sizes that do not settle |
+| `jump` | error | A `JUMP`, `JUMP.cc` or 2-word branch to an odd address, or `JUMP` sizes that do not settle |
+| `long-branch` | error | A 2-word branch, `RJUMP label` or `LEA` assembled with `--no-long-branches` |
 | `include` | error | An include file that is not found |
 | `reserved-name` | error | A label with the name the assembler defines for the end of the image, or a label or `.define` named like a register |
 | `duplicate-symbol` | error | A label or `.define` defined twice |
@@ -194,14 +206,26 @@ An unconditional jump to `<label>` at any distance. The assembler chooses the sm
 | Distance to the target | Assembled as | Size |
 |---|---|---|
 | Up to 255 halfwords forward or back | `FBRA <label>` / `BBRA <label>` | 1 halfword |
-| Further, target below `0x10000` | `LDI R14, <label>` + `JMP R14, R0` | 3 halfwords |
+| Up to 32K halfwords forward or back | `BRA <label>` | 2 halfwords |
+| Further (or with `--no-long-branches`), target below `0x10000` | `LDI R14, <label>` + `JMP R14, R0` | 3 halfwords |
 | Further, any target | `LDI R14, <label> >> 16` + `PUSH8` + `PUSH8` + `JMP R14, R0` | 5 halfwords |
 
-The longer forms overwrite `R14`. A `JUMP`'s size depends on where its target ends up, and other `JUMP`s change those addresses, so pass 1 repeats until no `JUMP` needs to grow. The Action compiler writes its unconditional jumps this way.
+The `LDI` forms overwrite `R14`. A `JUMP`'s size depends on where its target ends up, and other `JUMP`s change those addresses, so pass 1 repeats until no `JUMP` needs to grow. The Action compiler writes its unconditional jumps this way.
 
 ---
 
 ---
+
+### `JUMP.Z Rr, <label>` (and `JUMP.NZ`, `JUMP.N`, `JUMP.P`)
+A conditional branch to `<label>` at any distance, sized the same way:
+
+| Distance to the target | Assembled as | Size |
+|---|---|---|
+| Up to 15 halfwords (255 when `Rr` is `R14`) | `FBRA.Z Rr, <label>` / `BBRA.Z Rr, <label>` | 1 halfword |
+| Up to 32K halfwords | `BRA.Z Rr, <label>` | 2 halfwords |
+| Further, or with `--no-long-branches` | `.Z`/`.NZ`: the opposite short branch past the `JUMP` far form. `.N`/`.P` (which have no opposite): `FBRA.N Rr` to the far form, and an `FBRA` past it | 4 or 6 halfwords (`.Z`/`.NZ`), 5 or 7 (`.N`/`.P`) |
+
+The far forms overwrite `R14` when the branch is taken.
 
 ## Standard Macros (`lib/common.inc`)
 
@@ -220,15 +244,15 @@ The longer forms overwrite `R14`. A `JUMP`'s size depends on where its target en
 | `STZP32 addr, reg` | `LD R14` + `ST32` | stores `reg` at a zero-page address |
 | `START_PROGRAM` | `LOAD32 R15` + `LDI R14` + `JMP` | sets the stack pointer to `0x00010000` and jumps to `_main` |
 | `LJMP target` | `LDI R14` + `JMP R14, R0` | jumps to a target below `0x10000` |
-| `RCALL target` | `LDI R14` + `JMP R14, R14` | calls a routine below `0x10000`; the return address is in `R14` |
-| `RLCALL target` | same as `RCALL` | |
+| `RCALL target` | `RJUMP target, R14`; `LDI R14` + `JMP R14, R14` with `--no-long-branches` | calls a routine up to 32K halfwords away (below `0x10000` with `--no-long-branches`); the return address is in `R14` |
+| `RLCALL target` | `LDI R14` + `JMP R14, R14` | as the old `RCALL`: a routine below `0x10000`, on any core |
 | `RRET` | `JMP R14, R0` | returns to the address in `R14` |
 | `PUSH32 reg` | `LD32 (--R15), reg` | pushes a register |
 | `POP32 reg` | `LD32 reg, (R15++)` | pops a register |
 | `FAST_ENTER_TRAP` | `XCHGMOST` | starts a trap handler: `R1`–`R14` swap with the shadow bank |
 | `FAST_EXIT_TRAP` | `XCHGMOST` + `JMP R14, R0` | ends a trap handler and returns |
 
-`JUMP` (above) reaches any address; `LJMP` and `RCALL` reach targets below `0x10000`.
+`JUMP` (above) reaches any address; `LJMP` reaches targets below `0x10000`, and `RCALL` targets up to 32K halfwords away (below `0x10000` with `--no-long-branches`).
 
 ## Vector Tables (`lib/vectors.inc`)
 

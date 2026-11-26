@@ -89,8 +89,12 @@
 .endmacro
 
 .macro RCALL target
+.ifdef __NO_LONG_BRANCHES
     LDI     R14, %target
     JMP     R14, R14
+.else
+    RJUMP   %target, R14
+.endif
 .endmacro
 
 .macro RRET
