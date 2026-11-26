@@ -18,19 +18,23 @@ repository root unless a step says otherwise.
   computer with the LLVM compiler (see
   [Building for your computer](#building-for-your-computer-llvm)), and for
   `make llvm-tests` and `make deps-tests`.
-- **RISC-V bare-metal toolchain** (optional), only for the official RISC-V
-  ISA tests and for building or inspecting your own Parcore guest RV32IM_Zbb
-  code (see [RISC-V development tools](#risc-v-development-tools)).
-- **OSS CAD Suite** (optional), for FPGA synthesis and place-and-route on
-  Lattice ECP5/ULX3S. It provides Yosys and `nextpnr-ecp5`; download the build
-  for your platform from the [official OSS CAD Suite releases](https://github.com/YosysHQ/oss-cad-suite/releases).
-  It is not needed for the Makefile targets, which generate SystemVerilog but
-  do not synthesize or place-and-route it. See the
-  [configuration guide](Documentation/configuration_guide.md).
-- **Docker** (optional, required for the OpenROAD ASIC RTL-to-GDS flow,
-  `make asic-flow`): runs the official `openroad/orfs` container image
-  identically across Windows, macOS, and Linux with no native OpenROAD compile
-  needed.
+- **RISC-V bare-metal toolchain** (optional): a RISC-V GCC, or LLVM with the
+  RISC-V target, for the official RISC-V ISA tests, the Parcore guest programs
+  (`make parcore-bit`, `make parcore-profile`), and your own RV32IM_Zbb code
+  (see [RISC-V development tools](#risc-v-development-tools)).
+- **OSS CAD Suite** (optional): provides `yosys`, `nextpnr-ecp5`, `ecppack`,
+  `openFPGALoader` and `verilator`. Yosys, nextpnr, `ecppack` and
+  `openFPGALoader` build and load the ULX3S bitstreams (`make ulx3s-bit`,
+  `make parcore-bit`, see the [configuration guide](Documentation/configuration_guide.md));
+  Verilator runs the Parcore tests and `make parcore-profile` quickly
+  (`make test-parcore` uses it by default). Download the build for your
+  platform from the [official OSS CAD Suite releases](https://github.com/YosysHQ/oss-cad-suite/releases).
+- **Docker** (optional), for the OpenROAD ASIC RTL-to-GDS flow: it runs the
+  official `openroad/orfs` container image identically across Windows, macOS
+  and Linux, with no native OpenROAD compile needed. Particle doesn't have its
+  OpenROAD flow yet (it is item 2 of [Road to GHz](Documentation/road_to_ghz.md));
+  the sister project MicroRISC4 uses the same image for its `make asic-flow`,
+  so one installation serves both.
 
 ## Installing dependencies
 
@@ -53,8 +57,13 @@ brew install node
 brew install --cask visual-studio-code
 ```
 
-For OSS CAD Suite, download the macOS build from the releases page above and
-follow its instructions.
+For OSS CAD Suite, download the macOS (`arm64` or `x64`) archive from the
+releases page above, extract it to `~/oss-cad-suite`, and add its `bin`
+folder to your `PATH` (in `~/.zshrc`):
+
+```sh
+export PATH="$HOME/oss-cad-suite/bin:$PATH"
+```
 
 ### Windows
 
@@ -107,9 +116,10 @@ above put them:
 | clang | `C:\Program Files\LLVM\bin`, then the WinGet LLVM-MinGW package (required) |
 | Dart | The WinGet Dart SDK package, then `PATH` (required) |
 | Node.js and npm | `%LOCALAPPDATA%\Programs\nodejs`, the WinGet Node.js package, then `C:\Program Files\nodejs` (required) |
-| OSS CAD Suite | `%USERPROFILE%\oss-cad-suite\bin` (used if present) |
+| OSS CAD Suite | `%USERPROFILE%\oss-cad-suite\bin` and `\lib`, put ahead of Git Bash's own tools so Yosys and nextpnr load their own DLLs (used if present) |
 | RISC-V toolchain | `%USERPROFILE%\xpack-riscv-none-elf-gcc\bin` (used if present) |
-| Python / Git / Docker | Standard Windows `PATH` |
+| Docker | `%ProgramFiles%\Docker\Docker\resources\bin`, then `PATH` (used if present) |
+| Python, Git | Standard Windows `PATH` |
 
 If a required tool is missing, `pdev.cmd` says which one and how to install
 it. Python, VS Code's `code` command, and Git itself come from your normal
@@ -166,35 +176,19 @@ it, which also adds Microsoft's apt repository for updates:
 sudo apt install ./code_*.deb
 ```
 
-For OSS CAD Suite, download the Linux build from the releases page above and
-follow its instructions.
-
-### Checking the tools
-
-Check that the commands are available in your shell (on Windows, in the
-`pdev.cmd` shell):
-
-```sh
-git --version
-dart --version
-node --version
-npm --version
-python3 --version    # on Windows: python --version
-code --version
-clang --version      # only for the LLVM compiler
-```
-
-On Linux, `dart` may need a new terminal before it is found. On macOS, if `code` is not found, open VS Code's Command Palette and run
-**Shell Command: Install 'code' command in PATH**. The Makefile also checks
-the standard macOS VS Code application location.
+For OSS CAD Suite, download the Linux archive from the releases page above,
+extract it to `~/oss-cad-suite`, and add
+`export PATH="$HOME/oss-cad-suite/bin:$PATH"` to your `~/.bashrc`.
 
 ## Installing Docker for the ASIC flow (OpenROAD-flow-scripts)
 
-The OpenROAD ASIC RTL-to-GDS flow (`make asic-flow`) runs inside the official
+The OpenROAD ASIC RTL-to-GDS flow runs inside the official
 `openroad/orfs` Docker image. That image already bundles OpenROAD, Yosys,
 OpenSTA, KLayout, and public reference PDKs (`nangate45`, `asap7`, `sky130hd`,
 `ihp-sg13g2`), so **all projects on your machine share one image** and you do
-not need to clone or compile OpenROAD natively.
+not need to clone or compile OpenROAD natively. Particle doesn't use it yet
+(item 2 of [Road to GHz](Documentation/road_to_ghz.md)): skip this until its
+flow arrives, or install it now if you use MicroRISC4.
 
 ### Windows (Docker Desktop + WSL2)
 
@@ -214,13 +208,24 @@ not need to clone or compile OpenROAD natively.
 3. Launch **Docker Desktop** from the Start menu, accept the prompts, and wait
    until the whale icon in the system tray shows **Engine running** (ensure
    **Settings → General → Use the WSL 2 based engine** is checked).
-4. Open a fresh `mdev.cmd` shell and verify Docker works, then pull the shared
+4. Open a fresh `pdev.cmd` shell and verify Docker works, then pull the shared
    OpenROAD-flow-scripts image once (~2–3 GB download, reused by all projects):
 
    ```sh
    docker --version
    docker run --rm hello-world
    docker pull openroad/orfs:latest
+   ```
+
+   If you work on the Windows computer over SSH and `docker pull` or
+   `docker run` fails with `A specified logon session does not exist`, the
+   Windows Credential Manager isn't available to SSH sessions. Turn off
+   Docker's Windows credential helper for Docker Hub in
+   `%USERPROFILE%\.docker\config.json` (public images pull without logging
+   in):
+
+   ```bat
+   python -c "import json, os; p=os.path.expanduser('~/.docker/config.json'); d=json.load(open(p)); d.pop('credsStore', None); d['credHelpers']={'https://index.docker.io/v1/': ''}; json.dump(d, open(p,'w'), indent=2)"
    ```
 
 ### macOS
@@ -254,20 +259,28 @@ sudo usermod -aG docker "$USER"
 docker pull openroad/orfs:latest
 ```
 
-### Checking all installed tools
+### Checking the tools
 
-From your shell (on Windows, inside `mdev.cmd`):
+Check that the commands are available in your shell (on Windows, in the
+`pdev.cmd` shell):
 
 ```sh
 git --version
-python3 --version        # or `python --version` on Windows
 dart --version
-make --version
+node --version
+npm --version
+python3 --version        # on Windows: python --version
+code --version
+clang --version          # only for the LLVM compiler
 yosys -V                 # optional: OSS CAD Suite
 nextpnr-ecp5 --version   # optional: OSS CAD Suite
-docker --version         # optional: ASIC ORFS flow
+verilator --version      # optional: OSS CAD Suite
+docker --version         # optional: the OpenROAD flow
 ```
 
+On Linux, `dart` may need a new terminal before it is found. On macOS, if `code` is not found, open VS Code's Command Palette and run
+**Shell Command: Install 'code' command in PATH**. The Makefile also checks
+the standard macOS VS Code application location.
 
 ## Get the source
 
@@ -464,6 +477,10 @@ The toolchain's commands have a prefix that depends on where it comes from:
 compiler targets the Parcore 32-bit ISA when given
 `-march=rv32im_zbb -mabi=ilp32`. GCC 12 or later is needed for Zbb.
 
+Either a RISC-V GCC or LLVM works for building: `apps/riscv/riscv_toolchain.sh`
+uses GCC if it finds one and LLVM otherwise (`RISCV_TOOLCHAIN=gcc` or `llvm`
+chooses; see [LLVM](#llvm) below). The rest of this section is about GCC.
+
 ### macOS
 
 With Homebrew, run:
@@ -519,6 +536,16 @@ for checking the generated instructions. `PREFIX-gdb program.elf` opens
 the program with its symbols; stepping through execution additionally
 requires a compatible RISC-V emulator or debug target.
 
+### LLVM
+
+LLVM with the RISC-V target, `ld.lld` and `llvm-objcopy` builds the guest
+programs and the official ISA tests too. On macOS, `brew install llvm lld`
+(Homebrew's `/opt/homebrew/opt/llvm/bin` and `lld` are found without being on
+your `PATH`); on Linux, `sudo apt install clang lld llvm`. For an LLVM
+elsewhere, set `RISCV_LLVM_BIN` to its `bin` folder. Three Zbb ISA tests
+(`sext_b`, `sext_h`, `zext_h`) load 64-bit constants with `li`, which LLVM's
+assembler rejects; the build keeps their low 32 bits, as GNU as does.
+
 ## Useful Makefile commands
 
 Run `make help` to see the available targets. Common ones include:
@@ -539,6 +566,8 @@ Run `make help` to see the available targets. Common ones include:
 | `make deps-tests` | Test fetching, vendoring, and building with Action modules |
 | `make llvm-tests` | Build and run Action tests using the LLVM backend |
 | `make clean` | Remove build outputs and generated hardware files |
+| `make ulx3s-bit`, `make parcore-bit` | Build a ULX3S bitstream: one Particle core, or Parcore (OSS CAD Suite) |
+| `make parcore-profile` | Profile Parcore running the benchmark guest (Verilator) |
 
 ## Developing a VS Code extension
 

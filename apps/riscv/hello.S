@@ -27,6 +27,13 @@
     .equ HEARTBEAT,    13           # counter bit shown on LED 7
     .equ DEBOUNCE,     64           # passes the buttons must be steady
 
+# The build stamp: when and from which commit this was built (UTC date and
+# time, the git short hash, "-dirty" for uncommitted changes), so the banner
+# shows which build is on the board. build_riscv_guest.sh defines it.
+#ifndef BUILD_STAMP
+#define BUILD_STAMP "unstamped"
+#endif
+
     .section .text.init
     .globl _start
 _start:
@@ -113,7 +120,9 @@ puts:
 
     .section .rodata
 banner:
-    .asciz  "\r\nParcore on the ULX3S: RISC-V on Particles\r\nType to echo. Buttons light LEDs 0-5; FIRE1 restarts.\r\n"
+    .ascii  "\r\nParcore on the ULX3S: RISC-V on Particles\r\nBuild "
+    .ascii  BUILD_STAMP
+    .asciz  "\r\nType to echo. Buttons light LEDs 0-5; FIRE1 restarts.\r\n"
     .balign 8
 button_names:
     .asciz  "FIRE1\r\n"
