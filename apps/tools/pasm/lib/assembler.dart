@@ -538,6 +538,7 @@ class ParticleAssembler {
   /// checked where they are encoded).
   static const Map<String, int> operandCounts = {
     'NOP': 0, 'XCHGALL': 0, 'XCHGMOST': 0,
+    'RETI': 0, 'MBOX.ON': 0, 'MBOX.OFF': 0,
     'NEG': 1, 'NOT': 1, 'NEZ': 1, 'SEXT8': 1, 'SEXT16': 1, 'REV32': 1,
     'XCHG': 1, 'JTBL': 1, 'BRANCH': 1, 'TRAP': 1,
     'FBRA': 1, 'BBRA': 1,
@@ -1048,13 +1049,17 @@ class ParticleAssembler {
 
     if (mnem == 'MBOX') {
       final rr = getR(0);
-      if (isReg(1)) {
-        throw AssemblerError(
-            'MBOX takes a vector number (0..15), not a register: MBOX Rr, <imm4>', fname, lno, 'register');
-      }
+      // MBOX Rr, Rl: the target core in Rl bits 7:0, the vector in 11:8
+      if (isReg(1)) return (0xE2 << 8) | (rr << 4) | getR(1);
+      // MBOX Rr, Imm4: vector Imm4 on the core's default target
       final vec = getImm(1, 0, 15, 'Vector');
       return (0xE5 << 8) | (rr << 4) | (vec & 0x0F);
     }
+
+    // Returning from an MBOX trap (to EPC), and masking MBOX traps
+    if (mnem == 'RETI') return 0xE300;
+    if (mnem == 'MBOX.ON') return 0xE800;
+    if (mnem == 'MBOX.OFF') return 0xE900;
 
     throw AssemblerError(
         "Unimplemented instruction mnemonic '$mnem'", fname, lno);

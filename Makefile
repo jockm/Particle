@@ -394,7 +394,7 @@ test-sim: $(PSIM) $(BUILD_DIR)/branch_suite.bin
 # Multi-core simulator tests: each cluster file in apps/asm/cluster runs its
 # programs (assembled into build/cluster) and must end with the exit code
 # listed here: 0 when every core ends with TRAP 0, 19 for a deadlock.
-CLUSTER_TESTS := stream:0 mbox:0 shared:0 deadlock:19 ring_stream:0 ring_flow:0 ring_flush:0
+CLUSTER_TESTS := stream:0 mbox:0 shared:0 deadlock:19 mbox_queue:0 mbox_any:0 ring_stream:0 ring_flow:0 ring_flush:0 ring_mbox_queue:0 ring_mbox_any:0 ring_config:0
 
 test-sim-cluster: $(PSIM) $(PASM_BIN)
 	@echo "==> Running multi-core simulator tests..."

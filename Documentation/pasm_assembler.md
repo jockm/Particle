@@ -254,4 +254,4 @@ Each slot macro starts with `.org` at its slot, so slots are written in order an
     UNEXPECTED_TRAP_ROUTINE
 ```
 
-`MBOX_VALUE` (`0xFC`) is the word where a core stores the value of the last `MBOX` it received.
+`MBOX_VALUE` (`0xFC`) is the word where a core stores the value of the last `MBOX` it received, in the HDL core until it implements `Documentation/mbox_design.md`. With it, the value and the sender come from the network interface's registers instead; `lib/common.inc` defines their addresses as `NI_FLUSH`, `NI_MBOX_VALUE`, `NI_MBOX_SOURCE` and `NI_CONFIG` (`0xFF00`–`0xFF0C`, for `LDIS`, which sign-extends them to `0xFFFF_FF00`–`0xFFFF_FF0C`).

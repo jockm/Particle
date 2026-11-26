@@ -1,0 +1,26 @@
+{
+  "topology": "ring",
+  "cores": [
+    {
+      "id": 0,
+      "name": "sender",
+      "binary": "../../../build/cluster/mbox_any_sender.bin"
+    },
+    {
+      "id": 1,
+      "name": "one",
+      "binary": "../../../build/cluster/mbox_any_receiver.bin",
+      "initial_registers": {
+        "R12": 1
+      }
+    },
+    {
+      "id": 2,
+      "name": "two",
+      "binary": "../../../build/cluster/mbox_any_receiver.bin",
+      "initial_registers": {
+        "R12": 2
+      }
+    }
+  ]
+}

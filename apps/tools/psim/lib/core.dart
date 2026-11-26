@@ -57,6 +57,10 @@ abstract class NetworkPort {
   /// A store to the FLUSH register: send a FLUSH on channel [ch].
   void flush(int ch);
 
+  /// A store to the CONFIG register: send a CONFIG packet (see
+  /// [niConfigAddr]).
+  void config(int word);
+
   static const pushAccepted = 0;
   static const pushNoCredit = 1;
   static const pushQueueFull = 2;
@@ -65,6 +69,23 @@ abstract class NetworkPort {
 /// The network interface's FLUSH register: storing a channel number sends a
 /// FLUSH on that channel (Documentation/noc_design.md).
 const int niFlushAddr = 0xFFFFFF00;
+
+/// The network interface's MBOX registers: the value and the sending core of
+/// the last MBOX trap taken (Documentation/mbox_design.md).
+const int niMboxValueAddr = 0xFFFFFF04;
+const int niMboxSourceAddr = 0xFFFFFF08;
+
+/// The CONFIG register: a store sends a CONFIG packet. Bits 31:24 the core
+/// it goes to (0xFF: every core); 23:20 the entry (0 the route of a channel,
+/// 1 the sender of a channel's input, 2 the default MBOX target); 19:16 the
+/// channel; 15:8 a core and 3:0 a channel, the entry's new value (for the
+/// MBOX target, only the core).
+const int niConfigAddr = 0xFFFFFF0C;
+
+/// MBOXes a core can hold before it takes them, and the core number that
+/// means every core.
+const int mboxQueueDepth = 4;
+const int mboxBroadcast = 0xFF;
 
 class ParticleCore {
   final int memSize;
@@ -144,14 +165,51 @@ class ParticleCore {
   Uint8List? shared;
   int sharedBase = 0;
 
-  /// Called when this core executes MBOX with vector Imm4 and the value of
-  /// Rr; null when there is no other core (MBOX does nothing).
-  void Function(int vector, int value)? onMbox;
+  /// This core's number in a cluster (the "id" of its entry).
+  int id = 0;
 
-  /// A trap another core raised with MBOX, taken before the next
-  /// instruction, and the value it sent. A newer MBOX replaces an older one.
-  int? pendingTrap;
-  int pendingMboxValue = 0;
+  /// The core `MBOX Rr, Imm4` goes to (a core number), or null.
+  int? mboxTarget;
+
+  /// Called when this core executes MBOX: the target core (null for the
+  /// default target, [mboxBroadcast] for every core), the vector and the
+  /// value. False when it can't be sent yet (the core waits and tries again);
+  /// null when there is no other core (MBOX does nothing).
+  bool Function(int? target, int vector, int value)? onMbox;
+
+  /// MBOXes from other cores, waiting to be taken: (vector, value, source).
+  /// One more slot holds a broadcast; a broadcast that finds it full is
+  /// dropped. Taken before the next instruction unless masked.
+  final Queue<(int, int, int)> mboxQueue = Queue();
+  (int, int, int)? mboxBroadcastSlot;
+
+  /// Masked by MBOX.OFF and by taking an MBOX trap; unmasked by MBOX.ON and
+  /// RETI.
+  bool mboxMasked = false;
+
+  /// Where RETI returns: the instruction an MBOX trap interrupted.
+  int epc = 0;
+
+  /// The last MBOX trap's value and sending core (the MBOX registers).
+  int mboxValue = 0;
+  int mboxSource = 0;
+
+  /// Whether an MBOX trap is ready to be taken.
+  bool get mboxReady =>
+      mboxReceive && !mboxMasked && (mboxQueue.isNotEmpty || mboxBroadcastSlot != null);
+
+  /// An MBOX arriving: false when the queue is full (the sender tries
+  /// again). A broadcast always counts as accepted.
+  bool acceptMbox(int vector, int value, int source, {bool broadcast = false}) {
+    if (!mboxReceive) return true;
+    if (broadcast) {
+      mboxBroadcastSlot ??= (vector & 0x0F, value & mask32, source);
+      return true;
+    }
+    if (mboxQueue.length >= mboxQueueDepth) return false;
+    mboxQueue.add((vector & 0x0F, value & mask32, source));
+    return true;
+  }
 
   ParticleCore({this.memSize = 0x20000, int numFifos = 4})
       : fifos = List.generate(numFifos, (_) => Queue<int>()),
@@ -170,7 +228,12 @@ class ParticleCore {
     haltCode = null;
     stalled = false;
     waitingChannel = null;
-    pendingTrap = null;
+    mboxQueue.clear();
+    mboxBroadcastSlot = null;
+    mboxMasked = false;
+    epc = 0;
+    mboxValue = 0;
+    mboxSource = 0;
     for (final f in fifos) {
       f.clear();
     }
@@ -257,6 +320,8 @@ class ParticleCore {
       triggerTrap(14, pc);
       return 0;
     }
+    if ((addr & mask32) == niMboxValueAddr) return mboxValue;
+    if ((addr & mask32) == niMboxSourceAddr) return mboxSource;
     if (_sharedOffset(addr) >= 0) {
       return read8(addr) | (read8(addr + 1) << 8) | (read8(addr + 2) << 16) | (read8(addr + 3) << 24);
     }
@@ -274,6 +339,10 @@ class ParticleCore {
     }
     if (network != null && (addr & mask32) == niFlushAddr) {
       network!.flush(val & 3);
+      return;
+    }
+    if ((addr & mask32) == niConfigAddr) {
+      network?.config(val & mask32);
       return;
     }
     if (_sharedOffset(addr) >= 0) {
@@ -303,17 +372,26 @@ class ParticleCore {
       return false;
     }
 
-    // A trap raised by another core's MBOX: a stalled instruction is
-    // abandoned, and runs again when the handler returns
-    final pending = pendingTrap;
-    if (pending != null) {
-      pendingTrap = null;
+    // An MBOX trap from another core: a stalled instruction is abandoned,
+    // and runs again when RETI returns to it. The return PC goes to EPC (R14
+    // is kept), MBOX traps are masked, and the handler reads the value and
+    // the sender from the MBOX registers.
+    if (mboxReady) {
+      final (int, int, int) entry;
+      if (mboxQueue.isNotEmpty) {
+        entry = mboxQueue.removeFirst();
+      } else {
+        entry = mboxBroadcastSlot!;
+        mboxBroadcastSlot = null;
+      }
+      final (vector, value, source) = entry;
       stalled = false;
       waitingChannel = null;
-      // The value goes to MBOX_VALUE, the word below the trap table
-      write32((trapBase - 4) & mask32, pendingMboxValue);
-      triggerTrap(pending, pc);
-      _trapTaken = false;
+      mboxValue = value;
+      mboxSource = source;
+      epc = pc;
+      mboxMasked = true;
+      pc = (trapBase + vector * trapStride) & mask32;
       cycleCount++;
       return true;
     }
@@ -827,9 +905,29 @@ class ParticleCore {
           q.add(r[rr]);
         }
       }
-    } else if (opcode == 0xE5) {
-      // MBOX: raise trap Imm4 on another core, sending Rr
-      onMbox?.call(imm4, r[rr]);
+    } else if (opcode == 0xE5 || opcode == 0xE2) {
+      // MBOX Rr, Imm4: vector Imm4 on the default target. MBOX Rr, Rl: the
+      // target core in Rl bits 7:0, the vector in 11:8. It waits while it
+      // can't be sent (the target's queue is full, or the last is unanswered)
+      final send = onMbox;
+      if (send != null) {
+        final target = opcode == 0xE2 ? r[rl] & 0xFF : null;
+        final vector = opcode == 0xE2 ? (r[rl] >> 8) & 0x0F : imm4;
+        if (!send(target, vector, r[rr])) {
+          stalled = true;
+          waitingChannel = null;
+          cycleCount++;
+          return true;
+        }
+      }
+    } else if (opcode == 0xE3) {
+      // RETI: back to the instruction the MBOX trap interrupted
+      nextPc = epc;
+      mboxMasked = false;
+    } else if (opcode == 0xE8) {
+      mboxMasked = false; // MBOX.ON
+    } else if (opcode == 0xE9) {
+      mboxMasked = true; // MBOX.OFF
     } else if (opcode == 0xE4) {
       final fid = r[rl] % fifos.length;
       if (network != null && network!.sends(fid)) {

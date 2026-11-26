@@ -1,0 +1,30 @@
+{
+  "topology": "ring",
+  "cores": [
+    {
+      "id": 0,
+      "name": "sender",
+      "binary": "../../../build/cluster/ring_config_sender.bin",
+      "mbox_target": 1,
+      "fifo_connections": {
+        "tx": [
+          {
+            "channel": 1,
+            "target_core": 1,
+            "target_channel": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "name": "idle",
+      "binary": "../../../build/cluster/ring_idle.bin"
+    },
+    {
+      "id": 2,
+      "name": "receiver",
+      "binary": "../../../build/cluster/ring_config_receiver.bin"
+    }
+  ]
+}

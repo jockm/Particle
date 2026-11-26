@@ -12,6 +12,17 @@
 .define TRAP_ALIGN          14
 .define TRAP_ILLEGAL        15
 
+; The network interface's registers, at 0xFFFF_FF00 and up. Load an address
+; with LDIS, which sign-extends these 16 bits: LDIS R5, NI_MBOX_VALUE
+;   NI_FLUSH        store a channel number: send a FLUSH on that channel
+;   NI_MBOX_VALUE   load: the value of the last MBOX trap taken
+;   NI_MBOX_SOURCE  load: the core that sent it
+;   NI_CONFIG       store: send a CONFIG packet (Documentation/mbox_design.md)
+.define NI_FLUSH            0xFF00
+.define NI_MBOX_VALUE       0xFF04
+.define NI_MBOX_SOURCE      0xFF08
+.define NI_CONFIG           0xFF0C
+
 .macro LOAD16 reg, value
     LDI     %reg, %value
 .endmacro

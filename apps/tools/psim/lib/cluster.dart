@@ -167,22 +167,45 @@ class Cluster {
       } else if (cores.length == 2) {
         target = 1 - i;
       }
+      cores[i].id = ids[i];
+      cores[i].mboxTarget = target == null ? null : ids[target];
+    }
+    // MBOX: over the ring, or straight into the target's queue (waiting
+    // while it is full)
+    for (var i = 0; i < cores.length; i++) {
       final source = i;
-      final t = target;
       var warned = false;
-      cores[i].onMbox = (vector, value) {
-        if (t == null) {
-          if (!warned) {
-            stdout.writeln("\n[SIM] ${names[source]}: MBOX with no target (set 'mbox_target' for clusters of more than two cores)");
-            warned = true;
+      void warn(String what) {
+        if (!warned) {
+          stdout.writeln("\n[SIM] ${names[source]}: $what");
+          warned = true;
+        }
+      }
+      if (ring != null) {
+        ring.connectMbox(i, byId, warn);
+        continue;
+      }
+      cores[i].onMbox = (target, vector, value) {
+        final tid = target ?? cores[source].mboxTarget;
+        if (tid == null) {
+          warn("MBOX with no target (set 'mbox_target' for clusters of more than two cores)");
+          return true;
+        }
+        if (tid == mboxBroadcast) {
+          for (var j = 0; j < cores.length; j++) {
+            if (j != source && !cores[j].halted) {
+              cores[j].acceptMbox(vector, value, ids[source], broadcast: true);
+            }
           }
-          return;
+          return true;
         }
-        final dest = cores[t];
-        if (!dest.halted && dest.mboxReceive) {
-          dest.pendingTrap = vector & 0x0F;
-          dest.pendingMboxValue = value;
+        final t = byId[tid];
+        if (t == null) {
+          warn("MBOX to core $tid, which does not exist");
+          return true;
         }
+        if (cores[t].halted) return true;
+        return cores[t].acceptMbox(vector, value, ids[source]);
       };
     }
     return Cluster._(cores, ids, names, ring);
@@ -205,7 +228,7 @@ class Cluster {
   bool get deadlocked {
     final running = cores.where((c) => !c.halted).toList();
     return running.isNotEmpty &&
-        running.every((c) => c.stalled && c.pendingTrap == null) &&
+        running.every((c) => c.stalled && !c.mboxReady) &&
         (ring == null || ring!.idle);
   }
 

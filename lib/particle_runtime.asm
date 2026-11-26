@@ -6,10 +6,11 @@
 
 .include "lib/vectors.inc"
 
-; Reset jumps to the startup code; an MBOX (vector 1) returns at once; every
+; Reset jumps to the startup code; an MBOX (vector 1) returns at once with
+; RETI (vector 1 is for MBOX traps: RETI returns to EPC); every
 ; other vector is unexpected (lib/vectors.inc).
     RESET_SLOT _start
-    TRAP_SLOT 1, _on_mbox_trap
+    TRAP_SLOT_BRANCH 1, _on_mbox_trap
     TRAP_SLOT_UNEXPECTED 2
     TRAP_SLOT_UNEXPECTED 3
     TRAP_SLOT_UNEXPECTED 4
@@ -31,7 +32,7 @@ _start:
     LOAD32  R14, _main
     JMP     R14, R0
 
-_on_mbox_trap:
-    FAST_EXIT_TRAP
+_on_mbox_trap:                  ; nothing to do: back to EPC, unmasked
+    RETI
 
 .endif

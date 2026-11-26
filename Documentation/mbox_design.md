@@ -1,6 +1,6 @@
 # `MBOX` over the Network: Design Note (Draft)
 
-Status: draft for agreement. It covers step 3 of the [network on chip](noc_design.md) (`MBOX` as packets, `CONFIG` from the conductor, broadcast) together with the `MBOX` redesign, item 14 of [Road to GHz](road_to_ghz.md), because each needs the other. Nothing here is built yet; the numbered questions at the end decide the open points.
+Status: agreed (398–406); psim implements it (cluster tests `mbox_queue`, `mbox_any`, `ring_mbox_queue`, `ring_mbox_any`, `ring_config`), the HDL is next. It covers step 3 of the [network on chip](noc_design.md) (`MBOX` as packets, `CONFIG` from the conductor, broadcast) together with the `MBOX` redesign, item 14 of [Road to GHz](road_to_ghz.md), because each needs the other. Nothing here is built yet.
 
 ## Today
 
@@ -53,6 +53,7 @@ Item 14 planned that an `MBOX` trap would switch to the shadow bank, with the re
 * The conductor gets a network interface that can only send, with a `CONFIG` register: a store sends a `CONFIG` packet to a core, setting one table entry.
 * Writable entries: each output channel's route (destination core and channel), each input's sender (where its credits go), and the default `MBOX` target. What exists stays fixed by the HDL: which receive buffers, how many output links, which channel is a local device.
 * Each entry's reset value comes from the HDL, so Parcore works with no `CONFIG` at all, as today.
+* The word stored to the `CONFIG` register (`0xFFFF_FF0C`, `NI_CONFIG`): bits 31:24 the core it goes to (`0xFF`: every core); 23:20 the entry (0 a channel's route, 1 the sender of a channel's input, 2 the default `MBOX` target); 19:16 the channel; 15:8 a core and 3:0 a channel, the entry's new value. A new route starts with 256 credits.
 * Cost: about 100 flip-flops per network interface for the writable entries.
 
 ### 7. Broadcast (agreed in 380)
@@ -70,20 +71,13 @@ Item 14 planned that an `MBOX` trap would switch to the shadow bank, with the re
 
 As for step 2: psim models `MBOX` packets, `ACK`/`NACK`, the queue, masking, `EPC`/`RETI` and `CONFIG` on the ring, with new cluster tests, before the HDL.
 
-## Questions
+## Decisions
 
-**398.** The return path: `EPC` and `RETI` for `MBOX` traps only, keeping R14, instead of the shadow-bank plan, which the lean cores can't use? Faults and `TRAP` keep the return PC in R14.
-
-**399.** Masking: `MBOX.ON`/`MBOX.OFF`, masked on trap entry and unmasked by `RETI`, unmasked after reset?
-
-**400.** No lost messages: a receive queue of 4, with `ACK`/`NACK`, and the sender retrying on its own, one `MBOX` in flight per core (a second waits)?
-
-**401.** Any target: `MBOX Rr, Rl` (`0xE2`, target core in `Rl` bits 7:0, vector in 11:8), and `MBOX Rr, Imm4` going to a configurable default target? Opcodes `0xE2`, `0xE3`, `0xE8` and `0xE9` are free.
-
-**402.** The value and source read from network-interface registers (`0xFFFF_FF04`, `0xFFFF_FF08`) instead of written to `MBOX_VALUE` in memory at trap entry?
-
-**403.** Parcore's redirect over the ring (about 3 cycles more per redirect, measured before it's final), or keep a dedicated wire for that one link?
-
-**404.** `CONFIG` as in part 6: route, sender and default `MBOX` target entries writable, the rest fixed by the HDL, defaults at reset?
-
-**405.** Broadcast `MBOX`: a reserved slot per receiver, a broadcast dropped where that slot is still full? Or should broadcast `MBOX` be left out for now, keeping broadcast for `CONFIG` only?
+* **398:** `EPC` and `RETI` for `MBOX` traps, keeping R14; faults and `TRAP` keep the return PC in R14.
+* **399:** `MBOX.ON`/`MBOX.OFF`; masked on trap entry, unmasked by `RETI`, unmasked after reset.
+* **400:** a receive queue of 4, `ACK`/`NACK`, the sender retrying on its own, one `MBOX` in flight per core.
+* **401:** `MBOX Rr, Rl` (`0xE2`), and a configurable default target for `MBOX Rr, Imm4`.
+* **402:** the value and source from network-interface registers, not memory.
+* **403, 406:** Parcore's redirect goes over the ring: the benchmark's 273 redirects cost about 1,100 cycles, about 0.1%. Configurable direct links between chosen cores are possible as a build-time option, kept for later; the ring's latency growing with the core count is what step 4 (a two-way ring, then a mesh) addresses.
+* **404:** `CONFIG` as in part 6.
+* **405:** a broadcast `MBOX` is dropped at a core whose broadcast slot is still full.
