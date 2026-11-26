@@ -9,13 +9,14 @@ Particle has a single 32-bit, byte-addressed address space for code and data. On
 | Address | Contents |
 |---|---|
 | `0x00000000`–`0x000000FF` | Zero page: 256 bytes reachable with an 8-bit address (the `LDZP32`/`STZP32` macros) |
-| `0x000000F4`–`0x000000FF` | Trap words: `0xF4` return PC and `0xF8` vector number of the last unexpected trap (`lib/vectors.inc`); `0xFC` the value of the last `MBOX` received |
+| `0x000000F4`–`0x000000FF` | Trap words: `0xF4` return PC and `0xF8` vector number of the last unexpected trap (`lib/vectors.inc`); `0xFC` unused (it held the last `MBOX` value before the network interface's `NI_MBOX_VALUE`) |
 | `0x00000100`–`0x000001FF` | Trap vector table: 16 vectors × 16 bytes (vector 0 is the reset entry point) |
 | `0x00000200` up | The rest of the program image: code, then constants and global data |
 | `__image_end` up | The heap: the allocator (`lib/alloc.asm`) starts it at the end of the image, which the assembler defines as `__image_end`, and it grows upward |
 | below `0x00010000` | The stack: `R15` starts at `0x00010000` and the stack grows downward (full-descending, 4-byte aligned). The Action compiler's `--stack-top` and the `START_PROGRAM` macro set it. |
 | `0x80000000` | In a psim cluster, the default shared memory window (`shared_memory_base`) |
 | `0xF0000000` up | Memory-mapped I/O and the external memory window on hardware (`mmioBaseAddr`) |
+| `0xFFFFFF00`–`0xFFFFFF0F` | The network interface's registers, answered by the core or its interface rather than memory: `NI_FLUSH`, `NI_MBOX_VALUE`, `NI_MBOX_SOURCE`, `NI_CONFIG` (`lib/common.inc`; see [MBOX design](mbox_design.md)) |
 
 The image is loaded at `0x00000100`, the reset vector, so a program starts with its vector table. The heap and the stack share the memory between the end of the image and the stack top; nothing checks that they do not meet.
 

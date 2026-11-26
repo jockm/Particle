@@ -31,12 +31,15 @@ class _HarnessTop extends Module {
   late final ParticleFifoSubsystem fifos;
 
   _HarnessTop(Logic clk, Logic reset, Logic mboxStrobe, Logic mboxVector,
-      List<int> program, int base, CpuConfig config)
+      Logic mboxData, Logic mboxSource, List<int> program, int base,
+      CpuConfig config)
       : super(name: 'core_harness') {
     clk = addInput('clk', clk);
     reset = addInput('reset', reset);
     mboxStrobe = addInput('mboxStrobe', mboxStrobe);
     mboxVector = addInput('mboxVector', mboxVector, width: 4);
+    mboxData = addInput('mboxData', mboxData, width: 32);
+    mboxSource = addInput('mboxSource', mboxSource, width: 8);
     addOutput('pcOut', width: 32);
 
     final memARData = Logic(name: 'memARData', width: 16);
@@ -50,6 +53,8 @@ class _HarnessTop extends Module {
       memPortBRData: memBRData,
       mboxStrobeIn: mboxStrobe,
       mboxVectorIn: mboxVector,
+      mboxDataIn: mboxData,
+      mboxSourceIn: mboxSource,
       fifoPopData: fifoPopData,
       fifoStatus: fifoStatus,
       config: config,
@@ -86,6 +91,8 @@ class CoreHarness {
   final Logic reset = Logic(name: 'reset');
   final Logic mboxStrobe = Logic(name: 'mboxStrobe');
   final Logic mboxVector = Logic(name: 'mboxVector', width: 4);
+  final Logic mboxData = Logic(name: 'mboxData', width: 32);
+  final Logic mboxSource = Logic(name: 'mboxSource', width: 8);
   late final _HarnessTop _top;
   ParticleCpuCore get core => _top.core;
   ParticleBlockRamTdp get ram => _top.ram;
@@ -105,7 +112,8 @@ class CoreHarness {
   CoreHarness(List<int> program,
       {int base = 0x100, CpuConfig config = const CpuConfig()}) {
     _top = _HarnessTop(
-        clk, reset, mboxStrobe, mboxVector, program, base, config);
+        clk, reset, mboxStrobe, mboxVector, mboxData, mboxSource, program,
+        base, config);
   }
 
   Future<void> start() async {
@@ -113,6 +121,8 @@ class CoreHarness {
     reset.inject(1);
     mboxStrobe.inject(0);
     mboxVector.inject(0);
+    mboxData.inject(0);
+    mboxSource.inject(0);
     Simulator.setMaxSimTime(1 << 40);
     _active = this;
     unawaited(Simulator.run());

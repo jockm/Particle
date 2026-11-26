@@ -32,10 +32,26 @@ class ParticleCpuCore extends Module {
   Logic get mboxVectorIn => input('mboxVectorIn');
   Logic get mboxDataIn => input('mboxDataIn');
 
+  /// The core that sent the incoming MBOX (read at NI_MBOX_SOURCE).
+  Logic get mboxSourceIn => input('mboxSourceIn');
+
+  /// High while an MBOX can't be sent yet (the network interface's last
+  /// MBOX is unanswered, or its queue is full): the MBOX waits.
+  Logic get mboxSendWait => input('mboxSendWait');
+
   // Cross-Core Outbound Mailbox Strobe and Vector
   Logic get mboxStrobeOut => output('mboxStrobeOut');
   Logic get mboxVectorOut => output('mboxVectorOut');
   Logic get mboxDataOut => output('mboxDataOut');
+
+  /// MBOX Rr, Rl: the target core (Rl[7:0]); mboxTargetValid is low for
+  /// MBOX Rr, Imm4, which goes to the default target.
+  Logic get mboxTargetOut => output('mboxTargetOut');
+  Logic get mboxTargetValid => output('mboxTargetValid');
+
+  /// High when the core can take another incoming MBOX strobe (it holds
+  /// one at a time); a network interface hands over its queue one by one.
+  Logic get mboxReady => output('mboxReady');
 
   // Streaming FIFO Subsystem Interface
   Logic get fifoChanSelect => output('fifoChanSelect');
@@ -74,6 +90,8 @@ class ParticleCpuCore extends Module {
     required Logic mboxStrobeIn,
     required Logic mboxVectorIn,
     Logic? mboxDataIn,
+    Logic? mboxSourceIn,
+    Logic? mboxSendWait,
     Logic? fifoPopData,
     Logic? fifoStatus,
     Logic? fifoPushWait,
@@ -88,6 +106,8 @@ class ParticleCpuCore extends Module {
     addInput('memPortBRData', memPortBRData, width: ParticleWidths.word);
     addInput('mboxStrobeIn', mboxStrobeIn);
     addInput('mboxVectorIn', mboxVectorIn, width: ParticleWidths.trapVector);
+    addInput('mboxSourceIn', mboxSourceIn ?? Const(0, width: 8), width: 8);
+    addInput('mboxSendWait', mboxSendWait ?? Const(0));
     addInput('mboxDataIn', mboxDataIn ?? Const(0, width: ParticleWidths.word),
         width: ParticleWidths.word);
 
@@ -111,6 +131,9 @@ class ParticleCpuCore extends Module {
     addOutput('mboxStrobeOut');
     addOutput('mboxVectorOut', width: ParticleWidths.trapVector);
     addOutput('mboxDataOut', width: ParticleWidths.word);
+    addOutput('mboxTargetOut', width: 8);
+    addOutput('mboxTargetValid');
+    addOutput('mboxReady');
 
     addOutput('fifoChanSelect', width: 2);
     addOutput('fifoPushData', width: ParticleWidths.word);
@@ -163,6 +186,11 @@ class ParticleCpuCore extends Module {
     final eBsrc = Logic(name: 'eBsrc', width: 4);
     final eImm16 = Logic(name: 'eImm16', width: 16); // LDI/LDIS immediate
     final eResolved = Logic(name: 'eResolved'); // a branch D already decided
+    // MBOX trap state (see the MBOX section below)
+    final epc = Logic(name: 'epc', width: 32);
+    final mboxMasked = Logic(name: 'mboxMasked');
+    final mboxValueReg = Logic(name: 'mboxValueReg', width: 32);
+    final mboxSourceReg = Logic(name: 'mboxSourceReg', width: 8);
     final eDivStarted = Logic(name: 'eDivStarted');
     // The last cycle's register writes, for forwarding (port 2 wins). Whether
     // E's operands are one of them is worked out a cycle early, when the
@@ -539,6 +567,9 @@ class ParticleCpuCore extends Module {
     final ldSizeCode = Logic(name: 'ldSizeCode', width: 2); // 0: 8, 1: 16, 2: 32
     final ldLow = Logic(name: 'ldLow', width: 2);
     final ldData = Logic(name: 'ldData', width: 32);
+    // A load from an MBOX register (1: NI_MBOX_VALUE, 2: NI_MBOX_SOURCE): the
+    // core answers it instead of the memory
+    final ldMboxReg = Logic(name: 'ldMboxReg', width: 2);
     Combinational([
       If(ldSizeCode.eq(Const(2, width: 2)), then: [
         ldData < memPortBRData,
@@ -601,6 +632,8 @@ class ParticleCpuCore extends Module {
         br(ParticleOpcodes.branch, valA),
         CaseItem(Const(ParticleOpcodes.jmp, width: 8),
             [brCond < Const(1), brAbs < Const(1)]),
+        CaseItem(Const(ParticleOpcodes.reti, width: 8),
+            [brCond < Const(1), brAbs < Const(1)]),
         br(ParticleOpcodes.rjump, valA),
         br(ParticleOpcodes.fbraImm8, o8),
         br(ParticleOpcodes.bbraImm8, o8, back: true),
@@ -635,7 +668,8 @@ class ParticleCpuCore extends Module {
             [Const(0), brOffset ^ brBack.replicate(31), brCarry].swizzle();
     final relTarget = [brSum.getRange(1, 32), pc[0]].swizzle();
     branchTaken <= brCond;
-    branchNextPc <= mux(brCond, mux(brAbs, valA, relTarget), pcPlus2);
+    branchNextPc <= mux(brCond,
+        mux(brAbs, mux(op(ParticleOpcodes.reti), epc, valA), relTarget), pcPlus2);
 
     // -------------------------------------------------------------------------
     // Traps and interrupts
@@ -664,15 +698,21 @@ class ParticleCpuCore extends Module {
     // or while a divide is in progress
     final mboxPending = Logic(name: 'mboxPending');
     final mboxPendingVec = Logic(name: 'mboxPendingVec', width: 4);
-    // The sender's Rr: stored at MBOX_VALUE (the word below the trap table)
-    // in the trap-entry cycle, which makes no other memory access
+    // The sender's Rr and number, for the MBOX registers once it is taken
     final mboxPendingData =
         Logic(name: 'mboxPendingData', width: ParticleWidths.word);
-    final mboxValueAddr = Const(config.trapTableBase - 4, width: 32);
+    final mboxPendingSrc = Logic(name: 'mboxPendingSrc', width: 8);
+    // MBOX traps (Documentation/mbox_design.md): the return PC goes to EPC
+    // (R14 is kept), taking one masks them, RETI returns to EPC and unmasks;
+    // the handler loads the value and the sender from NI_MBOX_VALUE and
+    // NI_MBOX_SOURCE (0xFFFF_FF04 and 0xFFFF_FF08), which the core answers
+    // (epc, mboxMasked, mboxValueReg and mboxSourceReg are declared above)
     final divWaiting = eValid & eDivStarted;
     // Without MBOX receive an incoming strobe is ignored
-    final mboxTake =
-        config.enableMboxReceive ? mboxPending & eValid : Const(0);
+    final mboxTake = config.enableMboxReceive
+        ? mboxPending & ~mboxMasked & eValid
+        : Const(0);
+    mboxReady <= ~mboxPending;
     final mboxTarget = vectorAddr(mboxPendingVec);
 
     final fifoEmpty = fifoStatus.slice(0, 0);
@@ -714,7 +754,14 @@ class ParticleCpuCore extends Module {
       If(lValid, then: [
         rfWEn < Const(1),
         rfWAddr < ldDest,
-        rfWData < mux(lIsMul, mulResult, ldData),
+        rfWData < mux(
+            lIsMul,
+            mulResult,
+            mux(
+                ldMboxReg.eq(Const(1, width: 2)),
+                mboxValueReg,
+                mux(ldMboxReg.eq(Const(2, width: 2)),
+                    mboxSourceReg.zeroExtend(32), ldData))),
       ]),
       If(divWaiting & divDone & ~mboxTake, then: [
         rfWEn < Const(1),
@@ -799,7 +846,7 @@ class ParticleCpuCore extends Module {
         rfWAddr2 < Const(14, width: 4),
         rfWData2 < pcPlus2,
       ]),
-      If(faultIllegal | faultAlign | mboxTake, then: [
+      If(faultIllegal | faultAlign, then: [
         rfWEn2 < Const(1),
         rfWAddr2 < Const(14, width: 4),
         rfWData2 < pc,
@@ -815,10 +862,10 @@ class ParticleCpuCore extends Module {
     // -------------------------------------------------------------------------
     // Memory port B, FIFOs, MBOX and SARF outputs
     // -------------------------------------------------------------------------
-    memPortBAddr <= mux(mboxTake, mboxValueAddr, effAddr);
-    memPortBWData <= mux(mboxTake, mboxPendingData, storeWData);
-    memPortBBEn <= mux(mboxTake, Const(0xF, width: 4), storeBEn);
-    memPortBWEn <= mboxTake | (doExec & (isStoreOp | isTas));
+    memPortBAddr <= effAddr;
+    memPortBWData <= storeWData;
+    memPortBBEn <= storeBEn;
+    memPortBWEn <= doExec & (isStoreOp | isTas);
     memPortBREn <= doExec & (isLoadOp | isTas);
 
     fifoChanSelect <= valB.slice(1, 0);
@@ -830,9 +877,15 @@ class ParticleCpuCore extends Module {
         (op(ParticleOpcodes.fifoR) | op(ParticleOpcodes.fifoTryR)) &
         ~fifoEmpty;
 
-    mboxStrobeOut <= doExec & op(ParticleOpcodes.mbox);
-    mboxVectorOut <= rl;
+    // MBOX Rr, Imm4 (vector Imm4, the default target) or MBOX Rr, Rl (target
+    // Rl[7:0], vector Rl[11:8]); it waits while mboxSendWait is high
+    final isMboxR = op(ParticleOpcodes.mboxR);
+    mboxStrobeOut <=
+        doExec & (op(ParticleOpcodes.mbox) | isMboxR) & ~mboxSendWait;
+    mboxVectorOut <= mux(isMboxR, valB.slice(11, 8), rl);
     mboxDataOut <= valA;
+    mboxTargetOut <= valB.slice(7, 0);
+    mboxTargetValid <= isMboxR;
 
     sarfRs1Addr <= rr.zeroExtend(5);
     sarfRs2Addr <= rl.zeroExtend(5);
@@ -848,7 +901,9 @@ class ParticleCpuCore extends Module {
     // -------------------------------------------------------------------------
     // E keeps its instruction while a FIFO.R waits for data or a divide runs
     // A FIFO.W waits while the network interface can't take it yet
-    final fifoWriteStall = op(ParticleOpcodes.fifoW) & fifoPushWait;
+    final fifoWriteStall = (op(ParticleOpcodes.fifoW) & fifoPushWait) |
+        ((op(ParticleOpcodes.mbox) | op(ParticleOpcodes.mboxR)) &
+            mboxSendWait);
     final eStall = ((doExec & fifoReadStall) |
         (doExec & fifoWriteStall) |
         (doExec & isDivOp) |
@@ -982,12 +1037,18 @@ class ParticleCpuCore extends Module {
       eFb2: Const(0),
       lValid: Const(0),
       lIsMul: Const(0),
+      ldMboxReg: Const(0, width: 2),
       ldDest: Const(0, width: 4),
       ldSizeCode: Const(0, width: 2),
       ldLow: Const(0, width: 2),
       mboxPending: Const(0),
       mboxPendingVec: Const(0, width: 4),
       mboxPendingData: Const(0, width: ParticleWidths.word),
+      mboxPendingSrc: Const(0, width: 8),
+      epc: Const(0, width: 32),
+      mboxMasked: Const(0),
+      mboxValueReg: Const(0, width: 32),
+      mboxSourceReg: Const(0, width: 8),
     }, [
       // MBOX: a new strobe is remembered (a newer one replaces an older
       // one); a taken one is cleared
@@ -995,8 +1056,20 @@ class ParticleCpuCore extends Module {
         mboxPending < Const(1),
         mboxPendingVec < mboxVectorIn,
         mboxPendingData < mboxDataIn,
+        mboxPendingSrc < mboxSourceIn,
       ], orElse: [
         If(mboxTake, then: [mboxPending < Const(0)]),
+      ]),
+      // Taking an MBOX trap: EPC, the mask and the MBOX registers
+      If(mboxTake, then: [
+        epc < pc,
+        mboxMasked < Const(1),
+        mboxValueReg < mboxPendingData,
+        mboxSourceReg < mboxPendingSrc,
+      ], orElse: [
+        If(doExec & (op(ParticleOpcodes.reti) | op(ParticleOpcodes.ei)),
+            then: [mboxMasked < Const(0)]),
+        If(doExec & op(ParticleOpcodes.di), then: [mboxMasked < Const(1)]),
       ]),
 
       fPc < fetchAddr,
@@ -1034,6 +1107,11 @@ class ParticleCpuCore extends Module {
 
       lValid < wNext,
       lIsMul < wNext & isMulOp,
+      ldMboxReg <
+          mux(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF04, width: 32)),
+              Const(1, width: 2),
+              mux(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF08, width: 32)),
+                  Const(2, width: 2), Const(0, width: 2))),
       If(wNext, then: [
         ldDest < mux(isTas, rl, rr),
         ldSizeCode < mux(isSize4, Const(2, width: 2),

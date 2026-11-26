@@ -91,9 +91,11 @@ void main() {
       expect(seen, isTrue, reason: 'core 1 should fetch its vector 2 (0x220)');
     });
 
-    test('MBOX sends Rr: the target stores it below its trap table', () async {
+    test('MBOX sends Rr: the target takes the vector without writing memory',
+        () async {
       // Core 0: LD R1, 5 (0x0115), then MBOX R1, 2 (0xE512). Core 1's table
-      // is at 0x200, so it stores 5 at 0x1FC as it takes vector 2 (0x220)
+      // is at 0x200, so it takes vector 2 (0x220). The value goes to its MBOX
+      // registers (read at NI_MBOX_VALUE), not to memory: no store happens
       c0MemARData.put(0x0115);
       c1MemARData.put(0); // NOP
       await stepClocks(1);
@@ -103,10 +105,7 @@ void main() {
         await stepClocks(1);
         if (multiCore.c1MemPortAAddr.value.toInt() == 0x220) {
           seen = true;
-          expect(multiCore.c1MemPortBWEn.value.toInt(), equals(1));
-          expect(multiCore.c1MemPortBAddr.value.toInt(), equals(0x1FC));
-          expect(multiCore.c1MemPortBWData.value.toInt(), equals(5));
-          expect(multiCore.c1MemPortBBEn.value.toInt(), equals(0xF));
+          expect(multiCore.c1MemPortBWEn.value.toInt(), equals(0));
         }
       }
       expect(seen, isTrue, reason: 'core 1 should take vector 2');

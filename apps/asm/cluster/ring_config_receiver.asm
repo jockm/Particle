@@ -31,7 +31,7 @@ _vector2:
     RETI
 
 _main:
-    MBOX.OFF                    ; until the values are read
+    DI                          ; until the values are read
     LD      R10, 0
     LD      R2, 5
     LD      R1, 0
@@ -44,7 +44,7 @@ _main:
     LD      R4, 15
     SEQ     R4, R1
     FBRA.Z  R4, _bad
-    MBOX.ON
+    EI
 ._spin:
     FBRA.Z  R10, ._spin
     LD      R1, 0

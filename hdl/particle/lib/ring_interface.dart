@@ -23,6 +23,17 @@
 //     receive buffer is emptied, and a credit is owed for every word in it.
 //   * DATA packets go into the receive buffer their channel reads; CREDIT
 //     packets give the output channel they name its credits back.
+//   * MBOX (step 3a of Documentation/mbox_design.md): an arriving MBOX joins
+//     a queue of 4 and is answered ACK, or NACK when the queue is full; with
+//     the answer queue (4) full it gets no answer, and its sender sends it
+//     again after a timeout. The queue is handed to the core one MBOX at a
+//     time, when the core is ready (mboxCoreReady). The core's own MBOX goes
+//     to its target (or the default target) straight from a register, ahead
+//     of the injection queue, and is kept until answered: sent again 8 cycles
+//     after a NACK, or 64 after no answer; meanwhile the core's next MBOX
+//     waits (mboxSendWait). An answer taking longer than 64 cycles would mean
+//     a second copy; on Parcore's ring it takes under 10. Broadcast comes in
+//     step 3b: an MBOX to core 0xFF is dropped until then.
 
 import 'package:rohd/rohd.dart';
 import 'constants.dart';
@@ -52,6 +63,13 @@ class ParticleRingInterface extends Module {
   static const bufferWords = 256;
   static const queueDepth = 8;
   static const creditBatch = 16;
+  static const mboxQueueDepth = 4;
+  static const answerQueueDepth = 4;
+  static const mboxRetryCycles = 8;
+  static const mboxTimeoutCycles = 64;
+
+  /// The core MBOX Rr, Imm4 goes to, or null (it is dropped).
+  final int? mboxDefaultTarget;
 
   Logic get popData => output('popData');
   Logic get statusWord => output('statusWord');
@@ -61,6 +79,13 @@ class ParticleRingInterface extends Module {
   Logic get devPushEn => output('devPushEn');
   Logic get devPushData => output('devPushData');
   Logic get devPopEn => output('devPopEn');
+
+  // MBOX: to the core (an MBOX from the queue), and from it
+  Logic get mboxStrobe => output('mboxStrobe');
+  Logic get mboxVector => output('mboxVector');
+  Logic get mboxData => output('mboxData');
+  Logic get mboxSource => output('mboxSource');
+  Logic get mboxSendWait => output('mboxSendWait');
 
   late final List<Logic> _credits;
   late final List<Logic> _owed;
@@ -89,6 +114,13 @@ class ParticleRingInterface extends Module {
     Logic? devPopData,
     Logic? devStatus,
     List<String>? bufferNames,
+    Logic? mboxSendStrobe,
+    Logic? mboxSendVector,
+    Logic? mboxSendData,
+    Logic? mboxSendTarget,
+    Logic? mboxSendTargetValid,
+    Logic? mboxCoreReady,
+    this.mboxDefaultTarget,
     super.name = 'ring_interface',
   }) {
     final inputCount = rxSenders.length;
@@ -131,6 +163,21 @@ class ParticleRingInterface extends Module {
     addOutput('devPushEn');
     addOutput('devPushData', width: w);
     addOutput('devPopEn');
+    final mSend = addInput('mboxSendStrobe', mboxSendStrobe ?? Const(0));
+    final mVec =
+        addInput('mboxSendVector', mboxSendVector ?? Const(0, width: 4), width: 4);
+    final mData =
+        addInput('mboxSendData', mboxSendData ?? Const(0, width: w), width: w);
+    final mTarget =
+        addInput('mboxSendTarget', mboxSendTarget ?? Const(0, width: 8), width: 8);
+    final mTargetValid =
+        addInput('mboxSendTargetValid', mboxSendTargetValid ?? Const(0));
+    final mReady = addInput('mboxCoreReady', mboxCoreReady ?? Const(0));
+    addOutput('mboxStrobe');
+    addOutput('mboxVector', width: 4);
+    addOutput('mboxData', width: w);
+    addOutput('mboxSource', width: 8);
+    addOutput('mboxSendWait');
 
     Logic on(int c) => chanSelect.eq(Const(c, width: 2));
     Logic anyOf(Iterable<int> cs) =>
@@ -328,9 +375,103 @@ class ParticleRingInterface extends Module {
         earlierSome = earlierSome | lowCredit[i];
       }
     }
-    inject <= chosen;
-    injectValid <= chosenValid;
-    final dequeue = injectTaken & takeQueue;
+    // ---- MBOX ----
+    final pSrc = NocPacket.src(eject);
+    final mboxIn = arrives(NocPacket.mbox) &
+        NocPacket.dest(eject).eq(Const(coreId, width: 8));
+    // The receive queue: vector, value, source
+    final rqWr = Logic(name: 'rqWr', width: 2);
+    final rqRd = Logic(name: 'rqRd', width: 2);
+    final rqCount = Logic(name: 'rqCount', width: 3);
+    final rqFull = rqCount.eq(Const(mboxQueueDepth, width: 3));
+    final rqEmpty = rqCount.eq(0);
+    // The answer queue: destination, and 1 for a NACK
+    final aqWr = Logic(name: 'aqWr', width: 2);
+    final aqRd = Logic(name: 'aqRd', width: 2);
+    final aqCount = Logic(name: 'aqCount', width: 3);
+    final aqFull = aqCount.eq(Const(answerQueueDepth, width: 3));
+    final aqEmpty = aqCount.eq(0);
+    final answer = mboxIn & ~aqFull; // with the answer queue full: none
+    final takeIn = answer & ~rqFull;
+    final rxQueue = ParticleLutRam(
+      clk: clk,
+      wAddr: rqWr,
+      wData: [NocPacket.channel(eject), NocPacket.payload(eject), pSrc].swizzle(),
+      wEn: takeIn,
+      rAddrA: rqRd,
+      rAddrB: rqRd,
+      depth: mboxQueueDepth,
+      width: 4 + 32 + 8,
+      name: 'mbox_queue',
+    );
+    final ansQueue = ParticleLutRam(
+      clk: clk,
+      wAddr: aqWr,
+      wData: [pSrc, rqFull].swizzle(),
+      wEn: answer,
+      rAddrA: aqRd,
+      rAddrB: aqRd,
+      depth: answerQueueDepth,
+      width: 9,
+      name: 'answer_queue',
+    );
+    // To the core: one MBOX at a time
+    final toCore = ~rqEmpty & mReady;
+    mboxStrobe <= toCore;
+    mboxVector <= rxQueue.rDataA.getRange(40, 44);
+    mboxData <= rxQueue.rDataA.getRange(8, 40);
+    mboxSource <= rxQueue.rDataA.getRange(0, 8);
+    final answerPacket = NocPacket.make(
+      type: NocPacket.ack,
+      dest: ansQueue.rDataA.getRange(1, 9),
+      channel: Const(0, width: 4),
+      src: coreId,
+      payload: Const(0, width: w),
+    );
+    // A NACK: the same packet with type 6
+    final nackPacket = [
+      Const(NocPacket.nack, width: 3),
+      answerPacket.getRange(0, NocPacket.typeLsb),
+    ].swizzle();
+    final answerOut = mux(ansQueue.rDataA[0], nackPacket, answerPacket);
+
+    // Sending: one MBOX in flight
+    final outstanding = Logic(name: 'mboxOutstanding');
+    final outPacket = Logic(name: 'mboxOutPacket', width: pw);
+    final retryTimer = Logic(name: 'mboxRetryTimer', width: 7);
+    final retryDue = outstanding & retryTimer.eq(0);
+    mboxSendWait <= outstanding;
+    final sendDest = mux(mTargetValid, mTarget,
+        Const(mboxDefaultTarget ?? 0xFF, width: 8));
+    // No default target, or a broadcast (step 3b): dropped
+    final sendDropped = sendDest.eq(Const(0xFF, width: 8));
+    final mboxPacket = NocPacket.make(
+      type: NocPacket.mbox,
+      dest: sendDest,
+      channel: mVec,
+      src: coreId,
+      payload: mData,
+    );
+    // It doesn't go through the injection queue: it is sent from
+    // mboxOutPacket the next cycle the ring has room (the timer starts at 0),
+    // ahead of queued data, so the timeout counts from when it left
+    final startSend = mSend & ~outstanding & ~sendDropped;
+    final ackIn = arrives(NocPacket.ack);
+    final nackIn = arrives(NocPacket.nack);
+
+    // What goes on the ring: an answer, then an MBOX due (new or again), then
+    // the rest
+    final answerFirst = ~aqEmpty;
+    final retryNext = ~answerFirst & retryDue;
+    final rest = ~answerFirst & ~retryDue;
+    inject <= mux(answerFirst, answerOut, mux(retryDue, outPacket, chosen));
+    injectValid <= answerFirst | retryDue | chosenValid;
+    final dequeue = injectTaken & rest & takeQueue;
+    for (var i = 0; i < inputCount; i++) {
+      sendCredit[i] = sendCredit[i] & rest;
+    }
+    final answerSent = injectTaken & answerFirst;
+    final retrySent = injectTaken & retryNext;
 
     // ---- State ----
     Sequential(clk, reset: reset, resetValues: {
@@ -341,7 +482,46 @@ class ParticleRingInterface extends Module {
       qCount: Const(0, width: 4),
       flushPending: Const(0),
       flushPendingCh: Const(0, width: 2),
+      rqWr: Const(0, width: 2),
+      rqRd: Const(0, width: 2),
+      rqCount: Const(0, width: 3),
+      aqWr: Const(0, width: 2),
+      aqRd: Const(0, width: 2),
+      aqCount: Const(0, width: 3),
+      outstanding: Const(0),
+      outPacket: Const(0, width: pw),
+      retryTimer: Const(0, width: 7),
     }, [
+      // The MBOX receive queue and the answers
+      If(takeIn, then: [rqWr < rqWr + 1]),
+      If(toCore, then: [rqRd < rqRd + 1]),
+      rqCount < rqCount + takeIn.zeroExtend(3) - toCore.zeroExtend(3),
+      If(answer, then: [aqWr < aqWr + 1]),
+      If(answerSent, then: [aqRd < aqRd + 1]),
+      aqCount < aqCount + answer.zeroExtend(3) - answerSent.zeroExtend(3),
+      // The MBOX in flight: kept until an ACK; sent again 8 cycles after a
+      // NACK, or 64 after no answer
+      If(startSend, then: [
+        outstanding < Const(1),
+        outPacket < mboxPacket,
+        retryTimer < Const(0, width: 7),
+      ], orElse: [
+        If(ackIn, then: [
+          outstanding < Const(0),
+        ], orElse: [
+          If(nackIn, then: [
+            retryTimer < Const(mboxRetryCycles, width: 7),
+          ], orElse: [
+            If(retrySent, then: [
+              retryTimer < Const(mboxTimeoutCycles, width: 7),
+            ], orElse: [
+              If(outstanding & ~retryTimer.eq(0), then: [
+                retryTimer < retryTimer - 1,
+              ]),
+            ]),
+          ]),
+        ]),
+      ]),
       for (var j = 0; j < outputCount; j++)
         _credits[j] <
             _credits[j] -

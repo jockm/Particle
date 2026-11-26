@@ -229,10 +229,14 @@ abstract class ParticleOpcodes {
   // 4.12 Hardware Streaming FIFOs & Mailbox (0xE0 - 0xE9)
   static const int fifoR = 0xE0;
   static const int fifoW = 0xE1;
+  static const int mboxR = 0xE2; // MBOX Rr, Rl: target core Rl[7:0], vector Rl[11:8]
+  static const int reti = 0xE3; // return from an MBOX trap: PC <- EPC, unmask
   static const int fifoStat = 0xE4;
   static const int mbox = 0xE5;
   static const int fifoTryR = 0xE6;
   static const int fifoTryW = 0xE7;
+  static const int ei = 0xE8; // enable the asynchronous traps (MBOX)
+  static const int di = 0xE9; // disable the asynchronous traps (MBOX)
 
   /// The loads and stores that change their pointer register (pre/post
   /// increment and decrement): left out with `CpuConfig.enablePointerModes`.
@@ -408,5 +412,9 @@ abstract class ParticleOpcodes {
     mbox,
     fifoTryR,
     fifoTryW,
+    mboxR,
+    reti,
+    ei,
+    di,
   ];
 }

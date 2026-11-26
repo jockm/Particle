@@ -1,6 +1,6 @@
 # `MBOX` over the Network: Design Note (Draft)
 
-Status: agreed (398–406); psim implements it (cluster tests `mbox_queue`, `mbox_any`, `ring_mbox_queue`, `ring_mbox_any`, `ring_config`), the HDL is next. It covers step 3 of the [network on chip](noc_design.md) (`MBOX` as packets, `CONFIG` from the conductor, broadcast) together with the `MBOX` redesign, item 14 of [Road to GHz](road_to_ghz.md), because each needs the other. Nothing here is built yet.
+Status: agreed (398–408). psim implements all of it (cluster tests `mbox_queue`, `mbox_any`, `ring_mbox_queue`, `ring_mbox_any`, `ring_config`). The HDL implements step 3a (see 408): `EPC`, `RETI`, masking and `MBOX Rr, Rl` in the core; the queue, `ACK`/`NACK` and the value and source registers in the network interface; Parcore's redirect over the ring. Step 3b (writable tables, `CONFIG` from the conductor, broadcast) is next; until then the HDL drops an `MBOX` to core `0xFF`. It covers step 3 of the [network on chip](noc_design.md) (`MBOX` as packets, `CONFIG` from the conductor, broadcast) together with the `MBOX` redesign, item 14 of [Road to GHz](road_to_ghz.md), because each needs the other.
 
 ## Today
 
@@ -26,7 +26,7 @@ Item 14 planned that an `MBOX` trap would switch to the shadow bank, with the re
 
 ### 2. Masking
 
-* `MBOX.OFF` (`0xE9`) and `MBOX.ON` (`0xE8`). An `MBOX` that arrives while masked waits in the receive queue (part 3) until the core unmasks.
+* `DI` (`0xE9`) and `EI` (`0xE8`), first named `MBOX.OFF` and `MBOX.ON` (renamed in 409). They mask every asynchronous trap: today only `MBOX`. An `MBOX` that arrives while masked waits in the receive queue (part 3) until the core unmasks.
 * Taking an `MBOX` trap masks; `RETI` unmasks. So handlers don't nest.
 * After reset `MBOX` is unmasked, as today (Parcore's core 0 must take redirects from the start).
 
@@ -63,9 +63,9 @@ Item 14 planned that an `MBOX` trap would switch to the shadow bank, with the re
 
 ### Parcore
 
-* Core 2's redirect `MBOX` to core 0 goes over the ring: 3 hops, so a redirect costs about 3 cycles more. The profile will show the total.
+* Core 2's redirect `MBOX` to core 0 goes over the ring: 3 hops, so a redirect costs about 3 cycles more. Measured in 3a: 77.2 cycles per RISC-V instruction against 77.0, about 8 cycles more per redirect (the hops, a cycle in each network interface, and a cycle in core 0's receive queue).
 * Core 0's handlers read `MBOX_VALUE` from the network interface, and never return (they restart the main loop), so `EPC` and `RETI` don't affect Parcore.
-* The `MBOX` wire and `MBOX_VALUE` in memory go.
+* The `MBOX` wire and `MBOX_VALUE` in memory go (done in 3a).
 
 ### psim first
 
@@ -74,10 +74,13 @@ As for step 2: psim models `MBOX` packets, `ACK`/`NACK`, the queue, masking, `EP
 ## Decisions
 
 * **398:** `EPC` and `RETI` for `MBOX` traps, keeping R14; faults and `TRAP` keep the return PC in R14.
-* **399:** `MBOX.ON`/`MBOX.OFF`; masked on trap entry, unmasked by `RETI`, unmasked after reset.
+* **399:** `MBOX.ON`/`MBOX.OFF` (renamed `EI`/`DI` in 409); masked on trap entry, unmasked by `RETI`, unmasked after reset.
 * **400:** a receive queue of 4, `ACK`/`NACK`, the sender retrying on its own, one `MBOX` in flight per core.
 * **401:** `MBOX Rr, Rl` (`0xE2`), and a configurable default target for `MBOX Rr, Imm4`.
 * **402:** the value and source from network-interface registers, not memory.
 * **403, 406:** Parcore's redirect goes over the ring: the benchmark's 273 redirects cost about 1,100 cycles, about 0.1%. Configurable direct links between chosen cores are possible as a build-time option, kept for later; the ring's latency growing with the core count is what step 4 (a two-way ring, then a mesh) addresses.
 * **404:** `CONFIG` as in part 6.
 * **405:** a broadcast `MBOX` is dropped at a core whose broadcast slot is still full.
+* **407:** the network interface answers from a queue of its own (4, configurable). An `MBOX` that arrives while it is full gets no answer and isn't taken; its sender sends it again after a timeout (64 cycles in the HDL). After a `NACK` the sender waits 8 cycles.
+* **408:** the HDL in two parts. 3a: the core, the `MBOX` queue, `ACK`/`NACK`, the registers, the redirect over the ring and core 0's firmware. 3b: the writable tables, the conductor's network interface with `CONFIG`, and broadcast.
+* **409:** `MBOX.ON`/`MBOX.OFF` renamed `EI`/`DI` (the same opcodes); they mask every asynchronous trap, so a future timer (410) is masked the same way.

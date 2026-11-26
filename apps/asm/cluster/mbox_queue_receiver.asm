@@ -28,7 +28,7 @@ _vector2:                       ; R10 += the value, R11 += 1 (R5 is free)
     RETI
 
 _main:
-    MBOX.OFF
+    DI
     LD      R10, 0              ; sum
     LD      R11, 0              ; MBOXes taken
     LDI     R6, 200             ; a delay, while the sender fills the queue
@@ -36,7 +36,7 @@ _main:
     SUB     R6, 1
     BBRA.NZ R6, ._wait
     LDI     R14, 0x55           ; must survive the traps
-    MBOX.ON
+    EI
 ._spin:
     LD      R7, R11
     SUB     R7, 6

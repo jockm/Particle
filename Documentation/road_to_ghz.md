@@ -132,12 +132,15 @@ Agreed (337, 338): one step after the firmware rewrite. Each touches the spec, t
 * **`WAIT` and `HALT`, and low power.** `WAIT` sleeps until an `MBOX` arrives from any core, keeping the core's state. `HALT` sleeps until reset: the conductor restarts the core through `RST_CTRL`, and may reload its TCM first, so a halted core could later be powered down completely. Asleep, the core's clock enable (and its block RAMs') is off on the FPGA, and its clock is gated on an ASIC, with only the `MBOX` and reset logic awake. A blocking `FIFO.R` can sleep the same way while it waits. The conductor gets a status bit per core (running, waiting, halted) and a way to send an `MBOX` to any core. In the pipeline both are a stall that only `MBOX` or reset ends.
 * **The `MBOX` redesign**, all five parts:
   1. **R14:** trap entry writes the return PC into R14, destroying the interrupted code's R14 (a known issue in the spec; `lib/particle_runtime.asm`'s handler returns to interrupted code). An `MBOX` trap switches to the shadow bank in hardware, with the return PC in S14, and a new `RETI` swaps back and returns.
-  2. **Masking:** `MBOX.OFF`/`MBOX.ON`; an `MBOX` that arrives while masked waits until the core unmasks.
+  2. **Masking:** `DI`/`EI`; an `MBOX` that arrives while masked waits until the core unmasks.
   3. **No lost messages:** today a newer `MBOX` replaces one not yet taken. A small queue of pending `MBOX`es, or a busy result the sender can check, as with `FIFO.TRYW`.
   4. **Any target:** `MBOX Rr, Rl`, with the target core in a register, instead of wiring fixed by configuration.
   5. **Scale:** carried through the interconnect as messages, a few cycles' latency, instead of a single-cycle strobe across the chip.
 
   Together: an `MBOX` is a message on a per-core interrupt channel, queued, maskable and addressed to any core. Its arrival traps, and the handler reads the value with `FIFO.R`, which also removes the memory write at trap entry (`MBOX_VALUE`).
+
+  *Designed in [mbox_design.md](mbox_design.md) (398–409), which replaced parts of this: `EPC` and `RETI` instead of the shadow bank, and the value read from network-interface registers rather than with `FIFO.R`. psim implements all of it; the HDL implements step 3a (the core, the queue, `ACK`/`NACK`, the registers, Parcore's redirect over the ring), and step 3b (writable tables, `CONFIG`, broadcast) is next. The masking instructions are `EI`/`DI` (409), covering every asynchronous trap.*
+* **A per-core timer** (410), for multitasking in ParticleMan and for embedded programs: a free-running counter and a compare register in each core (or its network interface), raising an asynchronous trap on its own vector when the counter reaches the compare value. It is masked by `DI` like `MBOX`, returns with `RETI` through `EPC`, and is left out by a `CpuConfig` option. To be designed: where its registers live (beside the `NI_` registers at `0xFFFF_FF10` up is one choice), its vector, one-shot or periodic, and what happens when it and an `MBOX` are due together.
 * Later, a static "likely taken" bit on the 2-word conditional branches could let D redirect early for loops.
 
 Avoid, for the core's speed: instructions that write two registers, read three, or do a memory access and ALU work together.

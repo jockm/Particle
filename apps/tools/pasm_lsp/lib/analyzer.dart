@@ -223,9 +223,9 @@ const Map<String, String> mnemonicDocs = {
   "FIFO.W": "`FIFO.W Rs, Rchan` (`0xE1`) — Blocking write of `Rs` to streaming hardware FIFO channel `Rchan`.",
   "FIFO.STAT": "`FIFO.STAT Rd, Rchan` (`0xE4`) — Reads FIFO channel status flags into `Rd`.",
   "MBOX": "`MBOX Rs, vec` (`0xE5`) — Raises vector `vec` on the core's default `MBOX` target, sending `Rs`. `MBOX Rs, Rt` (`0xE2`): the target core in `Rt` bits 7:0 (`0xFF`: every core), the vector in bits 11:8.",
-  "MBOX.ON": "`MBOX.ON` (`0xE800`) — Lets `MBOX` traps be taken.",
-  "MBOX.OFF": "`MBOX.OFF` (`0xE900`) — Holds `MBOX` traps (they wait in the queue) until `MBOX.ON` or `RETI`.",
-  "RETI": "`RETI` (`0xE300`) — Returns from an `MBOX` trap: jumps to `EPC` and unmasks `MBOX` traps.",
+  "EI": "`EI` (`0xE800`) — Enables the asynchronous traps (today `MBOX`): they can be taken again.",
+  "DI": "`DI` (`0xE900`) — Disables the asynchronous traps (today `MBOX`, which waits in the queue) until `EI` or `RETI`.",
+  "RETI": "`RETI` (`0xE300`) — Returns from an `MBOX` trap: jumps to `EPC` and enables the asynchronous traps again.",
   "FIFO.TRYR": "`FIFO.TRYR Rd, Rchan` (`0xE6`) — Non-blocking FIFO read into `Rd`; sets status in `R14`.",
   "FIFO.TRYW": "`FIFO.TRYW Rs, Rchan` (`0xE7`) — Non-blocking FIFO write from `Rs`; sets status in `R14`.",
 };

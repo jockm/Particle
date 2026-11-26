@@ -89,7 +89,7 @@ void main() {
       'PUSH8 R14, 255', 'PUSH4 R1, 15', 'LD R14, -255', 'LD R1, -15', 'LD8 R1, (R2++)',
       'ST32 (--R15), R1', 'LD32 (R1), R2', 'TAS (R1), R2', 'CLZ R1, R2',
       'FIFO.STAT R1, R2', 'FIFO.TRYR R1, R2', 'MBOX R1, 3', 'MBOX R1, R2',
-      'RETI', 'MBOX.ON', 'MBOX.OFF', 'JMP R14, R14', 'NOP',
+      'RETI', 'EI', 'DI', 'JMP R14, R14', 'NOP',
     ]) {
       expect(assemble(line).$1, isTrue, reason: 'assembler rejects $line: ${assemble(line).$2}');
       expect(lint(line).$1, isTrue, reason: 'linter rejects $line: ${lint(line).$2}');

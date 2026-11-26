@@ -332,6 +332,19 @@ class ParcoreTop extends Module {
           Logic(name: '${n}_ni_flush'),
           Logic(name: '${n}_ni_flush_chan', width: 2),
         );
+    // Each core's MBOX outputs, driven once the core exists
+    (Logic, Logic, Logic, Logic, Logic, Logic) mboxPort(String n) => (
+          Logic(name: '${n}_mbox_send'),
+          Logic(name: '${n}_mbox_send_vector', width: 4),
+          Logic(name: '${n}_mbox_send_data', width: ParticleWidths.word),
+          Logic(name: '${n}_mbox_send_target', width: 8),
+          Logic(name: '${n}_mbox_send_target_valid'),
+          Logic(name: '${n}_mbox_ready'),
+        );
+    final c0Mbox = mboxPort('c0');
+    final c1Mbox = mboxPort('c1');
+    final c2Mbox = mboxPort('c2');
+    final c3Mbox = mboxPort('c3');
     final c0Port = fifoPort('c0');
     final c1Port = fifoPort('c1');
     final c2Port = fifoPort('c2');
@@ -346,6 +359,8 @@ class ParcoreTop extends Module {
       List<String> bufferNames = const [],
       Logic? devPopData,
       Logic? devStatus,
+      required (Logic, Logic, Logic, Logic, Logic, Logic) mbox,
+      int? mboxDefaultTarget,
     }) {
       final r = ringOrder.indexOf(core);
       final iface = ParticleRingInterface(
@@ -367,6 +382,13 @@ class ParcoreTop extends Module {
         devPopData: devPopData,
         devStatus: devStatus,
         bufferNames: bufferNames,
+        mboxSendStrobe: mbox.$1,
+        mboxSendVector: mbox.$2,
+        mboxSendData: mbox.$3,
+        mboxSendTarget: mbox.$4,
+        mboxSendTargetValid: mbox.$5,
+        mboxCoreReady: mbox.$6,
+        mboxDefaultTarget: mboxDefaultTarget,
         name: 'core${core}_ni',
       );
       ringInject[r] <= iface.inject;
@@ -383,7 +405,7 @@ class ParcoreTop extends Module {
       NiChannel.unused,
     ], txRoutes: const [(core: 1, channel: 0)],
         rxSenders: const [(core: 3, channel: 2)],
-        bufferNames: ['parcore_fifo_mem_to_if']);
+        bufferNames: ['parcore_fifo_mem_to_if'], mbox: c0Mbox);
 
     // Core 1: channel 0 receives from core 0, channel 1 sends to core 2
     // (FIFO.STAT: its room, checked before decoding), channel 2 receives the
@@ -395,7 +417,8 @@ class ParcoreTop extends Module {
       NiChannel(status: NiStatus.rx(0)),
     ], txRoutes: const [(core: 2, channel: 0)],
         rxSenders: const [(core: 0, channel: 1), (core: 3, channel: 1)],
-        bufferNames: ['parcore_fifo_if_to_id', 'parcore_fifo_mem_to_wb']);
+        bufferNames: ['parcore_fifo_if_to_id', 'parcore_fifo_mem_to_wb'],
+        mbox: c1Mbox);
 
     // Core 2: every channel receives from core 1 and reports that input's
     // status; channel 1 also sends to core 3
@@ -407,7 +430,9 @@ class ParcoreTop extends Module {
       c2In,
     ], txRoutes: const [(core: 3, channel: 0)],
         rxSenders: const [(core: 1, channel: 1)],
-        bufferNames: ['parcore_fifo_id_to_ex']);
+        bufferNames: ['parcore_fifo_id_to_ex'],
+        // Its MBOXes (redirects and FENCE.I) go to core 0
+        mbox: c2Mbox, mboxDefaultTarget: 0);
 
     // Core 3: channels 0-2 receive from core 2; channel 1 sends the
     // writebacks to core 1, channel 2 mirrors stores to core 0 (FIFO.STAT:
@@ -422,7 +447,17 @@ class ParcoreTop extends Module {
     ], txRoutes: const [(core: 1, channel: 2), (core: 0, channel: 2)],
         rxSenders: const [(core: 2, channel: 1)],
         bufferNames: ['parcore_fifo_ex_to_mem'],
-        devPopData: c3DevPopData, devStatus: c3DevStatus);
+        devPopData: c3DevPopData, devStatus: c3DevStatus, mbox: c3Mbox);
+
+    void driveMbox((Logic, Logic, Logic, Logic, Logic, Logic) m,
+        ParticleCpuCore core) {
+      m.$1 <= core.mboxStrobeOut;
+      m.$2 <= core.mboxVectorOut;
+      m.$3 <= core.mboxDataOut;
+      m.$4 <= core.mboxTargetOut;
+      m.$5 <= core.mboxTargetValid;
+      m.$6 <= core.mboxReady;
+    }
 
     void drivePort((Logic, Logic, Logic, Logic, Logic, Logic) port,
         ParticleCpuCore core) {
@@ -442,9 +477,6 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     final c0MemARData = Logic(name: 'c0_mem_a_rdata', width: ParticleWidths.halfWord);
     final c0MemBRData = Logic(name: 'c0_mem_b_rdata', width: ParticleWidths.word);
-    final c0MboxStrobe = Logic(name: 'c0_mbox_strobe');
-    final c0MboxVector = Logic(name: 'c0_mbox_vector', width: 4);
-    final c0MboxData = Logic(name: 'c0_mbox_data', width: 32);
 
     final c0FifoPopData = Logic(name: 'c0_fifo_pop_data', width: ParticleWidths.word);
     final c0FifoStatus  = Logic(name: 'c0_fifo_status', width: ParticleWidths.word);
@@ -454,9 +486,11 @@ class ParcoreTop extends Module {
       reset: reset | condCoreReset.slice(0, 0),
       memPortARData: c0MemARData,
       memPortBRData: c0MemBRData,
-      mboxStrobeIn: c0MboxStrobe,
-      mboxVectorIn: c0MboxVector,
-      mboxDataIn: c0MboxData,
+      mboxStrobeIn: ni0.mboxStrobe,
+      mboxVectorIn: ni0.mboxVector,
+      mboxDataIn: ni0.mboxData,
+      mboxSourceIn: ni0.mboxSource,
+      mboxSendWait: ni0.mboxSendWait,
       fifoPopData: c0FifoPopData,
       fifoStatus: c0FifoStatus,
       fifoPushWait: ni0.pushWait,
@@ -480,6 +514,7 @@ class ParcoreTop extends Module {
     );
 
     drivePort(c0Port, core0);
+    driveMbox(c0Mbox, core0);
     c0FifoStatus <= ni0.statusWord;
     c0FifoPopData <= ni0.popData;
 
@@ -500,8 +535,11 @@ class ParcoreTop extends Module {
       reset: reset | condCoreReset.slice(1, 1),
       memPortARData: c1MemARData,
       memPortBRData: c1MemBRData,
-      mboxStrobeIn: Const(0),
-      mboxVectorIn: Const(0, width: 4),
+      mboxStrobeIn: ni1.mboxStrobe,
+      mboxVectorIn: ni1.mboxVector,
+      mboxDataIn: ni1.mboxData,
+      mboxSourceIn: ni1.mboxSource,
+      mboxSendWait: ni1.mboxSendWait,
       fifoPopData: c1PopData,
       fifoStatus: c1FifoStatus,
       fifoPushWait: ni1.pushWait,
@@ -510,6 +548,7 @@ class ParcoreTop extends Module {
     );
 
     drivePort(c1Port, core1);
+    driveMbox(c1Mbox, core1);
 
     buildTcm(
       coreIndex: 1,
@@ -538,8 +577,11 @@ class ParcoreTop extends Module {
       reset: reset | condCoreReset.slice(2, 2),
       memPortARData: c2MemARData,
       memPortBRData: c2MemBRData,
-      mboxStrobeIn: Const(0),
-      mboxVectorIn: Const(0, width: 4),
+      mboxStrobeIn: ni2.mboxStrobe,
+      mboxVectorIn: ni2.mboxVector,
+      mboxDataIn: ni2.mboxData,
+      mboxSourceIn: ni2.mboxSource,
+      mboxSendWait: ni2.mboxSendWait,
       fifoPopData: ni2.popData,
       fifoStatus: ni2.statusWord,
       fifoPushWait: ni2.pushWait,
@@ -548,6 +590,7 @@ class ParcoreTop extends Module {
     );
 
     drivePort(c2Port, core2);
+    driveMbox(c2Mbox, core2);
 
     buildTcm(
       coreIndex: 2,
@@ -565,9 +608,6 @@ class ParcoreTop extends Module {
     );
 
 
-    c0MboxStrobe <= core2.mboxStrobeOut;
-    c0MboxVector <= core2.mboxVectorOut;
-    c0MboxData <= core2.mboxDataOut;
 
     branchRedirectStrobe <= core2.mboxStrobeOut;
     branchRedirectVector <= core2.mboxVectorOut;
@@ -588,8 +628,11 @@ class ParcoreTop extends Module {
       reset: reset | condCoreReset.slice(3, 3),
       memPortARData: c3MemARData,
       memPortBRData: c3MemBRData,
-      mboxStrobeIn: Const(0),
-      mboxVectorIn: Const(0, width: 4),
+      mboxStrobeIn: ni3.mboxStrobe,
+      mboxVectorIn: ni3.mboxVector,
+      mboxDataIn: ni3.mboxData,
+      mboxSourceIn: ni3.mboxSource,
+      mboxSendWait: ni3.mboxSendWait,
       fifoPopData: c3FifoPopData,
       fifoStatus: c3FifoStatus,
       fifoPushWait: ni3.pushWait,
@@ -598,6 +641,7 @@ class ParcoreTop extends Module {
     );
 
     drivePort(c3Port, core3);
+    driveMbox(c3Mbox, core3);
 
     buildTcm(
       coreIndex: 3,

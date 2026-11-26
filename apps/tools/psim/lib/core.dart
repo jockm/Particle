@@ -183,7 +183,8 @@ class ParticleCore {
   final Queue<(int, int, int)> mboxQueue = Queue();
   (int, int, int)? mboxBroadcastSlot;
 
-  /// Masked by MBOX.OFF and by taking an MBOX trap; unmasked by MBOX.ON and
+  /// Masks the asynchronous traps (today MBOX): set by DI and by taking an
+  /// MBOX trap; cleared by EI and
   /// RETI.
   bool mboxMasked = false;
 
@@ -925,9 +926,9 @@ class ParticleCore {
       nextPc = epc;
       mboxMasked = false;
     } else if (opcode == 0xE8) {
-      mboxMasked = false; // MBOX.ON
+      mboxMasked = false; // EI
     } else if (opcode == 0xE9) {
-      mboxMasked = true; // MBOX.OFF
+      mboxMasked = true; // DI
     } else if (opcode == 0xE4) {
       final fid = r[rl] % fifos.length;
       if (network != null && network!.sends(fid)) {

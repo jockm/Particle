@@ -37,7 +37,10 @@ class NocPacket {
   static const data = 0;
   static const credit = 1;
   static const flush = 2;
-  // 3 MBOX and 4 CONFIG come in step 3
+  static const mbox = 3; // channel: the vector; payload: the value
+  // 4 CONFIG comes in step 3b
+  static const ack = 5; // an MBOX was taken into the queue
+  static const nack = 6; // the queue was full: send it again
 
   /// A packet from its fields.
   static Logic make({

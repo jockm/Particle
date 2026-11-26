@@ -96,13 +96,13 @@ _reset_vector:
 _branch_redirect_handler:
     LDI     R14, _apply_mirror  ; finish an entry the MBOX interrupted
     JMP     R14, R12
-    LDI     R14, MBOX_VALUE
+    LDIS    R14, NI_MBOX_VALUE  ; the MBOX's value (Documentation/mbox_design.md)
     LD32    R10, (R14)          ; the new PC
     BINV    R9, 1               ; new epoch: core 2 drops what was sent before
 _send_markers:
     ; Flush ifToId first: the network interface sends a FLUSH behind what was
     ; sent on the wrong path, and core 1's buffer is emptied when it arrives
-    LDIS    R14, 0xFF00         ; 0xFFFF_FF00, the FLUSH register
+    LDIS    R14, NI_FLUSH       ; 0xFFFF_FF00, the FLUSH register
     ST32    (R14), R1           ; R1 = 1, the channel to core 1
     LD      R14, -1
     FIFO.W  R14, R1
@@ -110,6 +110,9 @@ _send_markers:
     FIFO.W  R14, R1
     FIFO.W  R14, R1
     FIFO.W  R14, R1
+    ; Taking the MBOX masked further ones, and these handlers don't return
+    ; with RETI (they restart the main loop): unmask here
+    EI
     JUMP    _if_main_loop
 
 ; FENCE.I (MBOX vector 2 from core 2): redirect to the instruction after the
@@ -119,7 +122,7 @@ _send_markers:
 _fence_i_handler:
     LDI     R14, _apply_mirror  ; finish an entry the MBOX interrupted
     JMP     R14, R12
-    LDI     R14, MBOX_VALUE
+    LDIS    R14, NI_MBOX_VALUE  ; the MBOX's value (Documentation/mbox_design.md)
     LD32    R10, (R14)          ; the new PC
     BINV    R9, 1               ; new epoch
 ._fence_drain:

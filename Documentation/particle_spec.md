@@ -48,10 +48,10 @@ A slot holds 8 instructions, which is enough to jump anywhere: `lib/vectors.inc`
 
 **Trap entry**: $R14 \leftarrow \text{return PC}$; $PC \leftarrow \text{Target}$. For `TRAP` instructions the return PC is the following instruction ($PC + 2$). For a misalignment fault the return PC is the address of the faulting instruction.
 
-**`MBOX` traps** (`Documentation/mbox_design.md`; implemented in psim, the HDL core still has the earlier behaviour described there under "Today"):
+**`MBOX` traps** (`Documentation/mbox_design.md`; implemented in psim and in the HDL, where `CONFIG` and broadcast come in step 3b):
 - An `MBOX` from another core waits in the core's network interface (a queue of 4, and one slot for broadcasts) and is taken before the next instruction unless `MBOX` traps are masked.
 - Taking it: the return PC goes to `EPC` (R14 and memory are left alone), `MBOX` traps are masked, and the PC goes to the vector. The handler reads the value and the sending core from the network interface's registers: `0xFFFF_FF04` (`NI_MBOX_VALUE` in `lib/common.inc`, loaded with `LDIS`) and `0xFFFF_FF08` (`NI_MBOX_SOURCE`).
-- `RETI` returns to `EPC` and unmasks. `MBOX.OFF` masks and `MBOX.ON` unmasks; after reset `MBOX` traps are unmasked.
+- `RETI` returns to `EPC` and unmasks. `DI` masks and `EI` unmasks. They cover every asynchronous trap: today `MBOX`, later a timer (see [Road to GHz](road_to_ghz.md)); faults and `TRAP` are never masked. After reset the asynchronous traps are unmasked.
 - Faults and `TRAP` don't change: their return PC goes to R14.
 
 `0x000000F4` and `0x000000F8` are used by `lib/vectors.inc`'s `_unexpected_trap` (the return PC and the vector number).
@@ -264,8 +264,8 @@ FIFO channels are 256 entries deep. A channel number is taken modulo the number 
 - `0xE2`: `MBOX Rr, Rl` — Signal core `Rl[7:0]` with the value of `Rr`: it takes trap vector `Rl[11:8]` (see §3, `MBOX` traps). Core `0xFF` is every other core (a broadcast; a core whose broadcast slot is still full drops it). It waits while it can't be sent: the target's queue is full, or the core's last `MBOX` is still unanswered.
 - `0xE3`: `RETI` — Return from an `MBOX` trap: $PC \leftarrow EPC$, and unmask `MBOX` traps
 - `0xE5`: `MBOX Rr, Imm4` — As `MBOX Rr, Rl`, with vector `Imm4`, to the core's default target (set by the HDL or psim's `mbox_target`, and changed by `CONFIG`)
-- `0xE8`: `MBOX.ON` — Unmask `MBOX` traps
-- `0xE9`: `MBOX.OFF` — Mask `MBOX` traps: they wait until `MBOX.ON` or `RETI`
+- `0xE8`: `EI` — Enable the asynchronous traps (today `MBOX`)
+- `0xE9`: `DI` — Disable the asynchronous traps: an `MBOX` waits until `EI` or `RETI`
 - `0xE6`: `FIFO.TRYR Rr, Rl` — Non-blocking read from channel `Rl`: if data, $Rr \leftarrow$ data and $R14 \leftarrow 1$; else $R14 \leftarrow 0$ ($Rr$ unchanged)
 - `0xE7`: `FIFO.TRYW Rr, Rl` — Non-blocking write of `Rr` to channel `Rl`: $R14 \leftarrow 1$ if accepted, $0$ if full
 

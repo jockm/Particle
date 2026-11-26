@@ -131,14 +131,15 @@ _x: BBRA    _x
   });
 
   // Vector 1 handler: count in R2, keep the return address in R3, return
+  // The handler counts in R2, copies R14 to R3 and returns with RETI
   const mboxHandler = '''
 .org 0x110
     ADD     R2, 1
     LD      R3, R14
-    JMP     R14, R0
+    RETI
 ''';
 
-  test('MBOX: taken between instructions, R14 = the next instruction',
+  test('MBOX: taken between instructions, R14 kept, RETI returns to EPC',
       () async {
     final h = CoreHarness(asm('''
 .org 0x100
@@ -147,8 +148,10 @@ _x: BBRA    _x
 $mboxHandler
 .org 0x500
 _main:
+    LDI     R14, 0x5A       ; must survive the trap
+_loop:
     ADD     R1, 1
-    BBRA    _main
+    BBRA    _loop
 '''));
     await h.start();
     await h.step(40);
@@ -157,13 +160,13 @@ _main:
     await h.step(40);
     final st = h.snapshot();
     expect(st.reg(2), equals(1), reason: 'the handler ran once');
-    expect(st.reg(3), anyOf(equals(0x500), equals(0x502)),
-        reason: 'R14 is an instruction in the loop');
-    expect(st.reg(1), greaterThan(before), reason: 'the loop resumed');
+    expect(st.reg(3), equals(0x5A), reason: "the handler saw main's R14");
+    expect(st.reg(14), equals(0x5A), reason: 'R14 survived');
+    expect(st.reg(1), greaterThan(before), reason: 'RETI resumed the loop');
     await h.stop();
   });
 
-  test('MBOX interrupts a FIFO.R stall, which runs again after the handler',
+  test('MBOX interrupts a FIFO.R stall, which runs again after RETI',
       () async {
     final h = CoreHarness(asm('''
 .org 0x100
@@ -171,10 +174,9 @@ _main:
     JMP     R14, R0
 .org 0x110
     ADD     R2, 1
-    LD      R3, R14
     LDI     R5, 0x77
     FIFO.W  R5, R4          ; feed the channel the main code waits on
-    JMP     R14, R0
+    RETI
 .org 0x500
 _main:
     LD      R4, 1
@@ -189,23 +191,21 @@ _h: BBRA    _h
     await h.runToHalt();
     final st = h.snapshot();
     expect(st.reg(2), equals(1));
-    expect(st.reg(3), equals(0x502), reason: 'R14 = the stalled FIFO.R');
     expect(st.reg(6), equals(0x77), reason: 'FIFO.R ran again and got data');
     expect(st.reg(7), equals(9));
     await h.stop();
   });
 
-  test('MBOX abandons a divide, which runs again after the handler', () async {
+  test('MBOX abandons a divide, which runs again after RETI', () async {
     final h = CoreHarness(asm('''
 .org 0x100
     LDI     R14, _main
     JMP     R14, R0
 .org 0x110
     ADD     R2, 1
-    LD      R3, R14
     LDI     R8, 1000
     DIV     R8, R9          ; the handler divides too
-    JMP     R14, R0
+    RETI
 .org 0x500
 _main:
     LDI     R5, 12345
@@ -222,10 +222,51 @@ _h: BBRA    _h
     await h.runToHalt();
     final st = h.snapshot();
     expect(st.reg(2), equals(1));
-    expect(st.reg(3), equals(0x506), reason: 'R14 = the DIV');
     expect(st.reg(8), equals(100), reason: "the handler's divide");
     expect(st.reg(5), equals(1234), reason: 'the DIV ran again');
     expect(st.reg(7), equals(9));
+    await h.stop();
+  });
+
+  test('DI holds an MBOX until EI; the handler reads its value '
+      'and sender', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x110
+    ADD     R2, 1
+    LDIS    R5, 0xFF04      ; NI_MBOX_VALUE
+    LD32    R10, (R5)
+    LDIS    R5, 0xFF08      ; NI_MBOX_SOURCE
+    LD32    R11, (R5)
+    RETI
+.org 0x500
+_main:
+    DI
+    LD      R1, 0
+_wait:
+    ADD     R1, 1
+    LD      R6, R1
+    SUB     R6, 15
+    BBRA.NZ R6, _wait       ; a while, masked
+    LD      R12, R2         ; the handler hasn't run
+    EI
+    NOP
+    NOP
+_h: BBRA    _h
+'''));
+    await h.start();
+    await h.step(12);
+    h.mboxData.inject(0x12345678);
+    h.mboxSource.inject(3);
+    await strobeMbox(h, 1);
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(12), equals(0), reason: 'held while masked');
+    expect(st.reg(2), equals(1), reason: 'taken after EI');
+    expect(st.reg(10), equals(0x12345678));
+    expect(st.reg(11), equals(3));
     await h.stop();
   });
 
