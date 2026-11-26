@@ -110,9 +110,20 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 | `mbox_target` | the other core of a pair | The core this core's `MBOX` signals. |
 | `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive` | `true` | The core's optional features, as the options above: `false` leaves one out. |
 
-Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields, such as `topology`, are ignored.
+Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields are ignored.
 
-`Documentation/cluster_config_example.json` is a working file with every field: after `make test-sim-cluster` has built the programs, `build/tools/psim -C Documentation/cluster_config_example.json` runs it. The cluster tests (`make test-sim-cluster`, part of `make test`) are further examples: `apps/asm/cluster/` has a producer and consumer (`stream.json`), an `MBOX` that interrupts a stalled core (`mbox.json`), a counter in shared memory under a `TAS` lock (`shared.json`), and a deadlock (`deadlock.json`).
+`topology` (at the top of the file) is `"point_to_point_fifo"` (the default: a write goes straight into the target core's FIFO) or `"ring"`: the network on chip of `noc_design.md`, step 2. On a ring:
+
+* The cores form a one-way ring in the order they are listed. A packet moves one router a cycle; a router delivers a packet for its own core and passes the rest on, and its core may put a packet on only when no packet is passing. Routers keep running after their cores stop.
+* A write on a routed channel spends a credit (256 to start: the receiver's buffer) and joins the core's injection queue (8 packets). Without a credit the word is dropped, as a `FIFO.W` to a full FIFO is; with the queue full, `FIFO.W` waits and `FIFO.TRYW` returns 0.
+* Each word the receiver reads is a credit for the sender, sent back in a `CREDIT` packet once 16 are owed, or sooner when the receiver has nothing else to send. A receiving channel can have only one sender.
+* `FIFO.STAT` on a routed channel gives the words held (256 minus the credits, so it counts words in flight and read words not yet credited), full when a write wouldn't be taken (no credit, or the queue is full), and empty when every credit is back.
+* A store of a channel number to `0xFFFF_FF00` (the network interface's `FLUSH` register) sends a `FLUSH` on that channel. It follows the words sent before it; the receiver empties that channel's buffer and owes the sender a credit for each word it discarded.
+* `MBOX` still goes straight to its target.
+* The run prints the number of packet hops.
+
+
+`Documentation/cluster_config_example.json` is a working file with every field: after `make test-sim-cluster` has built the programs, `build/tools/psim -C Documentation/cluster_config_example.json` runs it. The cluster tests (`make test-sim-cluster`, part of `make test`) are further examples: `apps/asm/cluster/` has a producer and consumer (`stream.json`), an `MBOX` that interrupts a stalled core (`mbox.json`), a counter in shared memory under a `TAS` lock (`shared.json`), and a deadlock (`deadlock.json`); and on a ring, a stream past a stopped core (`ring_stream.json`), flow control with a slow reader (`ring_flow.json`) and `FLUSH` (`ring_flush.json`).
 
 ---
 

@@ -45,6 +45,10 @@ class ParticleCpuCore extends Module {
   Logic get fifoPopData => input('fifoPopData');
   Logic get fifoStatus => input('fifoStatus');
 
+  /// High while a FIFO.W can't be taken yet (a network interface's injection
+  /// queue is full): the FIFO.W waits, as a FIFO.R waits for data.
+  Logic get fifoPushWait => input('fifoPushWait');
+
   // Out-of-Band Shared Architectural Register Fabric (SARF)
   Logic get sarfRs1Addr => output('sarfRs1Addr');
   Logic get sarfRs2Addr => output('sarfRs2Addr');
@@ -72,6 +76,7 @@ class ParticleCpuCore extends Module {
     Logic? mboxDataIn,
     Logic? fifoPopData,
     Logic? fifoStatus,
+    Logic? fifoPushWait,
     Logic? sarfRs1Data,
     Logic? sarfRs2Data,
     this.config = const CpuConfig(trapTableBase: 0x0100, trapStrideBytes: 16),
@@ -88,6 +93,7 @@ class ParticleCpuCore extends Module {
 
     addInput('fifoPopData', fifoPopData ?? Const(0, width: ParticleWidths.word),
         width: ParticleWidths.word);
+    addInput('fifoPushWait', fifoPushWait ?? Const(0));
     addInput('fifoStatus', fifoStatus ?? Const(0, width: ParticleWidths.word),
         width: ParticleWidths.word);
     addInput('sarfRs1Data', sarfRs1Data ?? Const(0, width: ParticleWidths.word),
@@ -500,9 +506,9 @@ class ParticleCpuCore extends Module {
         ? group.eq(Const(3, width: 4)) | isTas
         : Const(1);
     final memAccess = isLoadOp | isStoreOp | isTas;
-    final misaligned = memAccess &
+    final misaligned = (memAccess &
         ((isSize2 & effAddr.slice(0, 0).eq(1)) |
-            (isSize4 & ~effAddr.slice(1, 0).eq(Const(0, width: 2))));
+            (isSize4 & ~effAddr.slice(1, 0).eq(Const(0, width: 2))))).named('misaligned');
 
     final storeBEn = Logic(name: 'storeBEn', width: 4);
     final storeWData = Logic(name: 'storeWData', width: 32);
@@ -634,7 +640,7 @@ class ParticleCpuCore extends Module {
     // -------------------------------------------------------------------------
     // Traps and interrupts
     // -------------------------------------------------------------------------
-    final validOpcode = anyOp([
+    final validOpcode = (anyOp([
       for (final code in ParticleOpcodes.all)
         if ((config.enableMultiplier || !mulOps.contains(code)) &&
             (config.enableDivider || !divOps.contains(code)) &&
@@ -645,7 +651,7 @@ class ParticleCpuCore extends Module {
             (config.enableShadowBank ||
                 !ParticleOpcodes.shadowOps.contains(code)))
           code,
-    ]);
+    ])).named('validOpcode');
     final illegal = ~validOpcode;
     final isTrapInstr =
         anyOp([ParticleOpcodes.trapR, ParticleOpcodes.trapImm4]);
@@ -675,13 +681,13 @@ class ParticleCpuCore extends Module {
 
     // In E: nothing happens if the MBOX is taken, the opcode is illegal, the
     // access is misaligned or the instruction is a TRAP
-    final execRuns = eValid & ~eDivStarted & ~mboxTake;
+    final execRuns = (eValid & ~eDivStarted & ~mboxTake).named('execRuns');
     final faultIllegal = execRuns & illegal;
     final faultAlign = execRuns & ~illegal & misaligned;
     final trapInstr = execRuns & ~illegal & isTrapInstr;
-    final doExec = execRuns & ~illegal & ~misaligned & ~isTrapInstr;
+    final doExec = (execRuns & ~illegal & ~misaligned & ~isTrapInstr).named('doExec');
     // A branch or jump E decides (D decided the others)
-    final ctlTaken = doExec & ~eResolved & branchTaken;
+    final ctlTaken = (doExec & ~eResolved & branchTaken).named('ctlTaken');
     // A branch or jump to an odd address runs (a JMP still links) and then
     // takes vector 14, with R14 = the odd target
     final oddTarget = ctlTaken & branchNextPc.slice(0, 0).eq(1);
@@ -841,12 +847,15 @@ class ParticleCpuCore extends Module {
     // E: stall, completion and redirect
     // -------------------------------------------------------------------------
     // E keeps its instruction while a FIFO.R waits for data or a divide runs
-    final eStall = (doExec & fifoReadStall) |
+    // A FIFO.W waits while the network interface can't take it yet
+    final fifoWriteStall = op(ParticleOpcodes.fifoW) & fifoPushWait;
+    final eStall = ((doExec & fifoReadStall) |
+        (doExec & fifoWriteStall) |
         (doExec & isDivOp) |
-        (divWaiting & ~divDone & ~mboxTake);
-    final eDone = eValid & ~eStall;
+        (divWaiting & ~divDone & ~mboxTake)).named('eStall');
+    final eDone = (eValid & ~eStall).named('eDone');
     // A load, TAS or MUL writes in W, the next cycle, when E must be empty
-    final wNext = doExec & (isLoadOp | isTas | isMulOp);
+    final wNext = (doExec & (isLoadOp | isTas | isMulOp)).named('wNext');
 
     final eRedirect = Logic(name: 'eRedirect');
     final eTarget = Logic(name: 'eTarget', width: 32);
@@ -895,12 +904,12 @@ class ParticleCpuCore extends Module {
     final dIsLdi = dAnyOp([ParticleOpcodes.ldi, ParticleOpcodes.ldis]);
     // LDI's immediate is the halfword arriving now
     final dImmReady = fValid & fPc.eq(dPc + Const(2, width: 32));
-    final eFree = ~eValid | eDone;
-    final dAdvance = dValid &
+    final eFree = (~eValid | eDone).named('eFree');
+    final dAdvance = (dValid &
         ~eRedirect &
         eFree &
         ~wNext &
-        (~dIsLdi | dImmReady);
+        (~dIsLdi | dImmReady)).named('dAdvance');
 
     // D decides the unconditional FBRA/BBRA imm8 forms: they need no
     // register, so the redirect costs one cycle. Conditional branches test a
@@ -925,8 +934,8 @@ class ParticleCpuCore extends Module {
     // is the immediate of the LDI going to E; it is fetched again when D can't
     // take it.
     // -------------------------------------------------------------------------
-    final dropArriving = eRedirect | dRedirect | (dAdvance & dIsLdi);
-    final dCapture = fValid & ~dropArriving & (~dValid | dAdvance);
+    final dropArriving = (eRedirect | dRedirect | (dAdvance & dIsLdi)).named('dropArriving');
+    final dCapture = (fValid & ~dropArriving & (~dValid | dAdvance)).named('dCapture');
     final fetchAddr = Logic(name: 'fetchAddr', width: 32);
     Combinational([
       fetchAddr < fPc + Const(2, width: 32),

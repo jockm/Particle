@@ -1,6 +1,6 @@
 # Network on Chip: Design Note (Draft)
 
-Status: agreed design (road map item 15, decisions 339 and 374–380). Step 1 is built (385–389): `ParticleNetworkInterface` in `hdl/particle/lib/network_interface.dart`, used by Parcore's four stage cores.
+Status: agreed design (road map item 15, decisions 339 and 374–380). Steps 1 and 2 are built: step 1 (385–389) as `ParticleNetworkInterface`, step 2 (392–397), the one-way ring, as `ParticleRingRouter` and `ParticleRingInterface`, which Parcore now uses.
 
 ## Why
 
@@ -78,7 +78,8 @@ That's about a register and a multiplexer per link bit, so roughly 100–150 LUT
 What firmware sees doesn't change:
 * `FIFO.W` to a channel with no credit is dropped, as a `FIFO.W` to a full FIFO is today.
 * `FIFO.TRYW` reports it in R14.
-* `FIFO.STAT` on an output channel reports full when there's no credit, and a count of 256 minus the credits: the words the channel holds, counting those in flight. Today's checks, like Parcore's "fewer than 128 words", keep their meaning.
+* **Injection queue (397):** a word that can't go on the ring at once waits in a queue of 8 in the NI; `FIFO.W` waits only while that queue is full, as `FIFO.R` waits while empty, and `FIFO.TRYW` returns 0. In Parcore the ring is lightly used, so this should almost never happen; it may need revisiting for ParticleMan, where several CSP tasks may communicate at once.
+* `FIFO.STAT` on an output channel reports full when a write wouldn't be taken (no credit, or the injection queue full), and a count of 256 minus the credits: the words the channel holds, counting those in flight. Today's checks, like Parcore's "fewer than 128 words", keep their meaning.
 
 ## Flush
 
@@ -86,7 +87,7 @@ Today, `pipelineFlush` empties `ifToId` at once, driven by a wire from core 2's 
 
 The proposal is an in-band **`FLUSH` packet**, sent by the sender's NI on that channel, triggered by the sending core.
 * Order is kept, so everything sent before the `FLUSH` is already in the receive buffer when it arrives. The receiving NI then discards the buffer.
-* The sender resets its credits to 256 when it sends the `FLUSH`. Everything still buffered before it will be discarded, so no credits need to come back.
+* The receiving NI owes the sender a credit for every word it discards, and returns them as for words read. (The sender does not reset its credits to 256 when it sends the `FLUSH`, as first planned: a `CREDIT` packet sent just before the `FLUSH` arrived could still be on its way, and would then give the sender more credits than the buffer has room for.)
 * In Parcore, core 0 sends the `FLUSH` in its redirect handler, before the marker packet. Everything it pushed on the wrong path is discarded, including words pushed after core 2's redirect but before core 0 took it. Core 1's handling of a part-read packet (markers, a negative W3) stays as it is.
 * The core needs a way to trigger it. The proposal is a small register in the NI at an MMIO address: storing a channel number sends a `FLUSH` on it. That avoids a new instruction.
 
@@ -125,7 +126,7 @@ Uses: the conductor setting the same table entry everywhere, or telling every co
 ## Steps
 
 1. **The NI and the channel table over today's direct links**, with nothing behaving differently. Parcore's FIFOs become NI receive buffers with fixed tables, and every test must give the same cycle counts. *Done:* the links are direct wires and credits come back in the same cycle (386); the tables are fixed by `ParcoreTop` (387); `pipelineFlush` stays a wire, an input of the NI (388); one block RAM per input, as before (389). The single-core ULX3S design keeps its FIFO subsystem for now (385).
-2. **The one-way ring of routers**, with credits and `FLUSH`. Parcore moves onto it, and the profile shows what the extra hops cost.
+2. **The one-way ring of routers**, with credits and `FLUSH`. Parcore moves onto it, and the profile shows what the extra hops cost. *psim first (396), done:* `"topology": "ring"` in a cluster file, with the cluster tests `ring_stream`, `ring_flow` and `ring_flush`. *HDL, done:* `ring_router.dart`, `ring_interface.dart`; the core's `fifoPushWait`; core 0 stores to the `FLUSH` register before its markers. On Parcore's benchmark the ring costs 1.5 cycles per RISC-V instruction (77.0 against 75.5), mostly core 1 waiting longer for its writebacks (3 hops). Two limits: a second store to the `FLUSH` register while one still waits for room in the injection queue is dropped (harmless on the same channel, since writes wait meanwhile); and resetting one core resets its interface but not its senders' credits, so cores that talk must be reset together (the conductor does). Decided for the HDL: the ring order conductor → core 0 → 1 → 2 → 3 (392); credits returned 16 at a time, or sooner when the slot is free (393); the `FLUSH` register at `0xFFFF_FF00`, written by core 0's redirect and FENCE.I handlers, replacing the `pipelineFlush` wire (394); the conductor's flush bit goes, and a core's NI resets with its core (395).
 3. **`MBOX` as packets** (with item 14), and `CONFIG` from the conductor.
 4. **A two-way ring or a mesh** when the core count calls for it.
 

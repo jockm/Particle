@@ -254,7 +254,7 @@ Displacements are unsigned halfword counts added to (forward) or subtracted from
 
 FIFO channels are 256 entries deep. A channel number is taken modulo the number of implemented channels.
 - `0xE0`: `FIFO.R Rr, Rl` — Blocking read from channel `Rl` into `Rr`; stalls until data is available
-- `0xE1`: `FIFO.W Rr, Rl` — Write `Rr` to channel `Rl`; dropped if the channel is full
+- `0xE1`: `FIFO.W Rr, Rl` — Write `Rr` to channel `Rl`; dropped if the channel is full. On a network on chip it waits while the network interface can't take it yet (its injection queue is full), and `FIFO.TRYW` returns 0 then
 - `0xE4`: `FIFO.STAT Rr, Rl` — Status of channel `Rl` into `Rr`
   - Status word: `bit[0]` = empty, `bit[1]` = full, `bits[16:8]` = current entry count
 - `0xE5`: `MBOX Rr, Imm4` — Signal another core with the value of `Rr`: it takes trap vector `Imm4` (see §3, interruptible stalls), and as it does, stores the value at `MBOX_VALUE`, the word below its trap table (`0x000000FC`), where the handler reads it. A newer `MBOX` that arrives before the trap is taken replaces the older one. In `psim`, a cluster's configuration names each core's target.

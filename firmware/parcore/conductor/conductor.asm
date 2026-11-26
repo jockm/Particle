@@ -12,7 +12,6 @@
 ; ------------------------------------------------------------------------------
 ; RST_CTRL (0xF000_0000):
 ;   Bits [5:0] = Per-core active-high reset/hold (1 = Reset/Mux to Conductor)
-;   Bit  [6]   = Global Pipeline Interconnect FIFO flush strobe
 ;   Bit  [31]  = Conductor boot complete status flag
 .define RST_CTRL_ADDR       0xF0000000
 

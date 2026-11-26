@@ -35,6 +35,37 @@ class Registers {
   }
 }
 
+/// A core's network interface, when its channels go through a network on
+/// chip (a cluster with "topology": "ring") instead of straight into another
+/// core's FIFO.
+abstract class NetworkPort {
+  /// Whether channel [ch]'s writes go into the network.
+  bool sends(int ch);
+
+  /// A write of [value] to channel [ch]: [pushAccepted], [pushNoCredit]
+  /// (the receiver has no room: dropped, as a FIFO.W to a full FIFO is) or
+  /// [pushQueueFull] (the injection queue is full: FIFO.W waits).
+  int push(int ch, int value);
+
+  /// FIFO.STAT of output channel [ch]: words held (256 minus the credits),
+  /// full when there are no credits, empty when there are 256.
+  int txStatus(int ch);
+
+  /// The core read a word from its channel [ch]: a credit for its sender.
+  void popped(int ch);
+
+  /// A store to the FLUSH register: send a FLUSH on channel [ch].
+  void flush(int ch);
+
+  static const pushAccepted = 0;
+  static const pushNoCredit = 1;
+  static const pushQueueFull = 2;
+}
+
+/// The network interface's FLUSH register: storing a channel number sends a
+/// FLUSH on that channel (Documentation/noc_design.md).
+const int niFlushAddr = 0xFFFFFF00;
+
 class ParticleCore {
   final int memSize;
   late final Uint8List mem;
@@ -105,6 +136,9 @@ class ParticleCore {
   /// Where each local channel's writes go: another core's receive channel,
   /// or null for this core's own channel (and the console on channel 0).
   final List<(ParticleCore, int)?> txRoutes = List.filled(4, null);
+
+  /// The network this core's channels go through, or null.
+  NetworkPort? network;
 
   /// Memory shared by every core of a cluster, at [sharedBase].
   Uint8List? shared;
@@ -236,6 +270,10 @@ class ParticleCore {
   void write32(int addr, int val) {
     if ((addr & 3) != 0) {
       triggerTrap(14, pc);
+      return;
+    }
+    if (network != null && (addr & mask32) == niFlushAddr) {
+      network!.flush(val & 3);
       return;
     }
     if (_sharedOffset(addr) >= 0) {
@@ -767,32 +805,52 @@ class ParticleCore {
         return true;
       }
       r[rr] = fifos[fid].removeFirst();
+      network?.popped(fid);
     } else if (opcode == 0xE1) {
       final fid = r[rl] % fifos.length;
-      final route = fid < txRoutes.length ? txRoutes[fid] : null;
-      if (fid == 0 && route == null) {
-        stdout.writeCharCode(r[rr] & 0xFF);
-      }
-      final q = _txQueue(fid);
-      if (q.length < 256) {
-        q.add(r[rr]);
+      final net = network;
+      if (net != null && net.sends(fid)) {
+        if (net.push(fid, r[rr]) == NetworkPort.pushQueueFull) {
+          // The injection queue is full: wait, as FIFO.R waits for data
+          stalled = true;
+          waitingChannel = fid;
+          cycleCount++;
+          return true;
+        }
+      } else {
+        final route = fid < txRoutes.length ? txRoutes[fid] : null;
+        if (fid == 0 && route == null) {
+          stdout.writeCharCode(r[rr] & 0xFF);
+        }
+        final q = _txQueue(fid);
+        if (q.length < 256) {
+          q.add(r[rr]);
+        }
       }
     } else if (opcode == 0xE5) {
       // MBOX: raise trap Imm4 on another core, sending Rr
       onMbox?.call(imm4, r[rr]);
     } else if (opcode == 0xE4) {
       final fid = r[rl] % fifos.length;
-      final emptyB = fifos[fid].isEmpty ? 1 : 0;
-      final fullB = (fifos[fid].length >= 256) ? 2 : 0;
-      r[rr] = (fifos[fid].length << 8) | fullB | emptyB;
+      if (network != null && network!.sends(fid)) {
+        r[rr] = network!.txStatus(fid);
+      } else {
+        final emptyB = fifos[fid].isEmpty ? 1 : 0;
+        final fullB = (fifos[fid].length >= 256) ? 2 : 0;
+        r[rr] = (fifos[fid].length << 8) | fullB | emptyB;
+      }
     } else if (opcode == 0xE6) {
       final fid = r[rl] % fifos.length;
       if (fifos[fid].isNotEmpty) {
         r[rr] = fifos[fid].removeFirst();
+        network?.popped(fid);
         r[14] = 1;
       } else {
         r[14] = 0;
       }
+    } else if (opcode == 0xE7 && network != null && network!.sends(r[rl] % fifos.length)) {
+      final fid = r[rl] % fifos.length;
+      r[14] = network!.push(fid, r[rr]) == NetworkPort.pushAccepted ? 1 : 0;
     } else if (opcode == 0xE7) {
       final fid = r[rl] % fifos.length;
       final q = _txQueue(fid);

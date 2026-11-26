@@ -442,6 +442,7 @@ void runCluster(String path, {required bool debug, required bool exitOnReset, re
     }
   }
   stdout.writeln("Simulation completed in ${cluster.cycles} cycles.");
+  if (cluster.ring != null) stdout.writeln("  Ring: ${cluster.ring!.hops} packet hops");
   for (var i = 0; i < cluster.cores.length; i++) {
     final c = cluster.cores[i];
     final state = c.halted ? "halted (exit ${c.haltCode ?? 0})" : "running";

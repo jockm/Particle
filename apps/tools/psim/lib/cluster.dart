@@ -11,6 +11,7 @@ import "dart:io";
 import "dart:typed_data";
 
 import "core.dart";
+import "ring.dart";
 
 /// A cluster configuration that cannot be used.
 class ClusterConfigError implements Exception {
@@ -31,10 +32,14 @@ class Cluster {
   final List<int> ids;
   final List<String> names;
 
+  /// The ring the cores' channels go through ("topology": "ring"), or null
+  /// when each channel writes straight into another core's FIFO.
+  final RingNetwork? ring;
+
   /// Lock-step cycles run.
   int cycles = 0;
 
-  Cluster._(this.cores, this.ids, this.names);
+  Cluster._(this.cores, this.ids, this.names, this.ring);
 
   /// Reads the cluster described by the JSON file at [path]. Binary paths
   /// are relative to the file's folder. [exitOnReset] is psim's
@@ -54,6 +59,10 @@ class Cluster {
 
   /// The cluster described by [json] (see the simulator documentation).
   factory Cluster.fromJson(Map<String, dynamic> json, {String baseDir = ".", bool exitOnReset = true}) {
+    final topology = json["topology"] ?? "point_to_point_fifo";
+    if (topology != "point_to_point_fifo" && topology != "ring") {
+      throw ClusterConfigError("topology must be 'point_to_point_fifo' or 'ring', not '$topology'");
+    }
     final coreList = json["cores"];
     if (coreList is! List || coreList.isEmpty) {
       throw ClusterConfigError("'cores' must be a non-empty list");
@@ -119,7 +128,9 @@ class Cluster {
       names.add(name);
     }
 
-    // FIFO routes and MBOX targets need every core
+    // FIFO routes and MBOX targets need every core. On a ring the cores are
+    // in the order listed.
+    final ring = topology == "ring" ? RingNetwork(cores) : null;
     for (var i = 0; i < cores.length; i++) {
       final entry = coreList[i] as Map<String, dynamic>;
       final routes = (entry["fifo_connections"] as Map?)?["tx"];
@@ -136,7 +147,15 @@ class Cluster {
           if (tch < 0 || tch >= cores[t].fifos.length) {
             throw ClusterConfigError("core ${ids[i]}: target_channel $tch is out of range (0..${cores[t].fifos.length - 1})");
           }
-          cores[i].txRoutes[ch] = (cores[t], tch);
+          if (ring != null) {
+            try {
+              ring.route(i, ch, t, tch);
+            } on StateError catch (e) {
+              throw ClusterConfigError("core ${ids[i]}: ${e.message}");
+            }
+          } else {
+            cores[i].txRoutes[ch] = (cores[t], tch);
+          }
         }
       }
       // MBOX target: named, or the other core of a pair
@@ -166,7 +185,7 @@ class Cluster {
         }
       };
     }
-    return Cluster._(cores, ids, names);
+    return Cluster._(cores, ids, names, ring);
   }
 
   /// Runs one lock-step cycle.
@@ -174,6 +193,8 @@ class Cluster {
     for (final c in cores) {
       if (!c.halted) c.step();
     }
+    // The routers keep running when their cores have stopped
+    ring?.step();
     cycles++;
   }
 
@@ -183,7 +204,9 @@ class Cluster {
   /// an empty FIFO, and no MBOX trap is pending.
   bool get deadlocked {
     final running = cores.where((c) => !c.halted).toList();
-    return running.isNotEmpty && running.every((c) => c.stalled && c.pendingTrap == null);
+    return running.isNotEmpty &&
+        running.every((c) => c.stalled && c.pendingTrap == null) &&
+        (ring == null || ring!.idle);
   }
 
   /// One line per waiting core, for the deadlock message.

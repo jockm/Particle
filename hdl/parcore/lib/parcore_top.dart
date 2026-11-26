@@ -9,6 +9,8 @@ import 'package:rohd/rohd.dart';
 import 'package:particle_rohd/constants.dart';
 import 'package:particle_rohd/cpu_core.dart';
 import 'package:particle_rohd/network_interface.dart';
+import 'package:particle_rohd/ring_interface.dart';
+import 'package:particle_rohd/ring_router.dart';
 import 'package:particle_rohd/uart.dart';
 import 'package:parcore_rohd/parcore_config.dart';
 import 'package:parcore_rohd/parcore_tcm.dart';
@@ -143,7 +145,6 @@ class ParcoreTop extends Module {
 
     // RST_CTRL Register (0xF000_0000):
     //   Bits [5:0]: Per-core reset/hold lines (default 0x3F when conductorBinary != null, else 0x00)
-    //   Bit  [6]:   Interconnect FIFO flush strobe
     //   Bit  [31]:  Boot complete flag
     final regRstCtrl = Logic(name: 'reg_rst_ctrl', width: 32);
     final defaultRst = conductorBinary != null ? 0x0000003F : 0x00000000;
@@ -158,7 +159,6 @@ class ParcoreTop extends Module {
     ]);
 
     final condCoreReset = regRstCtrl.slice(5, 0);
-    final condFifoFlush = regRstCtrl.slice(6, 6);
     final condTargetCore = condMemAddr.slice(18, 16);
     final isCoreWindow = condMemAddr.slice(31, 28).eq(Const(0x1, width: 4));
 
@@ -277,132 +277,164 @@ class ParcoreTop extends Module {
     }
 
     // -------------------------------------------------------------------------
-    // The network (step 1 of Documentation/noc_design.md): each stage core
-    // has a network interface holding its receive buffers, the credits of
-    // its output links and its channel table; the links between them are
-    // direct wires. FIFO.STAT, FIFO.TRYW and the cycle counts are as with
-    // the shared FIFOs this replaces.
+    // The network (step 2 of Documentation/noc_design.md): a one-way ring of
+    // routers, conductor -> core 0 -> core 1 -> core 2 -> core 3 ->
+    // conductor. Each stage core has a network interface holding its receive
+    // buffers, the credits of its output links, an injection queue and its
+    // channel table; the conductor's router only passes packets on (it will
+    // send CONFIG packets in step 3). A store of a channel number to
+    // 0xFFFF_FF00 sends a FLUSH on it (core 0 flushes ifToId on a redirect);
+    // a core's network interface resets with the core.
     // -------------------------------------------------------------------------
-    // A link: the sender's word and valid strobe, and the receiver's credit
-    // return
-    (Logic, Logic, Logic) link(String n) => (
-          Logic(name: '${n}_valid'),
-          Logic(name: '${n}_data', width: ParticleWidths.word),
-          Logic(name: '${n}_credit'),
-        );
-    final ifToId = link('ifToId');
-    final idToEx = link('idToEx');
-    final exToMem = link('exToMem');
-    final memToWb = link('memToWb');
-    final memToIf = link('memToIf');
+    const pw = NocPacket.width;
+    const ringOrder = [7, 0, 1, 2, 3]; // router ids: the conductor is 7
+    final ringOut = [
+      for (final id in ringOrder) Logic(name: 'ring_out_$id', width: pw),
+    ];
+    final ringOutValid = [
+      for (final id in ringOrder) Logic(name: 'ring_out_valid_$id'),
+    ];
+    final ringInject = [
+      for (final id in ringOrder) Logic(name: 'ring_inject_$id', width: pw),
+    ];
+    final ringInjectValid = [
+      for (final id in ringOrder) Logic(name: 'ring_inject_valid_$id'),
+    ];
+    final routers = [
+      for (var r = 0; r < ringOrder.length; r++)
+        ParticleRingRouter(
+          clk: clk,
+          reset: reset,
+          ringIn: ringOut[(r + ringOrder.length - 1) % ringOrder.length],
+          ringInValid:
+              ringOutValid[(r + ringOrder.length - 1) % ringOrder.length],
+          inject: ringInject[r],
+          injectValid: ringInjectValid[r],
+          coreId: ringOrder[r],
+          name: 'ring_router_${ringOrder[r]}',
+        ),
+    ];
+    for (var r = 0; r < ringOrder.length; r++) {
+      ringOut[r] <= routers[r].ringOut;
+      ringOutValid[r] <= routers[r].ringOutValid;
+    }
+    // The conductor's router sends nothing yet
+    ringInject[0] <= Const(0, width: pw);
+    ringInjectValid[0] <= Const(0);
 
-    // Each core's FIFO port, driven once the core exists
-    (Logic, Logic, Logic, Logic) fifoPort(String n) => (
+    // Each core's FIFO port, and its stores to the FLUSH register, driven
+    // once the core exists
+    (Logic, Logic, Logic, Logic, Logic, Logic) fifoPort(String n) => (
           Logic(name: '${n}_fifo_chan', width: 2),
           Logic(name: '${n}_fifo_push_data', width: ParticleWidths.word),
           Logic(name: '${n}_fifo_push_en'),
           Logic(name: '${n}_fifo_pop_en'),
+          Logic(name: '${n}_ni_flush'),
+          Logic(name: '${n}_ni_flush_chan', width: 2),
         );
     final c0Port = fifoPort('c0');
     final c1Port = fifoPort('c1');
     final c2Port = fifoPort('c2');
     final c3Port = fifoPort('c3');
 
-    // pipelineFlush empties ifToId (core 1's input 0) and gives core 0 its
-    // credits back
-    final pipelineFlush = Logic(name: 'pipeline_flush');
-
-    ParticleNetworkInterface ni(
-      String n,
-      (Logic, Logic, Logic, Logic) port,
+    ParticleRingInterface ni(
+      int core,
+      (Logic, Logic, Logic, Logic, Logic, Logic) port,
       List<NiChannel> channels, {
-      List<(Logic, Logic, Logic)> rx = const [],
-      List<(Logic, Logic, Logic)> tx = const [],
+      List<NocAddress> txRoutes = const [],
+      List<NocAddress> rxSenders = const [],
       List<String> bufferNames = const [],
-      List<Logic>? rxFlush,
-      List<Logic>? txReset,
       Logic? devPopData,
       Logic? devStatus,
     }) {
-      final iface = ParticleNetworkInterface(
+      final r = ringOrder.indexOf(core);
+      final iface = ParticleRingInterface(
         clk: clk,
-        reset: reset,
+        reset: reset | condCoreReset.slice(core, core),
         chanSelect: port.$1,
         pushData: port.$2,
         pushEn: port.$3,
         popEn: port.$4,
+        flushStrobe: port.$5,
+        flushChannel: port.$6,
         channels: channels,
-        rxValid: [for (final l in rx) l.$1],
-        rxData: [for (final l in rx) l.$2],
-        rxFlush: rxFlush,
-        txCredit: [for (final l in tx) l.$3],
-        txReset: txReset,
+        coreId: core,
+        txRoutes: txRoutes,
+        rxSenders: rxSenders,
+        eject: routers[r].eject,
+        ejectValid: routers[r].ejectValid,
+        injectTaken: routers[r].injectTaken,
         devPopData: devPopData,
         devStatus: devStatus,
         bufferNames: bufferNames,
-        name: '${n}_ni',
+        name: 'core${core}_ni',
       );
-      for (var i = 0; i < rx.length; i++) {
-        rx[i].$3 <= iface.rxTaken(i);
-      }
-      for (var j = 0; j < tx.length; j++) {
-        tx[j].$1 <= iface.txValid(j);
-        tx[j].$2 <= iface.txData(j);
-      }
+      ringInject[r] <= iface.inject;
+      ringInjectValid[r] <= iface.injectValid;
       return iface;
     }
 
     // Core 0: channel 1 sends to core 1 (FIFO.STAT: its room, checked before
     // each packet); channel 2 receives core 3's mirrored stores
-    final ni0 = ni('core0', c0Port, const [
+    final ni0 = ni(0, c0Port, const [
       NiChannel.unused,
       NiChannel(tx: 0, status: NiStatus.tx(0)),
       NiChannel(rx: 0, status: NiStatus.rx(0)),
       NiChannel.unused,
-    ], rx: [memToIf], tx: [ifToId], bufferNames: ['parcore_fifo_mem_to_if'],
-        txReset: [pipelineFlush]);
+    ], txRoutes: const [(core: 1, channel: 0)],
+        rxSenders: const [(core: 3, channel: 2)],
+        bufferNames: ['parcore_fifo_mem_to_if']);
 
     // Core 1: channel 0 receives from core 0, channel 1 sends to core 2
     // (FIFO.STAT: its room, checked before decoding), channel 2 receives the
     // writebacks from core 3; channel 3 reports channel 0's status
-    final ni1 = ni('core1', c1Port, const [
+    final ni1 = ni(1, c1Port, const [
       NiChannel(rx: 0, status: NiStatus.rx(0)),
       NiChannel(tx: 0, status: NiStatus.tx(0)),
       NiChannel(rx: 1, status: NiStatus.rx(1)),
       NiChannel(status: NiStatus.rx(0)),
-    ], rx: [ifToId, memToWb], tx: [idToEx],
-        bufferNames: ['parcore_fifo_if_to_id', 'parcore_fifo_mem_to_wb'],
-        rxFlush: [pipelineFlush, Const(0)]);
+    ], txRoutes: const [(core: 2, channel: 0)],
+        rxSenders: const [(core: 0, channel: 1), (core: 3, channel: 1)],
+        bufferNames: ['parcore_fifo_if_to_id', 'parcore_fifo_mem_to_wb']);
 
     // Core 2: every channel receives from core 1 and reports that input's
     // status; channel 1 also sends to core 3
     const c2In = NiChannel(rx: 0, status: NiStatus.rx(0));
-    final ni2 = ni('core2', c2Port, const [
+    final ni2 = ni(2, c2Port, const [
       c2In,
       NiChannel(rx: 0, tx: 0, status: NiStatus.rx(0)),
       c2In,
       c2In,
-    ], rx: [idToEx], tx: [exToMem], bufferNames: ['parcore_fifo_id_to_ex']);
+    ], txRoutes: const [(core: 3, channel: 0)],
+        rxSenders: const [(core: 1, channel: 1)],
+        bufferNames: ['parcore_fifo_id_to_ex']);
 
     // Core 3: channels 0-2 receive from core 2; channel 1 sends the
     // writebacks to core 1, channel 2 mirrors stores to core 0 (FIFO.STAT:
     // its room); channel 3 is the FTDI UART
     final c3DevPopData = Logic(name: 'c3_dev_pop_data', width: ParticleWidths.word);
     final c3DevStatus = Logic(name: 'c3_dev_status', width: ParticleWidths.word);
-    final ni3 = ni('core3', c3Port, const [
+    final ni3 = ni(3, c3Port, const [
       NiChannel(rx: 0, status: NiStatus.rx(0)),
       NiChannel(rx: 0, tx: 0, status: NiStatus.rx(0)),
       NiChannel(rx: 0, tx: 1, status: NiStatus.tx(1)),
       NiChannel(device: true, status: NiStatus.device()),
-    ], rx: [exToMem], tx: [memToWb, memToIf],
+    ], txRoutes: const [(core: 1, channel: 2), (core: 0, channel: 2)],
+        rxSenders: const [(core: 2, channel: 1)],
         bufferNames: ['parcore_fifo_ex_to_mem'],
         devPopData: c3DevPopData, devStatus: c3DevStatus);
 
-    void drivePort((Logic, Logic, Logic, Logic) port, ParticleCpuCore core) {
+    void drivePort((Logic, Logic, Logic, Logic, Logic, Logic) port,
+        ParticleCpuCore core) {
       port.$1 <= core.fifoChanSelect;
       port.$2 <= core.fifoPushData;
       port.$3 <= core.fifoPushEn;
       port.$4 <= core.fifoPopEn;
+      // The FLUSH register: a store of a channel number to 0xFFFF_FF00
+      port.$5 <=
+          core.memPortBWEn &
+              core.memPortBAddr.eq(Const(niFlushRegister, width: 32));
+      port.$6 <= core.memPortBWData.slice(1, 0);
     }
 
     // -------------------------------------------------------------------------
@@ -427,6 +459,7 @@ class ParcoreTop extends Module {
       mboxDataIn: c0MboxData,
       fifoPopData: c0FifoPopData,
       fifoStatus: c0FifoStatus,
+      fifoPushWait: ni0.pushWait,
       config: ParcoreConfig.core0If,
       name: 'core0_if',
     );
@@ -471,6 +504,7 @@ class ParcoreTop extends Module {
       mboxVectorIn: Const(0, width: 4),
       fifoPopData: c1PopData,
       fifoStatus: c1FifoStatus,
+      fifoPushWait: ni1.pushWait,
       config: ParcoreConfig.core1Id,
       name: 'core1_id',
     );
@@ -508,6 +542,7 @@ class ParcoreTop extends Module {
       mboxVectorIn: Const(0, width: 4),
       fifoPopData: ni2.popData,
       fifoStatus: ni2.statusWord,
+      fifoPushWait: ni2.pushWait,
       config: ParcoreConfig.core2Ex,
       name: 'core2_ex',
     );
@@ -530,7 +565,6 @@ class ParcoreTop extends Module {
     );
 
 
-    pipelineFlush <= core2.mboxStrobeOut | condFifoFlush;
     c0MboxStrobe <= core2.mboxStrobeOut;
     c0MboxVector <= core2.mboxVectorOut;
     c0MboxData <= core2.mboxDataOut;
@@ -558,6 +592,7 @@ class ParcoreTop extends Module {
       mboxVectorIn: Const(0, width: 4),
       fifoPopData: c3FifoPopData,
       fifoStatus: c3FifoStatus,
+      fifoPushWait: ni3.pushWait,
       config: ParcoreConfig.core3Mem,
       name: 'core3_mem',
     );

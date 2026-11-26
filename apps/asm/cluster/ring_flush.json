@@ -1,0 +1,24 @@
+{
+  "topology": "ring",
+  "cores": [
+    {
+      "id": 0,
+      "name": "producer",
+      "binary": "../../../build/cluster/ring_flush_producer.bin",
+      "fifo_connections": {
+        "tx": [
+          {
+            "channel": 1,
+            "target_core": 1,
+            "target_channel": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "name": "consumer",
+      "binary": "../../../build/cluster/ring_flush_consumer.bin"
+    }
+  ]
+}

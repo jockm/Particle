@@ -1,0 +1,29 @@
+{
+  "topology": "ring",
+  "cores": [
+    {
+      "id": 0,
+      "name": "producer",
+      "binary": "../../../build/cluster/stream_producer.bin",
+      "fifo_connections": {
+        "tx": [
+          {
+            "channel": 1,
+            "target_core": 2,
+            "target_channel": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": 1,
+      "name": "idle",
+      "binary": "../../../build/cluster/ring_idle.bin"
+    },
+    {
+      "id": 2,
+      "name": "consumer",
+      "binary": "../../../build/cluster/stream_consumer.bin"
+    }
+  ]
+}
