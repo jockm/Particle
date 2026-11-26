@@ -1,7 +1,7 @@
 ; ==============================================================================
 ; File: firmware/parcore/conductor/conductor.asm
 ; Architecture: Parcore System Lifecycle & Firmware Boot Supervisor
-; Target: Particle Conductor Core (Minimal Config: No Mul/Div/FIFO, 2 KB TCM)
+; Target: Particle Conductor Core (Minimal Config: No Mul/Div/FIFO, 4 KB TCM)
 ; ==============================================================================
 ; This core is built without the shadow bank (ParcoreConfig)
 .define NO_SHADOW_BANK 1
@@ -31,6 +31,8 @@
 .define BUTTONS_OFFSET      0x24
 .define CORE_STATE_OFFSET   0x28    ; CORE_STATE (read): 2 bits per core, 0 running,
                                     ; 1 in a WAIT, 2 halted, 3 held in reset
+.define CYCLES_OFFSET       0x2C    ; CYCLES (read): cycles since reset
+.define CORE_PC_OFFSET      0x30    ; CORE_PC (read): core n's PC at 0x30 + 4n
 .define STATUS_GUEST_LEDS   0x0100
 
 ; ------------------------------------------------------------------------------
@@ -80,7 +82,7 @@
 ;   R11 = Current entry in the section table copy
 ;   R12 = Offset in the target TCMs of the next payload word
 ;   R13 = Payload words left in this section
-;   R15 = Stack Pointer (0x0000_0800 = top of 2 KB Conductor TCM)
+;   R15 = Stack Pointer (0x0000_1000 = top of 4 KB Conductor TCM)
 ; ------------------------------------------------------------------------------
 
 ; CRC-32, four bits at a time: R9 = (R9 >> 4) ^ table[R9 & 15]
@@ -123,8 +125,8 @@
 
     VECTOR_TABLE _reset_vector
 _reset_vector:
-    ; Initialize stack pointer to top of 2 KB Conductor local TCM
-    LDI     SP, 0x0800
+    ; Initialize stack pointer to top of 4 KB Conductor local TCM
+    LDI     SP, 0x1000
 
     ; Load persistent MMIO base pointers into callee-saved registers
     LDI     R5, 0xF000

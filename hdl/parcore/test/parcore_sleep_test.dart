@@ -43,6 +43,20 @@ _main:
     AND     R4, 3
     SUB     R4, 1
     BBRA.NZ R4, ._wait_seen     ; until core 0 is in its WAIT
+    ; CORE_PC: core 0 is at its WAIT (0x500); CYCLES goes on
+    LD      R13, R12
+    ADD     R13, 8              ; CORE_PC of core 0 (0xF000_0030)
+    LD32    R4, (R13)
+    LDI     R7, 0x500
+    SUB     R4, R7
+    JUMP.NZ R4, _bad
+    LD      R13, R12
+    ADD     R13, 4              ; CYCLES (0xF000_002C)
+    LD32    R4, (R13)
+    NOP
+    LD32    R7, (R13)
+    SLT     R4, R7              ; 1 if it went on
+    JUMP.Z  R4, _bad
     ST32    (R11), R3           ; LEDs: CORE_STATE (core 0 waiting)
     LD      R5, 0               ; MBOX: core 0, vector 1
     LD      R14, 1
@@ -58,6 +72,10 @@ _main:
     BBRA.NZ R4, ._halt_seen     ; until core 0 has halted
     ST32    (R11), R3           ; LEDs: CORE_STATE (core 0 halted)
 _done:
+    BBRA    _done
+_bad:
+    LD      R4, 0
+    ST32    (R11), R4           ; LEDs: 0, a check failed
     BBRA    _done
 ''';
 
@@ -90,6 +108,8 @@ void main() {
     final clk = SimpleClockGenerator(10);
     final reset = Logic(name: 'reset');
     final uartRx = Logic(name: 'uart_rx');
+    // The conductor has no 2-word branches: its program is assembled
+    // without them
     final top = ParcoreTop(
       clk: clk.clk,
       reset: reset,

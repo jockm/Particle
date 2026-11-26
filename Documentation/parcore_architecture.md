@@ -23,7 +23,7 @@ This document describes the design as it is in `hdl/parcore` and `firmware/parco
 
 | Stage | Module instance | Firmware | TCM | Multiplier / divider |
 |---|---|---|---|---|
-| Conductor | `parcore_conductor` | `firmware/parcore/conductor/conductor.asm` | 2 KiB | no / no |
+| Conductor | `parcore_conductor` | `firmware/parcore/conductor/conductor.asm` | 4 KiB | no / no |
 | Core 0, IF | `core0_if` | `firmware/parcore/riscv/core0_if.asm` | 16 KiB | no / no |
 | Core 1, ID | `core1_id` | `firmware/parcore/riscv/core1_id.asm` | 4 KiB | no / no |
 | Core 2, EX | `core2_ex` | `firmware/parcore/riscv/core2_ex.asm` | 4 KiB | yes / configured, see below |
@@ -41,7 +41,7 @@ Each core leaves out what its firmware doesn't use (`CpuConfig`; a left-out inst
 | Core 2 | no | no | no | no | yes | yes | yes |
 | Core 3 | no | yes | no | no | no | yes | yes |
 
-The stage cores' firmware doesn't use `WAIT` or `HALT` yet; they are built in so that `CORE_STATE` means something and ParticleMan-style firmware can be tried on Parcore. Cores 1–3 don't take `MBOX` traps, so on them a `WAIT` never ends.
+The stage cores' firmware doesn't use `WAIT` or `HALT` yet; they are built in so that `CORE_STATE` means something and ParticleMan-style firmware can be tried on Parcore. Cores 1–3 don't take `MBOX` traps, so on them a `WAIT` never ends. (Kept in, 435.)
 
 The firmware of a core without the 2-word branches is assembled with `-D __NO_LONG_BRANCHES` (the Makefile), so its `JUMP`, `JUMP.cc` and `RCALL` use the forms without them.
 
@@ -173,11 +173,11 @@ Core 0 applies mirrored stores as they arrive, one per pass of its loop, so a st
 
 ## Conductor
 
-The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 2 KiB TCM). Its address space:
+The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 4 KiB TCM, 436). Its address space:
 
 | Address | Use |
 |---|---|
-| `0x0000_0000`–`0x0000_07FF` | Its own TCM |
+| `0x0000_0000`–`0x0000_0FFF` | Its own TCM |
 | `0x1000_0000 + (core << 16)` | A window into stage core `core`'s TCM (writes go to that TCM's port B while the core is held in reset) |
 | `0xF000_0000` | `RST_CTRL` |
 | `0xF000_0010` | `SPI_CTRL`: bit 0 CS_N, bit 1 START, bit 2 BUSY (read only) |
@@ -186,6 +186,8 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 2 KiB
 | `0xF000_0020` | `STATUS`: bits 7:0 the board LEDs while the conductor has them; bit 8 gives them to the guest (core 3's I/O, see [Guest I/O](#guest-io)) |
 | `0xF000_0024` | `BUTTONS` (read only): 1 = pressed; bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT, 5 RIGHT |
 | `0xF000_0028` | `CORE_STATE` (read only): 2 bits per stage core, core *n* at bits 2*n*+1:2*n*: 0 running, 1 asleep in a `WAIT`, 2 halted (`HALT`), 3 held in reset (`RST_CTRL`) |
+| `0xF000_002C` | `CYCLES` (read only): clock cycles since reset (wraps after 2³² cycles, about 172 s at 25 MHz) |
+| `0xF000_0030 + 4n` | `CORE_PC` (read only): the PC of the instruction in stage core *n*'s E stage |
 | `0xFFFF_FF0C` | `NI_CONFIG` (write only, with `ParcoreConfig.writableNocTables` on): a store sends a `CONFIG` packet setting one entry of a core's table, or of every core's (see [MBOX design](mbox_design.md), part 6). Parcore's firmware doesn't use it, and the switch is off by default (418) |
 
 The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START) while idle starts an 8-bit transfer, most significant bit first. SCK changes once every `SPI_DIV + 1` cycles. MISO is sampled on each rising SCK edge and shifted in on the next falling edge, which is also when the next MOSI bit appears, so MOSI never changes while SCK is high.
@@ -201,7 +203,7 @@ Reads of `RST_CTRL`, the SPI registers, `STATUS`, `BUTTONS` and the conductor's 
 
 At reset `RST_CTRL` is `0x3F` (every core held) when a conductor binary is given, and `0` otherwise, so without a conductor the stage cores start immediately from their preloaded TCMs. Likewise `STATUS` starts at `0` (LEDs off, the conductor's) with a conductor, and at `0x100` (the guest's) without one.
 
-The conductor's firmware is `firmware/parcore/conductor/conductor.asm`, written by hand: its job is small and sits right on the SPI timing, and it has to fit in 2 KiB without a multiplier.
+The conductor's firmware is `firmware/parcore/conductor/conductor.asm`, written by hand: its job is small and sits right on the SPI timing, and it had to fit in 2 KiB (4 KiB since 436, for the watchdog and the `pmon` console) without a multiplier.
 
 ### Boot Image
 

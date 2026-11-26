@@ -127,7 +127,7 @@ class ParcoreTop extends Module {
     final condMemWEn   = conductor.memPortBWEn;
     final condMemREn   = conductor.memPortBREn;
 
-    // Conductor local 2 KB TCM
+    // Conductor local TCM (4 KB)
     final condAddrBits = (log(ParcoreConfig.conductorConfig.tcmSizeBytes) / ln2).round();
     final condLocalSelect = condMemAddr.slice(31, 28).eq(Const(0x0, width: 4));
     final condTcm = ParcoreTcm(
@@ -204,6 +204,22 @@ class ParcoreTop extends Module {
             mux(coreHalted[n], Const(2, width: 2),
                 mux(coreWaiting[n], Const(1, width: 2), Const(0, width: 2)))),
     ].rswizzle();
+    // CYCLES (0xF000_002C, read only): cycles since reset, for the
+    // watchdog's and the console's timing. CORE_PC (0xF000_0030 + 4n, read
+    // only): the PC of the instruction in core n's E stage.
+    final isCyclesSel = condMemAddr.eq(Const(0xF000002C, width: 32));
+    final isCorePcSel =
+        condMemAddr.getRange(4, 32).eq(Const(0xF000003, width: 28));
+    final cycles = Logic(name: 'cond_cycles', width: 32);
+    Sequential(clk, reset: reset, resetValues: {cycles: Const(0, width: 32)},
+        [cycles < cycles + 1]);
+    final corePc = [
+      for (var n = 0; n < 4; n++) Logic(name: 'core${n}_pc', width: 32)
+    ];
+    final corePcRead = mux(
+        condMemAddr[3],
+        mux(condMemAddr[2], corePc[3], corePc[2]),
+        mux(condMemAddr[2], corePc[1], corePc[0]));
     Sequential(clk, reset: reset, resetValues: {
       regStatus: Const(conductorBinary != null ? 0 : 0x100, width: 9),
     }, [
@@ -224,13 +240,16 @@ class ParcoreTop extends Module {
     Sequential(clk, [
       readSelRst < isRstCtrlSel,
       readSelSpi < isSpiSel,
-      readSelIo < isStatusSel | isButtonsSel | isCoreStateSel,
+      readSelIo <
+          isStatusSel | isButtonsSel | isCoreStateSel | isCyclesSel | isCorePcSel,
       readRstVal < regRstCtrl,
       readSpiVal < spiCtrl.rData,
       readIoVal <
           mux(isStatusSel, regStatus.zeroExtend(32),
               mux(isCoreStateSel, coreState.zeroExtend(32),
-                  buttonsSync.zeroExtend(32))),
+                  mux(isCyclesSel, cycles,
+                      mux(isCorePcSel, corePcRead,
+                          buttonsSync.zeroExtend(32))))),
     ]);
     condMemBRData <= mux(
       readSelRst,
@@ -521,6 +540,7 @@ class ParcoreTop extends Module {
       final n = [c0Mbox, c1Mbox, c2Mbox, c3Mbox].indexOf(m);
       coreWaiting[n] <= core.waiting;
       coreHalted[n] <= core.halted;
+      corePc[n] <= core.pcOut;
       m.$1 <= core.mboxStrobeOut;
       m.$2 <= core.mboxVectorOut;
       m.$3 <= core.mboxDataOut;

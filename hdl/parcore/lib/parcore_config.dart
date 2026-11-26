@@ -13,10 +13,11 @@ class ParcoreConfig {
   /// about 220 LUT4s and 150 flip-flops fewer. ParticleMan and other builds can turn it on.
   static const bool writableNocTables = false;
 
-  /// Conductor Supervisor Core (Minimal footprint, 2 KB TCM, no FIFOs/DSP)
+  /// Conductor Supervisor Core (minimal: 4 KB TCM, no FIFOs/DSP). 4 KB
+  /// (436) leaves room for the watchdog and the pmon console.
   static const CpuConfig conductorConfig = CpuConfig(
     coreId: 7,
-    tcmSizeBytes: 2 * 1024,
+    tcmSizeBytes: 4 * 1024,
     fifoChannels: 0,
     fifoDepth: 0,
     enableMultiplier: false,

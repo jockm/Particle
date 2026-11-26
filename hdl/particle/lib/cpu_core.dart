@@ -58,6 +58,9 @@ class ParticleCpuCore extends Module {
   Logic get waiting => output('waiting');
   Logic get halted => output('halted');
 
+  /// The PC of the instruction in E (for the conductor's CORE_PC).
+  Logic get pcOut => output('pc');
+
   // Streaming FIFO Subsystem Interface
   Logic get fifoChanSelect => output('fifoChanSelect');
   Logic get fifoPushData => output('fifoPushData');
@@ -141,6 +144,7 @@ class ParticleCpuCore extends Module {
     addOutput('mboxReady');
     addOutput('waiting');
     addOutput('halted');
+    addOutput('pc', width: ParticleWidths.word);
 
     addOutput('fifoChanSelect', width: 2);
     addOutput('fifoPushData', width: ParticleWidths.word);
@@ -213,6 +217,7 @@ class ParticleCpuCore extends Module {
     final lIsMul = Logic(name: 'lIsMul'); // W writes a MUL's result
 
     pcReg = ePc;
+    pcOut <= ePc;
     execValid = eValid;
 
     // -------------------------------------------------------------------------

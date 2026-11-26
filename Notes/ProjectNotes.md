@@ -1,12 +1,5 @@
 # TODO
 
-- Particle
-    - Add R14 shifts to allow for IMM5 shifts?
-    - Fix errors in monitor.act
-    - Monitor(s) needs way to load files
-    - Simulator needs way to load files
-    - We need a decompiler
-
 - Parcore
     - RISC-V Extensions to Add:
         - 32 Bit
@@ -19,9 +12,6 @@
             - Cryptography (Zk.../Zv...)
             - Privileged, Security & Debug (S...)
     - System Bringup (aka the conductor)
-        - MR4/Particle/PicoRISCV
-        - Loads firmware into cores
-        - RTOS?
         - Signing/Security?
 
     - Proposals:
@@ -54,18 +44,6 @@
                 13. Parcore Architecture Proposal 12: Particle 64-Bit Architecture Extension
             - Addenda
                 1. Addendum A: CPU Hinting (`HINT` / `0xFE`)
-
-# Things to remember:
-
-# Vector table & Startup
-With the exception of Vector 0, which sets up the stack and heap etc, every vector only needs to be 9 instructions long, but if we have a specialized verision of LOAD32 it could be 8:
-
-```
-FAST_ENTER_TRAP                                     ; (1) Save all the registers
-LOAD_R14_32      _vector_n_handler                  ; (5) Load the vector handler address (this could be 3 if load 16)
-JMP              R1, R14                            ; (1) Jump (and link) to the vector handler
-FAST_EXIT_TRAP                                      ; (2) Restore registers and return from trap
-```
 
 # Thoughts
 
