@@ -22,7 +22,7 @@ This revision of the specification is aligned with the reference simulator `psim
     - `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
     - `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
 - **Reset**: All registers and shadow registers are zero after reset. (The hardware takes 16 cycles after reset to clear its register file before fetching from the reset vector.)
-- **Optional features**: A core may be built without the pointer modes (load and store modes that change the pointer register), without byte and halfword loads and stores, or without the shadow bank. The instructions of a feature a core leaves out raise Vector 15, as an undefined opcode does. A core may also be built without the 2-word PC-relative instructions (§4.9: `BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, and `LEA`), or not to take `MBOX` traps. (`CpuConfig` in the HDL; psim's `--no-pointer-modes`, `--no-subword`, `--no-shadow-bank`, `--no-long-branches` and `--no-mbox-receive`; pasm's `--no-long-branches` assembles for a core without the 2-word instructions.)
+- **Optional features**: A core may be built without the pointer modes (load and store modes that change the pointer register), without byte and halfword loads and stores, or without the shadow bank. The instructions of a feature a core leaves out raise Vector 15, as an undefined opcode does. A core may also be built without the 2-word PC-relative instructions (§4.9: `BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, and `LEA`), without the immediate `BEXTR` (§4.6, `0x8D`), or not to take `MBOX` traps. (`CpuConfig` in the HDL; psim's `--no-pointer-modes`, `--no-subword`, `--no-shadow-bank`, `--no-long-branches`, `--no-imm-bextr` and `--no-mbox-receive`; pasm's `--no-long-branches` assembles for a core without the 2-word instructions.)
 - **Flagless Design**: No traditional ALU condition code flags. Branching evaluates registers directly (`FBRA.Z`, `FBRA.NZ`, `FBRA.P`, `BBRA.Z`, etc.), while relational evaluations yield integer boolean results (`0` or `1`) directly in destination registers.
 - **Immediates**: `Imm4` and `Imm8` are zero-extended unless an instruction is marked **(signed imm)**, in which case `Imm4` is sign-extended to $-8 \ldots 7$ and `Imm8` to $-128 \ldots 127$. The `-Imm4` / `-Imm8` forms encode a magnitude ($0 \ldots 15$ / $0 \ldots 255$) and use its negation.
 - **Alignment**: Instruction fetch requires an even PC. 16-bit memory accesses require 2-byte alignment and 32-bit accesses require 4-byte alignment; a misaligned access or fetch raises Vector 14. Byte accesses have no alignment requirement.
@@ -61,7 +61,7 @@ A slot holds 8 instructions, which is enough to jump anywhere: `lib/vectors.inc`
 ---
 
 ## 4. Complete Instruction Set Architecture (ISA) Map
-Standard instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. Imm8 forms use `[7:0]` for the immediate and operate implicitly on `R14`. `LDI` (`0x07`), `LDIS` (`0x08`), `LEA` (`0x09`) and the long branches (`0xBC`–`0xBF`, `0xCC`–`0xCF`) are 32 bits wide (2 little-endian 16-bit words): Word 0 encodes `[15:8] Opcode`, `[7:4] Rr` (`0000` for `LDI`, `LDIS`, `LEA`, `BRA` and `RJUMP disp16`), `[3:0] Rl` (`0000` where unused), and Word 1 (`PC + 2`) holds the 16-bit immediate `Imm16` or signed displacement `disp16`. In `pasm`, stores are assembled using load mnemonics with a memory destination (`LD32 (Rr), Rl`) or `ST*` mnemonics.
+Standard instructions are 16 bits wide: `[15:8] Opcode`, `[7:4] Rr`, `[3:0] Rl / Imm4`. Imm8 forms use `[7:0]` for the immediate and operate implicitly on `R14`. `LDI` (`0x07`), `LDIS` (`0x08`), `LEA` (`0x09`), the immediate `BEXTR` (`0x8D`) and the long branches (`0xBC`–`0xBF`, `0xCC`–`0xCF`) are 32 bits wide (2 little-endian 16-bit words): Word 0 encodes `[15:8] Opcode`, `[7:4] Rr` (`0000` for `LDI`, `LDIS`, `LEA`, `BRA` and `RJUMP disp16`), `[3:0] Rl` (`0000` where unused), and Word 1 (`PC + 2`) holds the 16-bit immediate `Imm16` or signed displacement `disp16`. In `pasm`, stores are assembled using load mnemonics with a memory destination (`LD32 (Rr), Rl`) or `ST*` mnemonics.
 
 ### 4.1 Loads & Immediates (0x00 - 0x09)
 - `0x00`: `LD Rr, Rl` — $Rr \leftarrow Rl$ (`LD R0, R0` = `0x0000` is the canonical NOP)
@@ -180,9 +180,9 @@ Register-update ordering: the address register is updated before the data regist
 - `0x7E`: `SMULH Rr, Imm4` — **(signed imm)** Signed high multiply by $\text{sext}(Imm4)$
 - `0x7F`: `MULHSU Rr, Imm4` — Signed $Rr$ $\times$ unsigned $Imm4$ high multiply
 
-### 4.6 Bit Manipulation, System Operations & Endian Swapping (0x80 - 0x8C)
+### 4.6 Bit Manipulation, System Operations & Endian Swapping (0x80 - 0x8D)
 - `0x80`: `BEXTR Rr, Rl` — Bit-field extract: $pos = Rl[4:0]$, $len = Rl[9:5]$; $Rr \leftarrow (Rr \gg pos) \ \& \ ((1 \ll len) - 1)$
-- `0x81`: `JTBL Rr` — Jump table dispatch: $PC \leftarrow (PC + 2) + (Rr \times 2)$ (`Rl` field ignored)
+- `0x81`: `JTBL Rr` — Jump table dispatch: $PC \leftarrow (PC + 2) + (Rr \times size)$, with the table's entries $size = 2 \ll Rl[1:0]$ bytes: 2 (a short branch each), 4 (a 2-word branch to anywhere), 8 or 16 (a handler inline). The `Rl` field is the size code, not a register; `Rl[3:2]` are 0 (pasm: `JTBL Rr` or `JTBL Rr, 4`/`8`/`16`)
 - `0x82`: `CLZ Rr, Rl` — Count leading zeros: $Rr \leftarrow \text{clz}(Rl)$; $\text{clz}(0) = 32$
 - `0x83`: `BSET Rr, Rl` — Bit set: $Rr \leftarrow Rr \mid (1 \ll (Rl \ \& \ 0x1F))$
 - `0x84`: `BSET Rr, Imm4` — Bit set by immediate: $Rr \leftarrow Rr \mid (1 \ll Imm4)$
@@ -194,6 +194,7 @@ Register-update ordering: the address register is updated before the data regist
 - `0x8A`: `BGET Rr, Imm4` — Bit get by immediate: $Rr \leftarrow (Rr \gg Imm4) \ \& \ 1$
 - `0x8B`: `TAS (Rr), Rl` — Atomic 32-bit swap: $tmp \leftarrow \text{Mem32}[Rr];\ \text{Mem32}[Rr] \leftarrow Rl;\ Rl \leftarrow tmp$ (word-aligned)
 - `0x8C`: `REV32 Rr` — Endianness byte-swap: $Rr \leftarrow \{Rr[7:0], Rr[15:8], Rr[23:16], Rr[31:24]\}$
+- `0x8D`: `BEXTR Rr, Rl, pos, len` / `SBEXTR Rr, Rl, pos, len` — 32-bit (2-word) bit-field extract with the field in the second word: $pos = Imm16[4:0]$, $len = Imm16[9:5]$; $Rr \leftarrow (Rl \gg pos) \ \& \ ((1 \ll len) - 1)$, and when $Imm16[15]$ is 1 (`SBEXTR`) sign-extended from bit $len - 1$ (a field of length 0 is 0). `Rl` is unchanged; $PC \leftarrow PC + 4$. A RISC-V I-type immediate is `SBEXTR Rr, Rl, 20, 12`
 
 ### 4.7 Relational Comparisons (0x90 - 0x9D)
 - `0x90`: `SLT Rr, Rl` — Unsigned less than: $Rr \leftarrow (Rr_{\text{unsigned}} < Rl_{\text{unsigned}}) \ ? \ 1 : 0$
@@ -314,6 +315,7 @@ Merged from the retired `particle_processor_architecture_specification.md`, and 
 
 Added the 2-word PC-relative instructions (item 13 of Road to GHz, 420–433):
 - §4.1: `LEA` (`0x09`). §4.9: the long branches `0xBC`–`0xBF` and `0xCC`–`0xCF`. §2: they can be left out of a core.
+- §4.6: the immediate `BEXTR`/`SBEXTR` (`0x8D`), which can be left out too; `JTBL` takes its entry size from `Rl[1:0]`.
 
 Removed `RBASE` (register windowing):
 - §2: 16 registers and 16 shadow registers; `XCHGALL` swaps `R1`–`R15`.

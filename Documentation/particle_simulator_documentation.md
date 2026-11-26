@@ -28,6 +28,7 @@ build/tools/psim -C <cluster.json> [options]
 | `--no-subword` | — | No byte or halfword loads and stores (vector 15). |
 | `--no-shadow-bank` | — | No shadow bank: `XCHG`, `XCHGALL` and `XCHGMOST` raise vector 15. |
 | `--no-long-branches` | — | No 2-word PC-relative instructions (`BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, `LEA`): they raise vector 15. |
+| `--no-imm-bextr` | — | No immediate `BEXTR`/`SBEXTR` (`0x8D`): it raises vector 15. |
 | `--no-mbox-receive` | — | The core ignores `MBOX` traps from other cores. In a cluster, set these per core in the cluster file instead (below). |
 
 ### Exit codes
@@ -109,7 +110,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 | `initial_registers` | none | Starting values: `R0`–`R15` or `SP`. |
 | `fifo_connections.tx` | none | Routes: local `channel` (0–3) to `target_channel` (0–3, default the same) on `target_core`. |
 | `mbox_target` | the other core of a pair | The core this core's `MBOX` signals. |
-| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive`, `long_branches` | `true` | The core's optional features, as the options above: `false` leaves one out. |
+| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive`, `long_branches`, `imm_bextr` | `true` | The core's optional features, as the options above: `false` leaves one out. |
 
 Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields are ignored.
 

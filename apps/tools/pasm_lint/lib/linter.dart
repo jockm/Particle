@@ -116,7 +116,7 @@ const Set<String> writesFirstOperand = {
   ...imm4Shifts, ...imm4ArithLogic,
   "REV32", "NEG", "NOT", "NEZ", "CLZ", "SEXT8", "SEXT16", "BEXTR",
   "LDI", "LDIS", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R", "XCHG",
-  "LEA",
+  "LEA", "SBEXTR",
 };
 
 /// Macros that leave R14 holding something else (they build values in it).
@@ -161,7 +161,7 @@ const Set<String> allValidMnemonics = {
   "MULL", "MULH", "SMULH", "MULHU", "MULHSU",
 
   // Bit Manipulation & System Registers
-  "REV32", "NEG", "NOT", "NEZ", "CLZ", "JTBL", "BEXTR",
+  "REV32", "NEG", "NOT", "NEZ", "CLZ", "JTBL", "BEXTR", "SBEXTR",
   "BSET", "BCLR", "BINV", "BGET",
   "SEXT8", "SEXT16", "XCHG", "XCHGALL", "XCHGMOST"
 };
@@ -186,12 +186,12 @@ void _recordMacroParams(String line) {
 /// form lists its operands: `R` a register, `R14` register R14 only, `M` a
 /// memory operand such as `(R1)` or `(R1++)`, `(M)` the plain `(Rr)` only,
 /// and `V` a value (a number, label or expression), with `V:lo:hi` giving
-/// the range of a plain number. Kept separate from the assembler's own
+/// the range of a plain number and `V:a|b|c` the numbers it may be. Kept separate from the assembler's own
 /// checks; a test checks the two agree.
 const Map<String, List<String>> instructionForms = {
   "NOP": [""], "XCHGALL": [""], "XCHGMOST": [""],
   "NEG": ["R"], "NOT": ["R"], "NEZ": ["R"], "SEXT8": ["R"], "SEXT16": ["R"],
-  "REV32": ["R"], "XCHG": ["R"], "JTBL": ["R"], "BRANCH": ["R"],
+  "REV32": ["R"], "XCHG": ["R"], "JTBL": ["R", "R,V:2|4|8|16"], "BRANCH": ["R"],
   "TRAP": ["R", "V:0:15"],
   "FBRA": ["V"], "BBRA": ["V"], "JUMP": ["V"],
   "FBRA.Z": ["R,R", "R,V"], "FBRA.N": ["R,R", "R,V"], "FBRA.P": ["R,R", "R,V"], "FBRA.NZ": ["R,V"],
@@ -210,7 +210,7 @@ const Map<String, List<String>> instructionForms = {
   "ASHIFTR": ["R,R", "R,V:0:15"], "ROTL": ["R,R", "R,V:0:15"], "ROTR": ["R,R", "R,V:0:15"],
   "MULL": ["R,R", "R,V:0:15"], "MULH": ["R,R", "R,V:0:15"],
   "SMULH": ["R,R", "R,V:-8:7"], "MULHSU": ["R,R", "R,V:0:15"],
-  "BEXTR": ["R,R"], "CLZ": ["R,R"],
+  "BEXTR": ["R,R", "R,R,V:0:31,V:0:31"], "SBEXTR": ["R,R,V:0:31,V:0:31"], "CLZ": ["R,R"],
   "BSET": ["R,R", "R,V:0:15"], "BCLR": ["R,R", "R,V:0:15"],
   "BINV": ["R,R", "R,V:0:15"], "BGET": ["R,R", "R,V:0:15"],
   "TAS": ["(M),R"],
@@ -305,9 +305,16 @@ void checkOperands(String mnem, List<String> ops, int lno, List<LintMessage> err
   final form = fitting.first;
   for (var i = 0; i < ops.length; i++) {
     final parts = form[i].split(":");
-    if (parts.length != 3) continue;
     final n = parseNumeric(ops[i]);
     if (n == null) continue;
+    if (parts.length == 2) {
+      final allowed = parts[1].split("|").map(int.parse).toList();
+      if (!allowed.contains(n)) {
+        errors.add((lno, "range", "Immediate value $n for $mnem must be ${allowed.join(", ")}."));
+      }
+      continue;
+    }
+    if (parts.length != 3) continue;
     final lo = int.parse(parts[1]), hi = int.parse(parts[2]);
     if (n < lo || n > hi) {
       errors.add((lno, "range", "Immediate value $n out of range ($lo..$hi) for $mnem${form[0] == "R14" ? " R14" : ""}."));
@@ -1037,7 +1044,8 @@ bool _isMem(String op) => op.startsWith("(") && op.endsWith(")");
     }
     if (k == 0) {
       // A destination that is only written
-      final pureWrite = const {"LDI", "LDIS", "LEA", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||
+      final pureWrite = const {"LDI", "LDIS", "LEA", "SBEXTR", "LOAD16", "LOAD24", "LOAD32", "POP32", "FIFO.R"}.contains(mnem) ||
+          (mnem == "BEXTR" && ops.length == 4) ||
           (mnem == "LD" && ops.length == 2) ||
           (const {"LD8", "LD16", "LD32"}.contains(mnem) && ops.length == 2 && _isMem(ops[1]));
       if (pureWrite) {

@@ -174,9 +174,7 @@ _id_main_loop:
     BBRA.NZ R14, _id_main_loop
     FIFO.TRYR R4, R0            ; a control word?
     BBRA.Z  R14, _id_main_loop
-    LD      R9, R4
-    LD      R14, 20 + 4 * 32
-    BEXTR   R9, R14             ; the class
+    BEXTR   R9, R4, 20, 4       ; the class
     JTBL    R9
     FBRA    _c_rs1_imm          ; CLASS_RS1_IMM
     FBRA    _c_rs1_rs2          ; CLASS_RS1_RS2

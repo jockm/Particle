@@ -57,7 +57,9 @@ void main() {
         if (!asmOk && lintOk) {
           final code = RegExp(r'\[([a-z0-9-]+)\]$').firstMatch(asmWhy)?.group(1);
           final usesLabel = o.contains('label');
-          if (addressCodes.contains(code) || (code == 'range' && usesLabel)) continue;
+          // The linter checks plain numbers only, not expressions
+          final usesExpression = o.contains('+');
+          if (addressCodes.contains(code) || (code == 'range' && (usesLabel || usesExpression))) continue;
           if (code == 'range' && (m.startsWith('FBRA') || m.startsWith('BBRA') || m == 'JUMP')) continue;
         }
         compared++;

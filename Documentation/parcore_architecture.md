@@ -33,13 +33,13 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 
 Each core leaves out what its firmware doesn't use (`CpuConfig`; a left-out instruction raises vector 15):
 
-| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank | 2-word branches |
-|---|---|---|---|---|---|
-| Conductor | yes | no | no | no | no |
-| Core 0 | no | yes | yes | no | yes |
-| Core 1 | no | yes | no | no | no |
-| Core 2 | no | no | no | no | yes |
-| Core 3 | no | yes | no | no | no |
+| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank | 2-word branches | Immediate `BEXTR` |
+|---|---|---|---|---|---|---|
+| Conductor | yes | no | no | no | no | no |
+| Core 0 | no | yes | yes | no | yes | yes |
+| Core 1 | no | yes | no | no | no | yes |
+| Core 2 | no | no | no | no | yes | yes |
+| Core 3 | no | yes | no | no | no | yes |
 
 The firmware of a core without the 2-word branches is assembled with `-D __NO_LONG_BRANCHES` (the Makefile), so its `JUMP`, `JUMP.cc` and `RCALL` use the forms without them.
 

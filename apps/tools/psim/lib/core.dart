@@ -142,6 +142,9 @@ class ParticleCore {
   /// BEQ, BNE, LEA). When false they are illegal.
   bool longBranches = true;
 
+  /// The immediate BEXTR and SBEXTR (0x8D). When false they are illegal.
+  bool immBextr = true;
+
   /// The opcodes of [longBranches].
   static const longBranchOps = {
     0xBC, 0xBD, 0xBE, 0xBF, 0xCC, 0xCD, 0xCE, 0xCF, 0x09,
@@ -162,6 +165,7 @@ class ParticleCore {
     if (!subword && isMem && group != 3) return true;
     if (!shadowBank && opcode >= 0xD0 && opcode <= 0xD2) return true;
     if (!longBranches && longBranchOps.contains(opcode)) return true;
+    if (!immBextr && opcode == 0x8D) return true;
     return false;
   }
 
@@ -726,7 +730,21 @@ class ParticleCore {
       final mask = (length < 32) ? ((1 << length) - 1) : mask32;
       r[rr] = (r[rr] >> pos) & mask;
     } else if (opcode == 0x81) {
-      nextPc = (pc + 2 + (r[rr] * 2)) & mask32;
+      // Entries of 2 << Rl[1:0] bytes
+      nextPc = (pc + 2 + (r[rr] * (2 << (rl & 3)))) & mask32;
+    } else if (opcode == 0x8D) {
+      // BEXTR Rr, Rl, pos, len (SBEXTR with bit 15): from Rl, in 2 words
+      final imm = read16((pc + 2) & mask32);
+      if (!_trapTaken) {
+        final pos = imm & 0x1F;
+        final length = (imm >> 5) & 0x1F;
+        var v = (r[rl] >> pos) & ((1 << length) - 1);
+        if ((imm & 0x8000) != 0 && length > 0 && ((v >> (length - 1)) & 1) != 0) {
+          v |= mask32 & ~((1 << length) - 1);
+        }
+        r[rr] = v;
+        nextPc = (pc + 4) & mask32;
+      }
     } else if (opcode == 0x82) {
       final val = r[rl];
       var cnt = 0;

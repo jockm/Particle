@@ -55,6 +55,11 @@ class ParticleAssembler {
     final tokens = line.split(RegExp(r'\s+'));
     final mnem = tokens[0].toUpperCase();
     if (twoWordMnemonics.contains(mnem)) return 4;
+    // BEXTR Rr, Rl is 1 word; BEXTR Rr, Rl, pos, len and SBEXTR are 2
+    if (mnem == 'SBEXTR') return 4;
+    if (mnem == 'BEXTR') {
+      return line.substring(tokens[0].length).split(',').length > 2 ? 4 : 2;
+    }
     if (mnem == 'RJUMP') {
       // RJUMP Rr, Rl is 1 word; RJUMP label, Rl is 2
       final first = line.substring(tokens[0].length).split(',')[0].trim();
@@ -626,7 +631,7 @@ class ParticleAssembler {
     'NOP': 0, 'XCHGALL': 0, 'XCHGMOST': 0,
     'RETI': 0, 'EI': 0, 'DI': 0,
     'NEG': 1, 'NOT': 1, 'NEZ': 1, 'SEXT8': 1, 'SEXT16': 1, 'REV32': 1,
-    'XCHG': 1, 'JTBL': 1, 'BRANCH': 1, 'TRAP': 1,
+    'XCHG': 1, 'BRANCH': 1, 'TRAP': 1,
     'FBRA': 1, 'BBRA': 1,
     'LD': 2, 'PUSH4': 2, 'PUSH8': 2,
     'LD8': 2, 'LD16': 2, 'LD32': 2, 'ST8': 2, 'ST16': 2, 'ST32': 2,
@@ -684,7 +689,38 @@ class ParticleAssembler {
         (mnem == 'RJUMP' && _instBytes(line) == 4)) {
       return _encodeLong(line, mnem, curPc, fname, lno);
     }
+    if (mnem == 'SBEXTR' || (mnem == 'BEXTR' && _instBytes(line) == 4)) {
+      return _encodeBextrImm(line, mnem, fname, lno);
+    }
     return [encodeInstruction(line, curPc, fname, lno)];
+  }
+
+  /// Encodes `BEXTR Rr, Rl, pos, len` and `SBEXTR Rr, Rl, pos, len`
+  /// (0x8D): Rr = the len-bit field of Rl at bit pos (sign-extended for
+  /// SBEXTR); the second word holds pos (bits 4:0), len (9:5) and the sign
+  /// (15).
+  List<int> _encodeBextrImm(String line, String mnem, String fname, int lno) {
+    final opStr = line.substring(line.split(RegExp(r'\s+'))[0].length).trim();
+    final ops = opStr.isEmpty ? <String>[] : opStr.split(',').map((o) => o.trim()).toList();
+    if (ops.length != 4 || ops.any((o) => o.isEmpty)) {
+      throw AssemblerError('$mnem expects 4 operands: $mnem Rr, Rl, <pos>, <len>', fname, lno);
+    }
+    final rr = parseReg(ops[0], fname, lno);
+    final rl = parseReg(ops[1], fname, lno);
+    int value(int i, int hi, String what) {
+      if (regMap.containsKey(ops[i].toLowerCase())) {
+        throw AssemblerError("$mnem's $what is a number, not a register", fname, lno, 'register');
+      }
+      final v = prep.parseExpr(ops[i], symbols);
+      if (v < 0 || v > hi) {
+        throw AssemblerError('$mnem $what $v out of range (0..$hi)', fname, lno, 'range');
+      }
+      return v;
+    }
+    final pos = value(2, 31, 'position');
+    final len = value(3, 31, 'length');
+    final sign = mnem == 'SBEXTR' ? 0x8000 : 0;
+    return [(0x8D << 8) | (rr << 4) | rl, sign | (len << 5) | pos];
   }
 
   /// Encodes the 2-word PC-relative instructions: BRA, BRA.Z/NZ/N/P,
@@ -802,10 +838,20 @@ class ParticleAssembler {
       return (0xA4 << 8) | (rr << 4);
     }
     if (mnem == 'JTBL') {
-      if (ops.length != 1)
-        throw AssemblerError('JTBL expects 1 operand: JTBL Rr', fname, lno);
+      if (ops.isEmpty || ops.length > 2)
+        throw AssemblerError('JTBL expects 1 or 2 operands: JTBL Rr or JTBL Rr, <entry bytes>', fname, lno);
       final rr = getR(0);
-      return (0x81 << 8) | (rr << 4);
+      // The entry size in bytes (2, 4, 8 or 16) goes in Rl[1:0]
+      var code = 0;
+      if (ops.length == 2) {
+        final size = getV(1);
+        const codes = {2: 0, 4: 1, 8: 2, 16: 3};
+        if (!codes.containsKey(size)) {
+          throw AssemblerError('JTBL entry size $size must be 2, 4, 8 or 16 bytes', fname, lno, 'range');
+        }
+        code = codes[size]!;
+      }
+      return (0x81 << 8) | (rr << 4) | code;
     }
 
     // -------------------------------------------------------------------------

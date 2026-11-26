@@ -295,7 +295,13 @@ class ParticleCpuCore extends Module {
     // ALU
     // -------------------------------------------------------------------------
     final aluOp = Logic(name: 'aluOp', width: 5);
-    final aluOperandA = mux(op(ParticleOpcodes.clz), valB, valA);
+    // CLZ and the immediate BEXTR take their source from Rl
+    final aluOperandA = mux(
+        config.enableImmBextr
+            ? anyOp([ParticleOpcodes.clz, ParticleOpcodes.bextrImm])
+            : op(ParticleOpcodes.clz),
+        valB,
+        valA);
     final aluOperandB = Logic(name: 'aluOperandB', width: 32);
 
     CaseItem alu(int code, int aluCode, [Logic? operandB]) =>
@@ -338,6 +344,15 @@ class ParticleCpuCore extends Module {
         alu(ParticleOpcodes.sext8, AluOps.sext8),
         alu(ParticleOpcodes.sext16, AluOps.sext16),
         alu(ParticleOpcodes.bextr, AluOps.bextr),
+        // The immediate BEXTR: position and length in the second word, whose
+        // bit 15 sign-extends (SBEXTR)
+        if (config.enableImmBextr)
+          CaseItem(Const(ParticleOpcodes.bextrImm, width: 8), [
+            aluOp <
+                mux(eImm16[15], Const(AluOps.sbextr, width: 5),
+                    Const(AluOps.bextr, width: 5)),
+            aluOperandB < eImm16.zeroExtend(32),
+          ]),
         alu(ParticleOpcodes.clz, AluOps.clz),
         alu(ParticleOpcodes.bset, AluOps.bset),
         alu(ParticleOpcodes.bsetImm4, AluOps.bset, imm4Val),
@@ -384,6 +399,7 @@ class ParticleCpuCore extends Module {
       ParticleOpcodes.shiftRImm4, ParticleOpcodes.ashiftRImm4,
       ParticleOpcodes.rotLImm4, ParticleOpcodes.rotRImm4, ParticleOpcodes.sext8,
       ParticleOpcodes.sext16, ParticleOpcodes.bextr, ParticleOpcodes.clz,
+      if (config.enableImmBextr) ParticleOpcodes.bextrImm,
       ParticleOpcodes.bset, ParticleOpcodes.bsetImm4, ParticleOpcodes.bclr,
       ParticleOpcodes.bclrImm4, ParticleOpcodes.binv, ParticleOpcodes.binvImm4,
       ParticleOpcodes.bget, ParticleOpcodes.bgetImm4, ParticleOpcodes.rev32,
@@ -634,7 +650,9 @@ class ParticleCpuCore extends Module {
       brCond < Const(0),
       brAbs < Const(0),
       Case(opcode, [
-        br(ParticleOpcodes.jtbl, valA, carry: true),
+        // JTBL: entries of 2 << Rl[1:0] bytes, so the index in halfwords is
+        // Rr << Rl[1:0]
+        br(ParticleOpcodes.jtbl, valA << rl.getRange(0, 2), carry: true),
         br(ParticleOpcodes.branch, valA),
         CaseItem(Const(ParticleOpcodes.jmp, width: 8),
             [brCond < Const(1), brAbs < Const(1)]),
@@ -707,7 +725,9 @@ class ParticleCpuCore extends Module {
             (config.enableShadowBank ||
                 !ParticleOpcodes.shadowOps.contains(code)) &&
             (config.enableLongBranches ||
-                !ParticleOpcodes.longBranchOps.contains(code)))
+                !ParticleOpcodes.longBranchOps.contains(code)) &&
+            (config.enableImmBextr ||
+                !ParticleOpcodes.immBextrOps.contains(code)))
           code,
     ])).named('validOpcode');
     final illegal = ~validOpcode;
@@ -992,6 +1012,7 @@ class ParticleCpuCore extends Module {
       ParticleOpcodes.ldi,
       ParticleOpcodes.ldis,
       if (config.enableLongBranches) ...ParticleOpcodes.longBranchOps,
+      if (config.enableImmBextr) ...ParticleOpcodes.immBextrOps,
     ]);
     final dImmReady = fValid & fPc.eq(dPc + Const(2, width: 32));
     final eFree = (~eValid | eDone).named('eFree');

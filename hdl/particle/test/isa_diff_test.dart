@@ -123,6 +123,7 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
       : configM.group(1)!.trim().split(RegExp(r'\s+')).toSet();
   const known = {
     'no-pointer-modes', 'no-subword', 'no-shadow-bank', 'no-long-branches',
+    'no-imm-bextr',
   };
   if (!known.containsAll(leftOut)) {
     throw ArgumentError('Unknown config in ${source.path}: $leftOut');
@@ -132,6 +133,7 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
     enableSubword: !leftOut.contains('no-subword'),
     enableShadowBank: !leftOut.contains('no-shadow-bank'),
     enableLongBranches: !leftOut.contains('no-long-branches'),
+    enableImmBextr: !leftOut.contains('no-imm-bextr'),
   );
 
   final binary = assemble(source, workDir,

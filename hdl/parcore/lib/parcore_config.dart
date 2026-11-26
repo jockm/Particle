@@ -30,6 +30,7 @@ class ParcoreConfig {
     enableShadowBank: false,
     // Its firmware is assembled with -D __NO_LONG_BRANCHES (the Makefile)
     enableLongBranches: false,
+    enableImmBextr: false,
   );
 
   /// Core 0: Instruction Fetch Stage (IF)

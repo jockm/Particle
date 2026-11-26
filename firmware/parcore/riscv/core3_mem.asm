@@ -42,9 +42,7 @@ _mem_main_loop:
     FIFO.R  R11, R0             ; result
     FIFO.R  R12, R0             ; address
     FIFO.R  R13, R0             ; store data
-    LD      R4, R10
-    LD      R14, 8 + 5 * 32
-    BEXTR   R4, R14             ; R4 = Rd
+    BEXTR   R4, R10, 8, 5       ; R4 = Rd
     LD      R14, R10
     AND     R14, R1
     FBRA.NZ R14, _not_alu       ; a memory operation or a cancel

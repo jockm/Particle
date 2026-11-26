@@ -53,6 +53,11 @@ class CpuConfig {
   /// --no-long-branches. Default: true.
   final bool enableLongBranches;
 
+  /// The immediate BEXTR and SBEXTR (2 words: the field's position, length
+  /// and sign in the second, from a source register that isn't changed).
+  /// When false they trap as illegal (vector 15). Default: true.
+  final bool enableImmBextr;
+
   /// On-chip tightly-coupled BRAM size in bytes (Default: 64 KB)
   final int tcmSizeBytes;
 
@@ -92,6 +97,7 @@ class CpuConfig {
     this.enableMboxReceive = true,
     this.enableShadowBank = true,
     this.enableLongBranches = true,
+    this.enableImmBextr = true,
     this.tcmSizeBytes = 65536,
     this.mmioBaseAddr = 0xF0000000,
     this.enableUlx3sFtdiUart = true,

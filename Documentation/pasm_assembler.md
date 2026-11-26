@@ -79,6 +79,8 @@ The 2-word branches take a target either way, up to 32K halfwords off (`branch-r
 | `RJUMP label, R9` | `0xCD`: jump, with `R9` = the address after it (PC + 4). `RJUMP R2, R9` is still the 1-word register form (`0xA1`) |
 | `LEA R6, label` | `0x09`: `R6` = the address of `label`, up to 32 KiB either way (in bytes; `branch-range` beyond) |
 
+`BEXTR Rr, Rl` (1 word) takes the field's position and length from `Rl`; `BEXTR Rr, Rl, pos, len` and `SBEXTR Rr, Rl, pos, len` (2 words, `0x8D`) take them as numbers (0–31 each), and leave `Rl` unchanged; `SBEXTR` sign-extends. `JTBL Rr` jumps into a table of 2-byte entries; `JTBL Rr, 4` (or `8`, `16`) into one of 4-, 8- or 16-byte entries (any other size is a `range` error).
+
 ---
 
 ## Directives Reference

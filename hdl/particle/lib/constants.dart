@@ -53,6 +53,7 @@ abstract class AluOps {
   static const int ssle = 25;
   static const int sext8 = 26;
   static const int sext16 = 27;
+  static const int sbextr = 28; // BEXTR, sign-extended from the field's top bit
 }
 
 abstract class ParticleOpcodes {
@@ -168,6 +169,9 @@ abstract class ParticleOpcodes {
   static const int bgetImm4 = 0x8A;
   static const int tas = 0x8B;
   static const int rev32 = 0x8C;
+  // 2-word: Rr <- Rl[pos +: len], pos = imm[4:0], len = imm[9:5], imm[15]
+  // sign-extends (SBEXTR)
+  static const int bextrImm = 0x8D;
 
   // 4.7 Relational Comparisons (0x90 - 0x99)
   static const int slt = 0x90;
@@ -280,8 +284,11 @@ abstract class ParticleOpcodes {
     braDisp16, rjumpDisp16, beqDisp16, bneDisp16, lea,
   ];
 
+  /// The immediate BEXTR: left out with `CpuConfig.enableImmBextr`.
+  static const List<int> immBextrOps = [bextrImm];
+
   /// The 2-word instructions: the second word is an immediate.
-  static const List<int> twoWordOps = [ldi, ldis, ...longBranchOps];
+  static const List<int> twoWordOps = [ldi, ldis, ...longBranchOps, bextrImm];
 
   /// Every opcode in particle_spec.md. Any other opcode raises vector 15.
   static const List<int> all = [
@@ -383,6 +390,7 @@ abstract class ParticleOpcodes {
     bgetImm4,
     tas,
     rev32,
+    bextrImm,
     slt,
     sltImm4,
     sltNegImm4,

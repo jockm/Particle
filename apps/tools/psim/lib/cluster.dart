@@ -98,6 +98,7 @@ class Cluster {
       core.shadowBank = feature("shadow_bank");
       core.mboxReceive = feature("mbox_receive");
       core.longBranches = feature("long_branches");
+      core.immBextr = feature("imm_bextr");
       final name = (entry["name"] as String?) ?? "core$id";
       core.label = name;
       if (shared != null) {

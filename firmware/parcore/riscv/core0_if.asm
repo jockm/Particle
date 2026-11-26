@@ -55,9 +55,7 @@
 
 ; dst = src[pos + len - 1 : pos] (len 1..7). Uses R14.
 .macro FIELD dst, src, pos, len
-    LD      %dst, %src
-    LD      R14, %pos + %len * 32
-    BEXTR   %dst, R14
+    BEXTR   %dst, %src, %pos, %len
 .endmacro
 
     RESET_SLOT _reset_vector
@@ -127,9 +125,7 @@ _fence_i_handler:
     BINV    R9, 1               ; new epoch
 ._fence_drain:
     FIFO.R  R11, R8             ; waits for core 3
-    LD      R4, R11
-    SHIFTR  R4, 13
-    AND     R4, 3
+    BEXTR   R4, R11, 13, 2
     SUB     R4, 3               ; kind 3: the marker
     FBRA.Z  R4, ._fence_done
     RJUMP   _apply_mirror, R12
@@ -148,12 +144,8 @@ _apply_mirror:
     LD      R3, R11
     LDI     R4, 0x1FFF
     AND     R3, R4              ; R3 = address
-    LD      R5, R11
-    SHIFTR  R5, 8
-    SHIFTR  R5, 8               ; R5 = data
-    LD      R4, R11
-    SHIFTR  R4, 13
-    AND     R4, 3               ; R4 = kind
+    BEXTR   R5, R11, 16, 16     ; R5 = data
+    BEXTR   R4, R11, 13, 2      ; R4 = kind
     SUB     R4, 1
     FBRA.NZ R4, ._apply_half
     ST8     (R3), R5
@@ -363,9 +355,7 @@ _h_load:
     ADD     R2, R14             ; mem_op
     LDI     R14, OP_MEM * 256 + CLASS_RS1_IMM * 16
     OR      R2, R14
-    LD      R7, R5
-    ASHIFTR R7, 15
-    ASHIFTR R7, 5               ; B: the offset
+    SBEXTR  R7, R5, 20, 12      ; B: the offset
     JUMP    _send_rd
 
 ; ------------------------------------------------------------------------------
@@ -378,9 +368,7 @@ _h_op_imm:
     BGET    R14, R2
     FBRA.NZ R14, _t_op_imm_shift
 _op_imm_send:
-    LD      R7, R5
-    ASHIFTR R7, 15
-    ASHIFTR R7, 5               ; B: the I-immediate
+    SBEXTR  R7, R5, 20, 12      ; B: the I-immediate
     SHIFTL  R2, 8               ; op << 8, CLASS_RS1_IMM, mem_op 0
     JUMP    _send_rd
 
@@ -396,9 +384,7 @@ _h_store:
     LDI     R14, OP_MEM * 256 + CLASS_STORE * 16
     OR      R2, R14
     ; S-immediate: {inst[31:25], inst[11:7]} (R6 holds inst[11:7])
-    LD      R7, R5
-    ASHIFTR R7, 15
-    ASHIFTR R7, 10
+    SBEXTR  R7, R5, 25, 7
     SHIFTL  R7, 5
     OR      R7, R6
     FIELD   R6, R5, 20, 5       ; w2: rs2
@@ -419,23 +405,16 @@ _h_branch:
     LD      R14, CLASS_BRANCH * 16
     OR      R2, R14
     ; B-immediate: {inst[31], inst[7], inst[30:25], inst[11:8], 0}
-    LD      R7, R5
-    ASHIFTR R7, 15
-    ASHIFTR R7, 15
-    ASHIFTR R7, 1
+    SBEXTR  R7, R5, 31, 1
     SHIFTL  R7, 12              ; inst[31], sign-extended, at bit 12
     LD      R14, R6
     AND     R14, 1
     SHIFTL  R14, 11
     OR      R7, R14             ; inst[7] (rd bit 0) at bit 11
     LD      R14, R6
-    SHIFTR  R14, 1
-    SHIFTL  R14, 1
+    BCLR    R14, 0
     OR      R7, R14             ; inst[11:8] (rd bits 4:1) at bits 4:1
-    LD      R14, R5
-    SHIFTL  R14, 1
-    SHIFTR  R14, 15
-    SHIFTR  R14, 11
+    BEXTR   R14, R5, 25, 6
     SHIFTL  R14, 5
     OR      R7, R14             ; inst[30:25] at bits 10:5
     ADD     R7, R10             ; the target
@@ -483,9 +462,7 @@ _t_op_imm_shift:
 ; ------------------------------------------------------------------------------
 _h_op:
     FIELD   R2, R5, 12, 3       ; funct3
-    LD      R14, R5
-    SHIFTR  R14, 15
-    SHIFTR  R14, 10             ; funct7
+    BEXTR   R14, R5, 25, 7      ; funct7
     FBRA.Z  R14, _op_send       ; ADD, SLL, SLT, SLTU, XOR, SRL, OR, AND
     SUB     R14, 1
     FBRA.NZ R14, _t_op_funct7
@@ -510,9 +487,7 @@ _h_jalr:
     FIELD   R2, R5, 12, 3       ; funct3: 0 only
     LD      R14, R2
     FBRA.NZ R14, _t_illegal
-    LD      R7, R5
-    ASHIFTR R7, 15
-    ASHIFTR R7, 5
+    SBEXTR  R7, R5, 20, 12
     LD      R14, R6
     FBRA.Z  R14, ._jalr_rd0
     OR      R14, 4
@@ -548,28 +523,16 @@ _t_illegal:
 ; ------------------------------------------------------------------------------
 _h_jal:
     ; J-immediate: {inst[31], inst[19:12], inst[20], inst[30:21], 0}
-    LD      R7, R5
-    ASHIFTR R7, 15
-    ASHIFTR R7, 15
-    ASHIFTR R7, 1
+    SBEXTR  R7, R5, 31, 1
     SHIFTL  R7, 15
     SHIFTL  R7, 5               ; inst[31], sign-extended, at bit 20
-    LD      R14, R5
-    SHIFTL  R14, 12
-    SHIFTR  R14, 12
-    SHIFTR  R14, 12
+    BEXTR   R14, R5, 12, 8
     SHIFTL  R14, 12
     OR      R7, R14             ; inst[19:12] at bits 19:12
-    LD      R14, R5
-    SHIFTR  R14, 15
-    SHIFTR  R14, 5
-    AND     R14, 1
+    BEXTR   R14, R5, 20, 1
     SHIFTL  R14, 11
     OR      R7, R14             ; inst[20] at bit 11
-    LD      R14, R5
-    SHIFTL  R14, 1
-    SHIFTR  R14, 15
-    SHIFTR  R14, 7
+    BEXTR   R14, R5, 21, 10
     SHIFTL  R14, 1
     OR      R7, R14             ; inst[30:21] at bits 10:1
     LD      R14, R6
@@ -627,9 +590,7 @@ _h_misc_mem:
 ; ------------------------------------------------------------------------------
 _h_system:
     FIELD   R2, R5, 12, 3       ; funct3
-    LD      R7, R5
-    SHIFTR  R7, 15
-    SHIFTR  R7, 5               ; B: inst[31:20], funct12 or the CSR
+    BEXTR   R7, R5, 20, 12    ; B: inst[31:20], funct12 or the CSR
     LD      R14, R2
     FBRA.NZ R14, ._csr
     LD      R6, 0               ; no Rd
@@ -677,9 +638,7 @@ _h_system:
 ; again at _op_imm_send.
 ; ------------------------------------------------------------------------------
 _op_imm_shift:
-    LD      R7, R5
-    SHIFTR  R7, 15
-    SHIFTR  R7, 10              ; funct7 (imm[11:5])
+    BEXTR   R7, R5, 25, 7     ; funct7 (imm[11:5])
     LD      R14, R7
     FBRA.NZ R14, ._imm_f7
     JUMP    _op_imm_send        ; SLLI / SRLI
@@ -696,9 +655,7 @@ _op_imm_shift:
 ._imm_f5_zbb:
     LDI     R14, 0x30
     SUB     R14, R7
-    LD      R7, R5
-    SHIFTR  R7, 15
-    SHIFTR  R7, 5               ; imm12
+    BEXTR   R7, R5, 20, 12    ; imm12
     FBRA.NZ R14, ._imm_f5_orcb
     LDI     R2, OP_ROR          ; RORI
     JUMP    _op_imm_send
@@ -716,9 +673,7 @@ _op_imm_shift:
     JUMP    _op_imm_send
 ._imm_f1:
     ; funct3 1, funct7 not 0: Zbb unary, by imm12
-    LD      R7, R5
-    SHIFTR  R7, 15
-    SHIFTR  R7, 5               ; imm12
+    BEXTR   R7, R5, 20, 12    ; imm12
     LDI     R14, 0x600
     SUB     R14, R7
     FBRA.NZ R14, ._imm_f1_ctz
@@ -756,9 +711,7 @@ _op_imm_shift:
 ; _op_send).
 ; ------------------------------------------------------------------------------
 _op_funct7:
-    LD      R7, R5
-    SHIFTR  R7, 15
-    SHIFTR  R7, 10              ; funct7
+    BEXTR   R7, R5, 25, 7     ; funct7
     LDI     R14, 0x20
     SUB     R14, R7
     FBRA.NZ R14, ._reg_chk_30

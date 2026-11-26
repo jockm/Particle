@@ -84,9 +84,7 @@ _ex_main_loop:
     AND     R14, 2
     SUB     R14, R1
     FBRA.NZ R14, _stale         ; the old epoch
-    LD      R9, R10
-    SHIFTR  R9, 12
-    SHIFTR  R9, 12              ; the operation number
+    BEXTR   R9, R10, 24, 8      ; the operation number
     JTBL    R9
     FBRA    _op_add             ; OP_ADD
     FBRA    _op_sll             ; OP_SLL
@@ -341,25 +339,13 @@ _op_minu:
     LD      R15, R12
     BBRA    _forward_to_mem
 _op_sext_b:
-    LD      R15, R11
-    SHIFTL  R15, 12
-    SHIFTL  R15, 12
-    ASHIFTR R15, 12
-    ASHIFTR R15, 12
+    SBEXTR  R15, R11, 0, 8
     BBRA    _forward_to_mem
 _op_sext_h:
-    LD      R15, R11
-    SHIFTL  R15, 8
-    SHIFTL  R15, 8
-    ASHIFTR R15, 8
-    ASHIFTR R15, 8
+    SBEXTR  R15, R11, 0, 16
     BBRA    _forward_to_mem
 _op_zext_h:
-    LD      R15, R11
-    SHIFTL  R15, 8
-    SHIFTL  R15, 8
-    SHIFTR  R15, 8
-    SHIFTR  R15, 8
+    BEXTR   R15, R11, 0, 16
     BBRA    _forward_to_mem
 _op_rol:
     LD      R15, R11
@@ -491,9 +477,7 @@ _do_cpop:
     AND     R6, R5
     LOAD32  R5, 0x01010101
     MULL    R6, R5
-    LD      R15, R6
-    SHIFTR  R15, 12
-    SHIFTR  R15, 12
+    BEXTR   R15, R6, 24, 8
     JUMP    _forward_to_mem
 
 _do_orc_b:

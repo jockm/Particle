@@ -93,16 +93,24 @@ class ParticleAlu extends Module {
     final lenMask = [
       for (var i = 0; i < w; i++) Const(i, width: 5).lt(len),
     ].rswizzle();
+    final isBextr = anyOp([AluOps.bextr, AluOps.sbextr]);
     final shiftMask = mux(
       isOp(AluOps.shiftl),
       leftMask,
       mux(
         anyOp([AluOps.rotl, AluOps.rotr]),
         ones(Const(1)),
-        mux(isOp(AluOps.bextr), rightMask & lenMask, rightMask),
+        mux(isBextr, rightMask & lenMask, rightMask),
       ),
     );
-    final signFill = ~rightMask & ones(isOp(AluOps.ashiftr) & signA);
+    // SBEXTR: the bits from len up copy the field's top bit, bit
+    // pos + len - 1 of A (0 past bit 31, and for a field of length 0). It is
+    // taken from A, beside the rotator rather than after it, to keep it off
+    // the path from the ALU to the register file.
+    final topIndex = s.zeroExtend(6) + len.zeroExtend(6) - Const(1, width: 6);
+    final fieldTop = a[topIndex.getRange(0, 5)] & ~topIndex[5] & len.neq(0);
+    final signFill = (~rightMask & ones(isOp(AluOps.ashiftr) & signA)) |
+        (~lenMask & ones(isOp(AluOps.sbextr) & fieldTop));
     final shiftOut = (rot & shiftMask) | signFill;
 
     // ---- Logic unit: AND, OR, XOR, NOT, BSET, BCLR, BINV ----
@@ -174,6 +182,7 @@ class ParticleAlu extends Module {
           AluOps.rotl,
           AluOps.rotr,
           AluOps.bextr,
+          AluOps.sbextr,
         ]),
         shiftOut
       ),

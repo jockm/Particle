@@ -293,6 +293,11 @@ int _aluModel(int op, int a, int b) {
       return 32;
     case AluOps.bextr:
       return (a >> s) & ((1 << len) - 1);
+    case AluOps.sbextr:
+      // BEXTR, sign-extended from bit len - 1 (a field of length 0 is 0)
+      final f = (a >> s) & ((1 << len) - 1);
+      if (len == 0 || ((f >> (len - 1)) & 1) == 0) return f;
+      return (f | ~((1 << len) - 1)) & 0xFFFFFFFF;
     case AluOps.bset:
       return a | (1 << s);
     case AluOps.bclr:

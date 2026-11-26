@@ -31,7 +31,7 @@ Most instructions take one cycle:
 | Conditional branches not taken | 1 |
 | `FBRA`/`BBRA` imm8 (decided in D) | 2 |
 | Conditional branches taken, jumps, `TRAP`, and the serialising `XCHG`, `XCHGALL`, `XCHGMOST` (decided in E: the two halfwords behind are dropped) | 3 |
-| `LDI`, `LDIS`, `LEA`, and the 2-word branches not taken (the second halfword arrives while the first is in D) | 2 |
+| `LDI`, `LDIS`, `LEA`, `BEXTR`/`SBEXTR Rr, Rl, pos, len`, and the 2-word branches not taken (the second halfword arrives while the first is in D) | 2 |
 | The 2-word branches taken (`BRA`, `BRA.cc`, `BEQ`, `BNE`, `RJUMP disp16`; decided in E) | 3 (a far jump with `LDI R14` + `JMP` takes 5) |
 | Loads, `TAS`, `MULL`, `MULH`, `SMULH`, `MULHSU` (the register is written in W) | 2 |
 | `DIV`, `MOD`, `SDIV`, `SMOD` and their immediate forms | 34 (fewer for a division by zero or `INT_MIN / -1`) |
@@ -76,7 +76,7 @@ An incoming `MBOX` strobe (and its value) is held until the core is between inst
 
 ### Configuration
 
-`CpuConfig.enableMultiplier` and `enableDivider` decide whether the multiplier and divider are built. Without them, their opcodes raise vector 15. In the same way `enablePointerModes`, `enableSubword` and `enableShadowBank` leave out the pointer modes, the byte and halfword accesses and the shadow bank (their opcodes raise vector 15, and their logic is tied off so synthesis removes it), `enableLongBranches` leaves out the 2-word PC-relative instructions (`ParticleOpcodes.longBranchOps`; code for such a core is assembled with pasm's `--no-long-branches`), and `enableMboxReceive` leaves out taking `MBOX` traps. The opcode lists are `ParticleOpcodes.pointerModeOps`, `subwordOps` and `shadowOps`; `test/isa/13_left_out.asm` checks them against psim with `; config: no-pointer-modes no-subword no-shadow-bank`, and `15_long_left_out.asm` with `; config: no-long-branches`; `14_long_branches.asm` checks the 2-word instructions themselves.
+`CpuConfig.enableMultiplier` and `enableDivider` decide whether the multiplier and divider are built. Without them, their opcodes raise vector 15. In the same way `enablePointerModes`, `enableSubword` and `enableShadowBank` leave out the pointer modes, the byte and halfword accesses and the shadow bank (their opcodes raise vector 15, and their logic is tied off so synthesis removes it), `enableLongBranches` leaves out the 2-word PC-relative instructions (`ParticleOpcodes.longBranchOps`; code for such a core is assembled with pasm's `--no-long-branches`), `enableImmBextr` the immediate `BEXTR` (`immBextrOps`), and `enableMboxReceive` leaves out taking `MBOX` traps. The opcode lists are `ParticleOpcodes.pointerModeOps`, `subwordOps` and `shadowOps`; `test/isa/13_left_out.asm` checks them against psim with `; config: no-pointer-modes no-subword no-shadow-bank`, and `15_long_left_out.asm` with `; config: no-long-branches no-imm-bextr`; `14_long_branches.asm` checks the 2-word branches themselves and `16_bextr_jtbl.asm` the immediate `BEXTR` and `JTBL`'s entry sizes. The immediate `BEXTR` feeds the ALU `Rl` and the second word; its bit 15 picks the ALU's `sbextr`, which fills the bits from `len` up with the field's top bit. `JTBL` shifts its index by `Rl[1:0]` into the branch adder.
 
 ### Differences from psim
 
