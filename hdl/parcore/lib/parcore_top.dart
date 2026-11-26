@@ -281,8 +281,8 @@ class ParcoreTop extends Module {
     // routers, conductor -> core 0 -> core 1 -> core 2 -> core 3 ->
     // conductor. Each stage core has a network interface holding its receive
     // buffers, the credits of its output links, an injection queue and its
-    // channel table; the conductor's router only passes packets on (it will
-    // send CONFIG packets in step 3). A store of a channel number to
+    // channel table (which CONFIG can change); the conductor's interface
+    // only sends CONFIG packets (step 3b). A store of a channel number to
     // 0xFFFF_FF00 sends a FLUSH on it (core 0 flushes ifToId on a redirect);
     // a core's network interface resets with the core.
     // -------------------------------------------------------------------------
@@ -318,9 +318,39 @@ class ParcoreTop extends Module {
       ringOut[r] <= routers[r].ringOut;
       ringOutValid[r] <= routers[r].ringOutValid;
     }
-    // The conductor's router sends nothing yet
-    ringInject[0] <= Const(0, width: pw);
-    ringInjectValid[0] <= Const(0);
+    // The conductor's network interface only sends CONFIG: a store to its
+    // CONFIG register (0xFFFF_FF0C) sets one table entry of a core, or of
+    // every core (Documentation/mbox_design.md, part 6). With
+    // ParcoreConfig.writableNocTables off it sends nothing.
+    final condNi = ParticleRingInterface(
+      clk: clk,
+      reset: reset,
+      chanSelect: Const(0, width: 2),
+      pushData: Const(0, width: ParticleWidths.word),
+      pushEn: Const(0),
+      popEn: Const(0),
+      channels: const [
+        NiChannel.unused,
+        NiChannel.unused,
+        NiChannel.unused,
+        NiChannel.unused,
+      ],
+      coreId: ringOrder[0],
+      eject: routers[0].eject,
+      ejectValid: routers[0].ejectValid,
+      injectTaken: routers[0].injectTaken,
+      ringCores: ringOrder,
+      mboxSend: false,
+      mboxReceive: false,
+      acceptConfig: false,
+      configSender: ParcoreConfig.writableNocTables,
+      configStrobe:
+          condMemWEn & condMemAddr.eq(Const(niConfigRegister, width: 32)),
+      configWord: condMemWData,
+      name: 'conductor_ni',
+    );
+    ringInject[0] <= condNi.inject;
+    ringInjectValid[0] <= condNi.injectValid;
 
     // Each core's FIFO port, and its stores to the FLUSH register, driven
     // once the core exists
@@ -361,6 +391,8 @@ class ParcoreTop extends Module {
       Logic? devStatus,
       required (Logic, Logic, Logic, Logic, Logic, Logic) mbox,
       int? mboxDefaultTarget,
+      bool mboxSend = false,
+      required bool mboxReceive,
     }) {
       final r = ringOrder.indexOf(core);
       final iface = ParticleRingInterface(
@@ -389,6 +421,11 @@ class ParcoreTop extends Module {
         mboxSendTargetValid: mbox.$5,
         mboxCoreReady: mbox.$6,
         mboxDefaultTarget: mboxDefaultTarget,
+        // Only what each core uses is built (411)
+        mboxSend: mboxSend,
+        mboxReceive: mboxReceive,
+        ringCores: ringOrder,
+        acceptConfig: ParcoreConfig.writableNocTables,
         name: 'core${core}_ni',
       );
       ringInject[r] <= iface.inject;
@@ -405,7 +442,9 @@ class ParcoreTop extends Module {
       NiChannel.unused,
     ], txRoutes: const [(core: 1, channel: 0)],
         rxSenders: const [(core: 3, channel: 2)],
-        bufferNames: ['parcore_fifo_mem_to_if'], mbox: c0Mbox);
+        bufferNames: ['parcore_fifo_mem_to_if'],
+        mbox: c0Mbox,
+        mboxReceive: ParcoreConfig.core0If.enableMboxReceive);
 
     // Core 1: channel 0 receives from core 0, channel 1 sends to core 2
     // (FIFO.STAT: its room, checked before decoding), channel 2 receives the
@@ -418,7 +457,8 @@ class ParcoreTop extends Module {
     ], txRoutes: const [(core: 2, channel: 0)],
         rxSenders: const [(core: 0, channel: 1), (core: 3, channel: 1)],
         bufferNames: ['parcore_fifo_if_to_id', 'parcore_fifo_mem_to_wb'],
-        mbox: c1Mbox);
+        mbox: c1Mbox,
+        mboxReceive: ParcoreConfig.core1Id.enableMboxReceive);
 
     // Core 2: every channel receives from core 1 and reports that input's
     // status; channel 1 also sends to core 3
@@ -432,7 +472,8 @@ class ParcoreTop extends Module {
         rxSenders: const [(core: 1, channel: 1)],
         bufferNames: ['parcore_fifo_id_to_ex'],
         // Its MBOXes (redirects and FENCE.I) go to core 0
-        mbox: c2Mbox, mboxDefaultTarget: 0);
+        mbox: c2Mbox, mboxDefaultTarget: 0, mboxSend: true,
+        mboxReceive: ParcoreConfig.core2Ex.enableMboxReceive);
 
     // Core 3: channels 0-2 receive from core 2; channel 1 sends the
     // writebacks to core 1, channel 2 mirrors stores to core 0 (FIFO.STAT:
@@ -447,7 +488,8 @@ class ParcoreTop extends Module {
     ], txRoutes: const [(core: 1, channel: 2), (core: 0, channel: 2)],
         rxSenders: const [(core: 2, channel: 1)],
         bufferNames: ['parcore_fifo_ex_to_mem'],
-        devPopData: c3DevPopData, devStatus: c3DevStatus, mbox: c3Mbox);
+        devPopData: c3DevPopData, devStatus: c3DevStatus, mbox: c3Mbox,
+        mboxReceive: ParcoreConfig.core3Mem.enableMboxReceive);
 
     void driveMbox((Logic, Logic, Logic, Logic, Logic, Logic) m,
         ParticleCpuCore core) {

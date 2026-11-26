@@ -1,6 +1,6 @@
 # `MBOX` over the Network: Design Note (Draft)
 
-Status: agreed (398–408). psim implements all of it (cluster tests `mbox_queue`, `mbox_any`, `ring_mbox_queue`, `ring_mbox_any`, `ring_config`). The HDL implements step 3a (see 408): `EPC`, `RETI`, masking and `MBOX Rr, Rl` in the core; the queue, `ACK`/`NACK` and the value and source registers in the network interface; Parcore's redirect over the ring. Step 3b (writable tables, `CONFIG` from the conductor, broadcast) is next; until then the HDL drops an `MBOX` to core `0xFF`. It covers step 3 of the [network on chip](noc_design.md) (`MBOX` as packets, `CONFIG` from the conductor, broadcast) together with the `MBOX` redesign, item 14 of [Road to GHz](road_to_ghz.md), because each needs the other.
+Status: agreed (398–412) and implemented. psim implements all of it (cluster tests `mbox_queue`, `mbox_any`, `ring_mbox_queue`, `ring_mbox_any`, `ring_config`); the HDL too, in two steps (408): 3a, `EPC`, `RETI`, masking and `MBOX Rr, Rl` in the core, the queue, `ACK`/`NACK` and the value and source registers in the network interface, and Parcore's redirect over the ring; 3b, the writable tables, the conductor's interface sending `CONFIG`, broadcast, and the options of 411 (`ring_test.dart` checks both). It covers step 3 of the [network on chip](noc_design.md) (`MBOX` as packets, `CONFIG` from the conductor, broadcast) together with the `MBOX` redesign, item 14 of [Road to GHz](road_to_ghz.md), because each needs the other.
 
 ## Today
 
@@ -84,3 +84,14 @@ As for step 2: psim models `MBOX` packets, `ACK`/`NACK`, the queue, masking, `EP
 * **407:** the network interface answers from a queue of its own (4, configurable). An `MBOX` that arrives while it is full gets no answer and isn't taken; its sender sends it again after a timeout (64 cycles in the HDL). After a `NACK` the sender waits 8 cycles.
 * **408:** the HDL in two parts. 3a: the core, the `MBOX` queue, `ACK`/`NACK`, the registers, the redirect over the ring and core 0's firmware. 3b: the writable tables, the conductor's network interface with `CONFIG`, and broadcast.
 * **409:** `MBOX.ON`/`MBOX.OFF` renamed `EI`/`DI` (the same opcodes); they mask every asynchronous trap, so a future timer (410) is masked the same way.
+* **411:** the network interface takes options to leave out its `MBOX` send side or its receive side (as `enableMboxReceive` does for the core), so a core that never sends or never receives one doesn't pay for it. Added in 3b as `mboxSend` and `mboxReceive` (without it an `MBOX` is still answered `ACK`, then discarded, as in psim), with `acceptConfig` (without it the tables are constants) and `configSender`.
+* **412:** a known limit, kept for now: a sender sends an unanswered `MBOX` again after 64 cycles, so an answer that takes longer than that (a very busy ring) would deliver it twice. On Parcore's ring an answer takes under 10 cycles. When ParticleMan needs it, a 1-bit sequence number per sender will let the receiver drop the repeat.
+
+## In the HDL
+
+* A router takes a broadcast's copy for its core and passes it on; the sender's router takes it off. Any packet that comes back to its sender's router is dropped there, so nothing can circle the ring for ever.
+* An interface given `ringCores` (Parcore gives the ring order) drops an `MBOX` or `CONFIG` for a core not on the ring, as psim does with a warning; `MBOX Rr, Imm4` with no default target is dropped too.
+* The broadcast slot is taken after the queue. A broadcast `MBOX` keeps the sender's `MBOX` register only until it has left (no answer comes).
+* A second store to the `CONFIG` register while one still waits for room in the injection queue is dropped, as for `FLUSH`.
+* A route set by `CONFIG` starts with 256 credits. A word queued in the same cycle goes to the old route.
+* **418:** Parcore builds with its tables constant (`ParcoreConfig.writableNocTables` off: about 220 LUT4s and 150 flip-flops fewer, measured per module; whole-design place-and-route counts move by about ±400 LUT4s between near-identical builds, so they can't show a change this small), since its firmware never sends `CONFIG`; turning it on gives the writable tables and the conductor's `NI_CONFIG` register.

@@ -6,6 +6,13 @@
 import 'package:particle_rohd/cpu_config.dart';
 
 class ParcoreConfig {
+  /// Whether the network interfaces' tables (routes, senders, the default
+  /// MBOX target) can be changed by CONFIG packets, and the conductor's
+  /// interface has the NI_CONFIG register to send them (418). Parcore's
+  /// firmware never sends CONFIG, so it is off: the tables are constants,
+  /// about 220 LUT4s and 150 flip-flops fewer. ParticleMan and other builds can turn it on.
+  static const bool writableNocTables = false;
+
   /// Conductor Supervisor Core (Minimal footprint, 2 KB TCM, no FIFOs/DSP)
   static const CpuConfig conductorConfig = CpuConfig(
     coreId: 7,
