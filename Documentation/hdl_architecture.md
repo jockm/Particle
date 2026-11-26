@@ -39,6 +39,8 @@ Most instructions take one cycle:
 | `WAIT` | stalls until an `MBOX` is pending (output `waiting` high meanwhile) |
 | `HALT` | stalls until reset (output `halted` high); no `MBOX` is taken |
 
+For the conductor, the core also outputs `pc` (the PC in E) and `blocked` (asleep in a `FIFO.R`, `WAIT` or `HALT`, or waiting to send).
+
 Conditional branches are decided in E rather than D on purpose: testing the register in D puts the register-file read on the path to the fetch address, which cost about 4 MHz on the ULX3S (about 35.5 MHz against 39.5 MHz).
 
 E computes every PC-relative target with one adder, on halfwords: `pc/2 + offset`, plus one for `JTBL`, or `pc/2 + ~offset + 1` for the backward forms (`JMP`'s target is the register itself). The 2-word branches add their signed second word; `LEA`, whose displacement is in bytes, adds it shifted right by one and takes bit 0 from it (the PC is even), so it needs no adder of its own. D's `FBRA`/`BBRA` target and the pointer modes' `± size` have one adder each as well. Each form used to have its own adder, all feeding a 26-way multiplexer; sharing them took a stage core's own logic from about 2,640 to about 1,850 LUT4s in Parcore.

@@ -162,6 +162,13 @@ _apply_mirror:
 ; Main loop, past the guest area
 ; ==============================================================================
 .org 0x2000
+; A zero word: the end of the program, or past it after a branch guessed not
+; taken. Sleep (CORE_STATE shows it, so the conductor's watchdog knows the
+; guest is done) until a redirect's MBOX wakes the core; its handler goes back
+; to the main loop. Not HALT: a halted core takes no MBOX, and the redirect
+; may be on its way. (Here, not in the loop: the loop's test falls through.)
+_if_program_end:
+    WAIT
 _if_main_loop:
     ; Apply one mirrored store, if core 3 sent any (FENCE.I coherence)
     FIFO.STAT R4, R8
@@ -177,7 +184,7 @@ _if_main_loop:
     BBRA.NZ R14, _if_main_loop
     LD32    R5, (R10)           ; the instruction
     LD      R14, R5
-    BBRA.Z  R14, _if_main_loop  ; a zero word: the end of the program; wait here
+    BBRA.Z  R14, _if_program_end ; a zero word: the end of the program
 
     LD      R15, R10
     ADD     R15, 4              ; the next PC, unless predicted otherwise

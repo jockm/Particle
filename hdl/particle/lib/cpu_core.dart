@@ -58,6 +58,10 @@ class ParticleCpuCore extends Module {
   Logic get waiting => output('waiting');
   Logic get halted => output('halted');
 
+  /// Blocked: asleep in a WAIT, HALT or FIFO.R on an empty channel, or
+  /// waiting to send (a full queue). For the conductor's ACTIVITY.
+  Logic get blocked => output('blocked');
+
   /// The PC of the instruction in E (for the conductor's CORE_PC).
   Logic get pcOut => output('pc');
 
@@ -145,6 +149,7 @@ class ParticleCpuCore extends Module {
     addOutput('waiting');
     addOutput('halted');
     addOutput('pc', width: ParticleWidths.word);
+    addOutput('blocked');
 
     addOutput('fifoChanSelect', width: 2);
     addOutput('fifoPushData', width: ParticleWidths.word);
@@ -983,6 +988,11 @@ class ParticleCpuCore extends Module {
         : Const(0);
     waiting <= waitStall;
     halted <= haltStall;
+    blocked <= (waitStall |
+            haltStall |
+            (doExec & fifoReadStall) |
+            (doExec & fifoWriteStall))
+        .named('coreBlocked');
     final eStall = ((doExec & fifoReadStall) |
         waitStall |
         haltStall |

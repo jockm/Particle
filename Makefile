@@ -367,7 +367,8 @@ test-particle-isa: $(PARTICLE_TEST_DEPS)
 test-parcore: setup firmware guest-tests
 	@echo "==> Running Parcore unit tests..."
 	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart \
-		test/spi_flash_rom_test.dart test/conductor_boot_test.dart test/parcore_sleep_test.dart)
+		test/spi_flash_rom_test.dart test/conductor_boot_test.dart test/parcore_sleep_test.dart \
+		test/parcore_watchdog_test.dart)
 	@echo "==> Booting the whole Parcore ULX3S design from its image ROM (Verilator)..."
 	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) $(DART) test test/parcore_ulx3s_boot_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
@@ -593,7 +594,7 @@ firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS)
 # RCALL use the other forms
 $(PARCORE_BLD)/conductor/%.bin: FIRMWARE_FLAGS := -D __NO_LONG_BRANCHES
 $(PARCORE_BLD)/riscv/core1_id.bin $(PARCORE_BLD)/riscv/core3_mem.bin: FIRMWARE_FLAGS := -D __NO_LONG_BRANCHES
-$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm $(wildcard firmware/parcore/riscv/*.inc) $(PASM_BIN)
+$(PARCORE_BLD)/%.bin: firmware/parcore/%.asm $(wildcard firmware/parcore/riscv/*.inc) $(wildcard firmware/parcore/conductor/*.inc) $(PASM_BIN)
 	@mkdir -p $(dir $@)
 	@$(PBUILD) $(FIRMWARE_FLAGS) "$<" -o "$@"
 

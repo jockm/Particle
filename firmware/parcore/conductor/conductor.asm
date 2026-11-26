@@ -7,32 +7,7 @@
 .define NO_SHADOW_BANK 1
 .include "lib/vectors.inc"
 
-; ------------------------------------------------------------------------------
-; Hardware MMIO Registers
-; ------------------------------------------------------------------------------
-; RST_CTRL (0xF000_0000):
-;   Bits [5:0] = Per-core active-high reset/hold (1 = Reset/Mux to Conductor)
-;   Bit  [31]  = Conductor boot complete status flag
-.define RST_CTRL_ADDR       0xF0000000
-
-; SPI Flash Master Controller (0xF000_0010 - 0xF000_0018):
-;   +0x00 (0xF000_0010): SPI_CTRL [Bit 0: CS_N, Bit 1: START, Bit 2: BUSY (RO)]
-;   +0x04 (0xF000_0014): SPI_DATA [7:0 TX/RX shift register]
-;   +0x08 (0xF000_0018): SPI_DIV  [15:0 clock divider]
-.define SPI_CTRL_ADDR       0xF0000010
-.define SPI_DATA_ADDR       0xF0000014
-.define SPI_DIV_ADDR        0xF0000018
-
-; STATUS (0xF000_0020): bits [7:0] the LEDs while the conductor has them;
-; bit 8 gives the LEDs to the guest (core 3's I/O, 0x1000_0008).
-; BUTTONS (0xF000_0024, read): bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT,
-; 5 RIGHT (1 = pressed).
-.define STATUS_OFFSET       0x20
-.define BUTTONS_OFFSET      0x24
-.define CORE_STATE_OFFSET   0x28    ; CORE_STATE (read): 2 bits per core, 0 running,
-                                    ; 1 in a WAIT, 2 halted, 3 held in reset
-.define CYCLES_OFFSET       0x2C    ; CYCLES (read): cycles since reset
-.define CORE_PC_OFFSET      0x30    ; CORE_PC (read): core n's PC at 0x30 + 4n
+.include "conductor_regs.inc"
 .define STATUS_GUEST_LEDS   0x0100
 
 ; ------------------------------------------------------------------------------
@@ -60,6 +35,7 @@
 .define FAULT_SECTION       4       ; no cores, cores beyond 5, or an offset
                                     ; or length that isn't a multiple of 4
 .define FAULT_CRC           5       ; the CRC-32 doesn't match
+.define FAULT_HANG          6       ; the watchdog (watchdog.inc)
 ; While booting, LED 0 is lit and one more LED lights per section loaded.
 ; Once the cores are running, the guest has the LEDs, and FIRE1 reloads the
 ; image and restarts them.
@@ -69,7 +45,9 @@
 .define IMAGE_MAGIC_LO      0x5243
 .define IMAGE_VERSION       2
 .define MAX_SECTIONS        8
-.define SECTION_TABLE       0x0600  ; copy of the section table (96 bytes)
+.define SECTION_TABLE       0x0E00  ; copy of the section table (96 bytes),
+                                    ; above the code (which ends near 0x640)
+                                    ; and below the stack (from 0x1000 down)
 
 ; ------------------------------------------------------------------------------
 ; Register Convention
@@ -107,15 +85,6 @@
     CRC_NIBBLE
     CRC_NIBBLE
     SHIFTR  R4, 8
-.endmacro
-
-; Show R1 on the LEDs (uses R2)
-.macro SET_LEDS
-    LD      R2, R5
-    ADD     R2, 15
-    ADD     R2, 15
-    ADD     R2, 2                   ; R2 = STATUS (0xF000_0020)
-    ST32    (R2), R1
 .endmacro
 
 .macro FAULT code
@@ -311,19 +280,7 @@ _sections_done:
 ; ------------------------------------------------------------------------------
 ; Supervisor: FIRE1 reloads the image and restarts the cores (once released)
 ; ------------------------------------------------------------------------------
-_supervisor_idle:
-    LD      R2, R5
-    ADD     R2, 15
-    ADD     R2, 15
-    ADD     R2, 6                   ; R2 = BUTTONS (0xF000_0024)
-    LD32    R1, (R2)
-    AND     R1, 1                   ; FIRE1
-    BBRA.Z  R1, _supervisor_idle
-._wait_release:
-    LD32    R1, (R2)
-    AND     R1, 1
-    BBRA.NZ R1, ._wait_release
-    JUMP    _reset_vector
+.include "watchdog.inc"
 
 ; ------------------------------------------------------------------------------
 ; Fault: R1 = code. Every core stays held in reset; the code is on LEDs 0-3,

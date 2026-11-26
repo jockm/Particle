@@ -32,8 +32,24 @@
 //     of the injection queue, and is kept until answered: sent again 8 cycles
 //     after a NACK, or 64 after no answer; meanwhile the core's next MBOX
 //     waits (mboxSendWait). An answer taking longer than 64 cycles would mean
-//     a second copy; on Parcore's ring it takes under 10. Broadcast comes in
-//     step 3b: an MBOX to core 0xFF is dropped until then.
+//     a second copy (412); on Parcore's ring it takes under 10.
+//   * Broadcast (step 3b): an MBOX to core 0xFF goes to every other core and
+//     needs no answer. Each receiver keeps one slot for a broadcast, taken
+//     after its queue; a broadcast that finds the slot full is dropped.
+//   * CONFIG (step 3b): a CONFIG packet sets one entry of the tables, which
+//     start as the HDL's txRoutes, rxSenders and mboxDefaultTarget: a
+//     channel's route (with 256 new credits), the sender of a channel's
+//     input, or the default MBOX target. An interface built with
+//     configSender queues one for each store to the CONFIG register
+//     (configStrobe, with configWord); a second store while one still waits
+//     for room in the injection queue is dropped, as for FLUSH.
+//   * ringCores, when given, lists the cores on the ring: an MBOX or CONFIG
+//     for any other core is dropped (MBOX Rr, Imm4 with no default target
+//     too).
+//   * Options (411): without mboxReceive an arriving MBOX is answered ACK and
+//     discarded; without mboxSend the core's MBOX is dropped; without
+//     acceptConfig CONFIG packets are ignored, so the tables stay constant
+//     and synthesis removes them.
 
 import 'package:rohd/rohd.dart';
 import 'constants.dart';
@@ -45,6 +61,10 @@ import 'ring_router.dart';
 /// The network interface's FLUSH register: storing a channel number sends a
 /// FLUSH packet on it.
 const int niFlushRegister = 0xFFFFFF00;
+
+/// The CONFIG register: storing a CONFIG word sends a CONFIG packet
+/// (Documentation/mbox_design.md, part 6).
+const int niConfigRegister = 0xFFFFFF0C;
 
 /// Where an output channel's packets go: a core and that core's channel.
 typedef NocAddress = ({int core, int channel});
@@ -68,8 +88,16 @@ class ParticleRingInterface extends Module {
   static const mboxRetryCycles = 8;
   static const mboxTimeoutCycles = 64;
 
-  /// The core MBOX Rr, Imm4 goes to, or null (it is dropped).
+  /// The core MBOX Rr, Imm4 goes to at reset, or null (it is dropped).
   final int? mboxDefaultTarget;
+
+  /// The cores on the ring, or null for any.
+  final List<int>? ringCores;
+
+  final bool mboxSend;
+  final bool mboxReceive;
+  final bool acceptConfig;
+  final bool configSender;
 
   Logic get popData => output('popData');
   Logic get statusWord => output('statusWord');
@@ -121,6 +149,13 @@ class ParticleRingInterface extends Module {
     Logic? mboxSendTargetValid,
     Logic? mboxCoreReady,
     this.mboxDefaultTarget,
+    this.ringCores,
+    this.mboxSend = true,
+    this.mboxReceive = true,
+    this.acceptConfig = true,
+    this.configSender = false,
+    Logic? configStrobe,
+    Logic? configWord,
     super.name = 'ring_interface',
   }) {
     final inputCount = rxSenders.length;
@@ -178,12 +213,40 @@ class ParticleRingInterface extends Module {
     addOutput('mboxData', width: w);
     addOutput('mboxSource', width: 8);
     addOutput('mboxSendWait');
+    final cStrobe = addInput('configStrobe', configStrobe ?? Const(0));
+    final cWord =
+        addInput('configWord', configWord ?? Const(0, width: w), width: w);
 
     Logic on(int c) => chanSelect.eq(Const(c, width: 2));
     Logic anyOf(Iterable<int> cs) =>
         cs.map(on).fold<Logic>(Const(0), (a, b) => a | b);
     List<int> where(bool Function(NiChannel) f) =>
         [for (var c = 0; c < 4; c++) if (f(channels[c])) c];
+
+    // ---- The tables (CONFIG writes them) ----
+    final routeCore = [
+      for (var j = 0; j < outputCount; j++)
+        Logic(name: 'routeCore$j', width: 8),
+    ];
+    final routeCh = [
+      for (var j = 0; j < outputCount; j++) Logic(name: 'routeCh$j', width: 2),
+    ];
+    final senderCore = [
+      for (var i = 0; i < inputCount; i++)
+        Logic(name: 'senderCore$i', width: 8),
+    ];
+    final senderCh = [
+      for (var i = 0; i < inputCount; i++) Logic(name: 'senderCh$i', width: 2),
+    ];
+    final defTarget = Logic(name: 'mboxDefTarget', width: 8);
+    final defValid = Logic(name: 'mboxDefValid');
+    // Whether a core is on the ring
+    Logic exists(Logic core) => ringCores == null
+        ? Const(1)
+        : ringCores!
+            .map((c) => core.eq(Const(c, width: 8)))
+            .fold<Logic>(Const(0), (a, b) => a | b);
+    final toAll = Const(NocPacket.broadcast, width: 8);
 
     // ---- Arriving packets ----
     final pType = NocPacket.type(eject);
@@ -275,24 +338,34 @@ class ParticleRingInterface extends Module {
     final pushCredit = [
       for (var j = 0; j < outputCount; j++) pushOn[j] & hasCredit[j],
     ].fold<Logic>(Const(0), (a, b) => a | b);
-    // The core waits while the queue is full or a FLUSH waits to be queued
-    final blocked = qFull | flushPending;
+    // A CONFIG to queue (configSender): a new store, or one waiting for room
+    final configPending = Logic(name: 'configPending');
+    final configPendingWord = Logic(name: 'configPendingWord', width: w);
+    final configWanted = configSender ? configPending | cStrobe : Const(0);
+    final cfgWord = mux(configPending, configPendingWord, cWord);
+    final cfgDest = cfgWord.getRange(24, 32);
+    final cfgOk = cfgDest.eq(toAll) | exists(cfgDest);
+    // The core waits while the queue is full or a FLUSH or CONFIG waits to be
+    // queued
+    final blocked = qFull | flushPending | configPending;
     pushWait <= pushTx & pushCredit & blocked;
     final enqueueData = [
       for (var j = 0; j < outputCount; j++) pushOn[j] & hasCredit[j] & ~blocked,
     ];
     final enqueueFlush = flushWanted & flushHasRoute & ~qFull;
+    // A FLUSH goes first if both are waiting
+    final enqueueConfig = configWanted & cfgOk & ~qFull & ~enqueueFlush;
+    final configWaits = configWanted & cfgOk & ~enqueueConfig;
 
     // The queued packet: the word to its route, or a FLUSH to the route of
     // its channel
     Logic routeDest(Logic Function(int) sel) => [
           for (var j = 0; j < outputCount; j++)
-            mux(sel(j), Const(txRoutes[j].core, width: 8), Const(0, width: 8)),
+            mux(sel(j), routeCore[j], Const(0, width: 8)),
         ].fold<Logic>(Const(0, width: 8), (a, b) => a | b);
     Logic routeChan(Logic Function(int) sel) => [
           for (var j = 0; j < outputCount; j++)
-            mux(sel(j), Const(txRoutes[j].channel, width: 4),
-                Const(0, width: 4)),
+            mux(sel(j), routeCh[j].zeroExtend(4), Const(0, width: 4)),
         ].fold<Logic>(Const(0, width: 4), (a, b) => a | b);
     final dataPacket = NocPacket.make(
       type: NocPacket.data,
@@ -300,6 +373,13 @@ class ParticleRingInterface extends Module {
       channel: routeChan((j) => pushOn[j]),
       src: coreId,
       payload: pushData,
+    );
+    final configPacket = NocPacket.make(
+      type: NocPacket.config,
+      dest: cfgDest,
+      channel: Const(0, width: 4),
+      src: coreId,
+      payload: cfgWord,
     );
     final flushPacket = NocPacket.make(
       type: NocPacket.flush,
@@ -310,11 +390,12 @@ class ParticleRingInterface extends Module {
     );
     final anyEnqueueData =
         enqueueData.fold<Logic>(Const(0), (a, b) => a | b);
-    final enqueue = anyEnqueueData | enqueueFlush;
+    final enqueue = anyEnqueueData | enqueueFlush | enqueueConfig;
     final queue = ParticleLutRam(
       clk: clk,
       wAddr: qWr,
-      wData: mux(enqueueFlush, flushPacket, dataPacket),
+      wData: mux(enqueueConfig, configPacket,
+          mux(enqueueFlush, flushPacket, dataPacket)),
       wEn: enqueue,
       rAddrA: qRd,
       rAddrB: qRd,
@@ -327,8 +408,8 @@ class ParticleRingInterface extends Module {
     // credits owed ----
     Logic creditPacket(int i) => NocPacket.make(
           type: NocPacket.credit,
-          dest: Const(rxSenders[i].core, width: 8),
-          channel: Const(rxSenders[i].channel, width: 4),
+          dest: senderCore[i],
+          channel: senderCh[i].zeroExtend(4),
           src: coreId,
           payload: _owed[i].zeroExtend(w),
         );
@@ -377,14 +458,26 @@ class ParticleRingInterface extends Module {
     }
     // ---- MBOX ----
     final pSrc = NocPacket.src(eject);
-    final mboxIn = arrives(NocPacket.mbox) &
-        NocPacket.dest(eject).eq(Const(coreId, width: 8));
-    // The receive queue: vector, value, source
+    final pDest = NocPacket.dest(eject);
+    final mboxArrives = arrives(NocPacket.mbox);
+    final mboxIn = mboxArrives & pDest.eq(Const(coreId, width: 8));
+    final arrivedEntry =
+        [NocPacket.channel(eject), NocPacket.payload(eject), pSrc].swizzle();
+    const entryWidth = 4 + 32 + 8; // vector, value, source
+
+    // The receive queue (mboxReceive) and the broadcast slot
     final rqWr = Logic(name: 'rqWr', width: 2);
     final rqRd = Logic(name: 'rqRd', width: 2);
     final rqCount = Logic(name: 'rqCount', width: 3);
-    final rqFull = rqCount.eq(Const(mboxQueueDepth, width: 3));
-    final rqEmpty = rqCount.eq(0);
+    final bcValid = Logic(name: 'mboxBcValid');
+    final bcEntry = Logic(name: 'mboxBcEntry', width: entryWidth);
+    final Logic rqFull;
+    final Logic rqEmpty;
+    final Logic takeIn;
+    final Logic toCore;
+    final Logic fromQueue;
+    final Logic bcIn;
+    final Logic bcTake;
     // The answer queue: destination, and 1 for a NACK
     final aqWr = Logic(name: 'aqWr', width: 2);
     final aqRd = Logic(name: 'aqRd', width: 2);
@@ -392,18 +485,46 @@ class ParticleRingInterface extends Module {
     final aqFull = aqCount.eq(Const(answerQueueDepth, width: 3));
     final aqEmpty = aqCount.eq(0);
     final answer = mboxIn & ~aqFull; // with the answer queue full: none
-    final takeIn = answer & ~rqFull;
-    final rxQueue = ParticleLutRam(
-      clk: clk,
-      wAddr: rqWr,
-      wData: [NocPacket.channel(eject), NocPacket.payload(eject), pSrc].swizzle(),
-      wEn: takeIn,
-      rAddrA: rqRd,
-      rAddrB: rqRd,
-      depth: mboxQueueDepth,
-      width: 4 + 32 + 8,
-      name: 'mbox_queue',
-    );
+    if (mboxReceive) {
+      rqFull = rqCount.eq(Const(mboxQueueDepth, width: 3));
+      rqEmpty = rqCount.eq(0);
+      takeIn = answer & ~rqFull;
+      final rxQueue = ParticleLutRam(
+        clk: clk,
+        wAddr: rqWr,
+        wData: arrivedEntry,
+        wEn: takeIn,
+        rAddrA: rqRd,
+        rAddrB: rqRd,
+        depth: mboxQueueDepth,
+        width: entryWidth,
+        name: 'mbox_queue',
+      );
+      // A broadcast fills the slot if it is free, else it is dropped
+      bcIn = mboxArrives & pDest.eq(toAll) & ~bcValid;
+      // To the core, one at a time: the queue first, then the slot
+      fromQueue = ~rqEmpty;
+      toCore = mReady & (fromQueue | bcValid);
+      bcTake = toCore & ~fromQueue;
+      final head = mux(fromQueue, rxQueue.rDataA, bcEntry);
+      mboxStrobe <= toCore;
+      mboxVector <= head.getRange(40, 44);
+      mboxData <= head.getRange(8, 40);
+      mboxSource <= head.getRange(0, 8);
+    } else {
+      // Answered ACK and discarded
+      rqFull = Const(0);
+      rqEmpty = Const(1);
+      takeIn = Const(0);
+      fromQueue = Const(0);
+      toCore = Const(0);
+      bcIn = Const(0);
+      bcTake = Const(0);
+      mboxStrobe <= Const(0);
+      mboxVector <= Const(0, width: 4);
+      mboxData <= Const(0, width: w);
+      mboxSource <= Const(0, width: 8);
+    }
     final ansQueue = ParticleLutRam(
       clk: clk,
       wAddr: aqWr,
@@ -415,12 +536,6 @@ class ParticleRingInterface extends Module {
       width: 9,
       name: 'answer_queue',
     );
-    // To the core: one MBOX at a time
-    final toCore = ~rqEmpty & mReady;
-    mboxStrobe <= toCore;
-    mboxVector <= rxQueue.rDataA.getRange(40, 44);
-    mboxData <= rxQueue.rDataA.getRange(8, 40);
-    mboxSource <= rxQueue.rDataA.getRange(0, 8);
     final answerPacket = NocPacket.make(
       type: NocPacket.ack,
       dest: ansQueue.rDataA.getRange(1, 9),
@@ -435,16 +550,17 @@ class ParticleRingInterface extends Module {
     ].swizzle();
     final answerOut = mux(ansQueue.rDataA[0], nackPacket, answerPacket);
 
-    // Sending: one MBOX in flight
+    // Sending (mboxSend): one MBOX in flight
     final outstanding = Logic(name: 'mboxOutstanding');
+    final outBroadcast = Logic(name: 'mboxOutBroadcast');
     final outPacket = Logic(name: 'mboxOutPacket', width: pw);
     final retryTimer = Logic(name: 'mboxRetryTimer', width: 7);
     final retryDue = outstanding & retryTimer.eq(0);
     mboxSendWait <= outstanding;
-    final sendDest = mux(mTargetValid, mTarget,
-        Const(mboxDefaultTarget ?? 0xFF, width: 8));
-    // No default target, or a broadcast (step 3b): dropped
-    final sendDropped = sendDest.eq(Const(0xFF, width: 8));
+    final sendDest = mux(mTargetValid, mTarget, defTarget);
+    final sendToAll = sendDest.eq(toAll);
+    // No target, or a core not on the ring: dropped
+    final sendOk = (mTargetValid | defValid) & (sendToAll | exists(sendDest));
     final mboxPacket = NocPacket.make(
       type: NocPacket.mbox,
       dest: sendDest,
@@ -454,8 +570,9 @@ class ParticleRingInterface extends Module {
     );
     // It doesn't go through the injection queue: it is sent from
     // mboxOutPacket the next cycle the ring has room (the timer starts at 0),
-    // ahead of queued data, so the timeout counts from when it left
-    final startSend = mSend & ~outstanding & ~sendDropped;
+    // ahead of queued data, so the timeout counts from when it left. A
+    // broadcast is done once it has left.
+    final startSend = mboxSend ? mSend & ~outstanding & sendOk : Const(0);
     final ackIn = arrives(NocPacket.ack);
     final nackIn = arrives(NocPacket.nack);
 
@@ -473,6 +590,30 @@ class ParticleRingInterface extends Module {
     final answerSent = injectTaken & answerFirst;
     final retrySent = injectTaken & retryNext;
 
+    // ---- CONFIG arriving ----
+    final cfgIn = acceptConfig ? arrives(NocPacket.config) : Const(0);
+    final inWord = NocPacket.payload(eject);
+    final inKind = inWord.getRange(20, 24);
+    final inCh = inWord.getRange(16, 18);
+    final inCore = inWord.getRange(8, 16);
+    final inValueCh = inWord.getRange(0, 2);
+    Logic rxOf(Logic ch, int i) => [
+          for (var c = 0; c < 4; c++)
+            if (channels[c].rx == i && !channels[c].device) c
+        ].map((c) => ch.eq(Const(c, width: 2))).fold<Logic>(
+            Const(0), (a, b) => a | b);
+    // Entry 0, a channel's route, and 1, its input's sender, name a core on
+    // the ring; entry 2 is the default MBOX target
+    final setRoute = [
+      for (var j = 0; j < outputCount; j++)
+        cfgIn & inKind.eq(0) & txOf(inCh, j) & exists(inCore),
+    ];
+    final setSender = [
+      for (var i = 0; i < inputCount; i++)
+        cfgIn & inKind.eq(1) & rxOf(inCh, i) & exists(inCore),
+    ];
+    final setTarget = cfgIn & inKind.eq(2);
+
     // ---- State ----
     Sequential(clk, reset: reset, resetValues: {
       for (final c in _credits) c: Const(bufferWords, width: 9),
@@ -489,13 +630,51 @@ class ParticleRingInterface extends Module {
       aqRd: Const(0, width: 2),
       aqCount: Const(0, width: 3),
       outstanding: Const(0),
+      outBroadcast: Const(0),
       outPacket: Const(0, width: pw),
       retryTimer: Const(0, width: 7),
+      bcValid: Const(0),
+      bcEntry: Const(0, width: entryWidth),
+      configPending: Const(0),
+      configPendingWord: Const(0, width: w),
+      for (var j = 0; j < outputCount; j++) ...{
+        routeCore[j]: Const(txRoutes[j].core, width: 8),
+        routeCh[j]: Const(txRoutes[j].channel, width: 2),
+      },
+      for (var i = 0; i < inputCount; i++) ...{
+        senderCore[i]: Const(rxSenders[i].core, width: 8),
+        senderCh[i]: Const(rxSenders[i].channel, width: 2),
+      },
+      defTarget: Const(mboxDefaultTarget ?? 0, width: 8),
+      defValid: Const(mboxDefaultTarget == null ? 0 : 1),
     }, [
+      // The tables
+      for (var j = 0; j < outputCount; j++)
+        If(setRoute[j], then: [
+          routeCore[j] < inCore,
+          routeCh[j] < inValueCh,
+        ]),
+      for (var i = 0; i < inputCount; i++)
+        If(setSender[i], then: [
+          senderCore[i] < inCore,
+          senderCh[i] < inValueCh,
+        ]),
+      If(setTarget, then: [defTarget < inCore, defValid < Const(1)]),
+      // The broadcast slot
+      If(bcIn, then: [bcValid < Const(1), bcEntry < arrivedEntry]),
+      If(bcTake, then: [bcValid < Const(0)]),
+      // A CONFIG that can't be queued yet waits (a store can't stall)
+      If(configWaits, then: [
+        configPending < Const(1),
+        configPendingWord < cfgWord,
+      ], orElse: [
+        If(enqueueConfig, then: [configPending < Const(0)]),
+      ]),
       // The MBOX receive queue and the answers
       If(takeIn, then: [rqWr < rqWr + 1]),
-      If(toCore, then: [rqRd < rqRd + 1]),
-      rqCount < rqCount + takeIn.zeroExtend(3) - toCore.zeroExtend(3),
+      If(toCore & fromQueue, then: [rqRd < rqRd + 1]),
+      rqCount < rqCount + takeIn.zeroExtend(3) -
+          (toCore & fromQueue).zeroExtend(3),
       If(answer, then: [aqWr < aqWr + 1]),
       If(answerSent, then: [aqRd < aqRd + 1]),
       aqCount < aqCount + answer.zeroExtend(3) - answerSent.zeroExtend(3),
@@ -503,6 +682,7 @@ class ParticleRingInterface extends Module {
       // NACK, or 64 after no answer
       If(startSend, then: [
         outstanding < Const(1),
+        outBroadcast < sendToAll,
         outPacket < mboxPacket,
         retryTimer < Const(0, width: 7),
       ], orElse: [
@@ -513,7 +693,11 @@ class ParticleRingInterface extends Module {
             retryTimer < Const(mboxRetryCycles, width: 7),
           ], orElse: [
             If(retrySent, then: [
-              retryTimer < Const(mboxTimeoutCycles, width: 7),
+              If(outBroadcast, then: [
+                outstanding < Const(0), // no answer comes
+              ], orElse: [
+                retryTimer < Const(mboxTimeoutCycles, width: 7),
+              ]),
             ], orElse: [
               If(outstanding & ~retryTimer.eq(0), then: [
                 retryTimer < retryTimer - 1,
@@ -523,12 +707,18 @@ class ParticleRingInterface extends Module {
         ]),
       ]),
       for (var j = 0; j < outputCount; j++)
-        _credits[j] <
-            _credits[j] -
-                enqueueData[j].zeroExtend(9) +
-                mux(arrives(NocPacket.credit) & forOutput(j),
-                    NocPacket.payload(eject).getRange(0, 9),
-                    Const(0, width: 9)),
+        If(setRoute[j], then: [
+          // A new route starts with all its credits (a word queued in this
+          // cycle goes to the old route)
+          _credits[j] < Const(bufferWords, width: 9),
+        ], orElse: [
+          _credits[j] <
+              _credits[j] -
+                  enqueueData[j].zeroExtend(9) +
+                  mux(arrives(NocPacket.credit) & forOutput(j),
+                      NocPacket.payload(eject).getRange(0, 9),
+                      Const(0, width: 9)),
+        ]),
       for (var i = 0; i < inputCount; i++)
         If(flushIn[i], then: [
           // Every word in the buffer is discarded, and owed (a word read in

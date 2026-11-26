@@ -216,6 +216,23 @@ class ParcoreTop extends Module {
     final corePc = [
       for (var n = 0; n < 4; n++) Logic(name: 'core${n}_pc', width: 32)
     ];
+    // ACTIVITY (0xF000_0040, read only; a read clears it): bit n is set once
+    // stage core n has run a cycle without being blocked (asleep, or waiting
+    // to send), bit 8 once a packet has moved on the ring, since the last
+    // read. The conductor's watchdog polls it (446).
+    final isActivitySel = condMemAddr.eq(Const(0xF0000040, width: 32));
+    final coreBlocked = [for (var n = 0; n < 4; n++) Logic(name: 'core${n}_blocked')];
+    final ringBusy = Logic(name: 'ring_busy');
+    final activity = Logic(name: 'cond_activity', width: 9);
+    final activityNow = [
+      for (var n = 0; n < 4; n++) ~coreBlocked[n] & ~condCoreReset[n],
+      Const(0, width: 4),
+      ringBusy,
+    ].rswizzle();
+    final activityRead = condMemREn & isActivitySel;
+    Sequential(clk, reset: reset, resetValues: {activity: Const(0, width: 9)}, [
+      activity < (mux(activityRead, Const(0, width: 9), activity) | activityNow),
+    ]);
     final corePcRead = mux(
         condMemAddr[3],
         mux(condMemAddr[2], corePc[3], corePc[2]),
@@ -240,8 +257,12 @@ class ParcoreTop extends Module {
     Sequential(clk, [
       readSelRst < isRstCtrlSel,
       readSelSpi < isSpiSel,
-      readSelIo <
-          isStatusSel | isButtonsSel | isCoreStateSel | isCyclesSel | isCorePcSel,
+      readSelIo < isStatusSel |
+          isButtonsSel |
+          isCoreStateSel |
+          isCyclesSel |
+          isCorePcSel |
+          isActivitySel,
       readRstVal < regRstCtrl,
       readSpiVal < spiCtrl.rData,
       readIoVal <
@@ -249,7 +270,8 @@ class ParcoreTop extends Module {
               mux(isCoreStateSel, coreState.zeroExtend(32),
                   mux(isCyclesSel, cycles,
                       mux(isCorePcSel, corePcRead,
-                          buttonsSync.zeroExtend(32))))),
+                          mux(isActivitySel, activity.zeroExtend(32),
+                              buttonsSync.zeroExtend(32)))))),
     ]);
     condMemBRData <= mux(
       readSelRst,
@@ -354,6 +376,8 @@ class ParcoreTop extends Module {
       ringOut[r] <= routers[r].ringOut;
       ringOutValid[r] <= routers[r].ringOutValid;
     }
+    // A packet on any link: for ACTIVITY
+    ringBusy <= ringOutValid.reduce((a, b) => a | b);
     // The conductor's network interface only sends CONFIG: a store to its
     // CONFIG register (0xFFFF_FF0C) sets one table entry of a core, or of
     // every core (Documentation/mbox_design.md, part 6). With
@@ -541,6 +565,7 @@ class ParcoreTop extends Module {
       coreWaiting[n] <= core.waiting;
       coreHalted[n] <= core.halted;
       corePc[n] <= core.pcOut;
+      coreBlocked[n] <= core.blocked;
       m.$1 <= core.mboxStrobeOut;
       m.$2 <= core.mboxVectorOut;
       m.$3 <= core.mboxDataOut;

@@ -11,6 +11,10 @@
 //
 //   * A packet for this router's core (its destination is [coreId]) leaves
 //     the ring: eject/ejectValid, which the network interface always takes.
+//   * A broadcast (destination 0xFF, step 3b): a copy leaves for this core,
+//     and it goes on, until it reaches its sender's router, which takes it
+//     off. Any packet back at its sender's router is dropped there, so a
+//     packet for a core that isn't on the ring can't go round forever.
 //   * Any other packet goes on to the next router.
 //   * The network interface's packet (inject/injectValid) goes on only when
 //     no packet is passing: injectTaken says when.
@@ -26,6 +30,9 @@ import 'keep.dart';
 class NocPacket {
   static const width = 55;
 
+  /// The destination of a broadcast: every core but its sender.
+  static const broadcast = 0xFF;
+
   // Bit positions
   static const payloadLsb = 0; // 32 bits: the word, or a credit count
   static const srcLsb = 32; // 8 bits: the sending core
@@ -38,7 +45,7 @@ class NocPacket {
   static const credit = 1;
   static const flush = 2;
   static const mbox = 3; // channel: the vector; payload: the value
-  // 4 CONFIG comes in step 3b
+  static const config = 4; // payload: the CONFIG word
   static const ack = 5; // an MBOX was taken into the queue
   static const nack = 6; // the queue was full: send it again
 
@@ -97,10 +104,15 @@ class ParticleRingRouter extends Module {
     addOutput('ejectValid');
     addOutput('injectTaken');
 
-    final mine = ringInValid &
-        NocPacket.dest(ringIn).eq(Const(coreId, width: 8));
+    final dest = NocPacket.dest(ringIn);
+    final forMe = dest.eq(Const(coreId, width: 8));
+    final toAll = dest.eq(Const(NocPacket.broadcast, width: 8));
+    final backHome = NocPacket.src(ringIn).eq(Const(coreId, width: 8));
+    final mine = ringInValid & (forMe | toAll & ~backHome);
     // One net for the 55-bit multiplexer's select (see keep.dart)
-    final passing = ParticleKeep(ringInValid & ~mine, name: 'passing_keep').y;
+    final passing = ParticleKeep(ringInValid & ~forMe & ~backHome,
+            name: 'passing_keep')
+        .y;
     final take = injectValid & ~passing;
     eject <= ringIn;
     ejectValid <= mine;
