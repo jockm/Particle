@@ -270,6 +270,93 @@ _h: BBRA    _h
     await h.stop();
   });
 
+  test('WAIT sleeps until an MBOX, which is taken; RETI returns past the WAIT',
+      () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x110
+    ADD     R2, 1
+    RETI
+.org 0x500
+_main:
+    LD      R1, 1
+    WAIT
+    ADD     R1, 1
+_h: BBRA    _h
+'''));
+    await h.start();
+    await h.step(30);
+    expect(h.core.waiting.value.toInt(), equals(1), reason: 'asleep');
+    expect(h.snapshot().reg(1), equals(1));
+    await strobeMbox(h, 1);
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(2), equals(1), reason: 'the handler ran');
+    expect(st.reg(1), equals(2), reason: 'RETI returned past the WAIT');
+    expect(h.core.waiting.value.toInt(), equals(0));
+    await h.stop();
+  });
+
+  test('A masked MBOX ends a WAIT and stays queued until EI', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x110
+    ADD     R2, 1
+    LD      R12, R3         ; set after the WAIT, before EI
+    RETI
+.org 0x500
+_main:
+    DI
+    WAIT
+    LD      R3, 7
+    LD      R13, R2         ; the handler hasn't run
+    EI
+    NOP
+_h: BBRA    _h
+'''));
+    await h.start();
+    await h.step(30);
+    expect(h.core.waiting.value.toInt(), equals(1));
+    await strobeMbox(h, 1);
+    await h.runToHalt();
+    final st = h.snapshot();
+    expect(st.reg(13), equals(0), reason: 'held while masked');
+    expect(st.reg(2), equals(1), reason: 'taken after EI');
+    expect(st.reg(12), equals(7));
+    await h.stop();
+  });
+
+  test('HALT sleeps until reset: an MBOX is not taken', () async {
+    final h = CoreHarness(asm('''
+.org 0x100
+    LDI     R14, _main
+    JMP     R14, R0
+.org 0x110
+    ADD     R2, 1
+    RETI
+.org 0x500
+_main:
+    LD      R1, 1
+    HALT
+    LD      R1, 5
+_h: BBRA    _h
+'''));
+    await h.start();
+    await h.step(30);
+    expect(h.core.halted.value.toInt(), equals(1));
+    await strobeMbox(h, 1);
+    await h.step(40);
+    final st = h.snapshot();
+    expect(st.reg(2), equals(0), reason: 'no MBOX taken');
+    expect(st.reg(1), equals(1));
+    expect(h.core.halted.value.toInt(), equals(1));
+    await h.stop();
+  });
+
   test('An illegal opcode takes vector 15 with R14 = its address', () async {
     final h = CoreHarness(asm('''
 .org 0x100

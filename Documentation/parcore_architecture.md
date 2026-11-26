@@ -33,13 +33,15 @@ The configurations are in `hdl/parcore/lib/parcore_config.dart` (`ParcoreConfig.
 
 Each core leaves out what its firmware doesn't use (`CpuConfig`; a left-out instruction raises vector 15):
 
-| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank | 2-word branches | Immediate `BEXTR` |
-|---|---|---|---|---|---|---|
-| Conductor | yes | no | no | no | no | no |
-| Core 0 | no | yes | yes | no | yes | yes |
-| Core 1 | no | yes | no | no | no | yes |
-| Core 2 | no | no | no | no | yes | yes |
-| Core 3 | no | yes | no | no | no | yes |
+| Core | Pointer modes | Byte/halfword | Takes `MBOX` | Shadow bank | 2-word branches | Immediate `BEXTR` | `WAIT`/`HALT` |
+|---|---|---|---|---|---|---|---|
+| Conductor | yes | no | no | no | no | no | no |
+| Core 0 | no | yes | yes | no | yes | yes | yes |
+| Core 1 | no | yes | no | no | no | yes | yes |
+| Core 2 | no | no | no | no | yes | yes | yes |
+| Core 3 | no | yes | no | no | no | yes | yes |
+
+The stage cores' firmware doesn't use `WAIT` or `HALT` yet; they are built in so that `CORE_STATE` means something and ParticleMan-style firmware can be tried on Parcore. Cores 1–3 don't take `MBOX` traps, so on them a `WAIT` never ends.
 
 The firmware of a core without the 2-word branches is assembled with `-D __NO_LONG_BRANCHES` (the Makefile), so its `JUMP`, `JUMP.cc` and `RCALL` use the forms without them.
 
@@ -81,7 +83,7 @@ The constructor takes `clkFreqMhz` (default 25) and optional binaries for each c
 
 ## Interconnect
 
-The cores talk over a one-way ring, step 2 of the [network on chip](noc_design.md): a `ParticleRingRouter` per core, in the order conductor → core 0 → core 1 → core 2 → core 3 → conductor, with each link a register, so a packet moves one router a cycle. Each stage core has a network interface (`ParticleRingInterface`) on its FIFO port. It holds the receive buffers of the links that come to the core (each 256 32-bit words in one block RAM), a credit count for each link it sends on, an injection queue of 8 packets, and a channel table saying what each of the core's channels 0–3 reads, writes and reports. A word read is a credit owed to its sender, sent back in a `CREDIT` packet (16 at a time, or sooner when there is nothing else to send). The conductor's network interface only sends `CONFIG` packets, which change a core's table (see [Conductor](#conductor)), and only when `ParcoreConfig.writableNocTables` is on; it is off by default (418), so the tables are Parcore's wiring as constants; a core's network interface resets with the core. Each interface builds only the `MBOX` side its core uses: core 0's receives, core 2's sends (to its default target, core 0), and cores 1 and 3 have neither (an `MBOX` sent to them is answered and discarded). The five links, with their length on the ring:
+The cores talk over a one-way ring, step 2 of the [network on chip](noc_design.md): a `ParticleRingRouter` per core, in the order conductor → core 0 → core 1 → core 2 → core 3 → conductor, with each link a register, so a packet moves one router a cycle. Each stage core has a network interface (`ParticleRingInterface`) on its FIFO port. It holds the receive buffers of the links that come to the core (each 256 32-bit words in one block RAM), a credit count for each link it sends on, an injection queue of 8 packets, and a channel table saying what each of the core's channels 0–3 reads, writes and reports. A word read is a credit owed to its sender, sent back in a `CREDIT` packet (16 at a time, or sooner when there is nothing else to send). The conductor's network interface sends `MBOX` packets (its `MBOX Rr, Rl` can go to any core, to wake one from a `WAIT` say, though in Parcore only core 0 takes `MBOX` traps; `MBOX Rr, Imm4` has no default target and is dropped), and `CONFIG` packets, which change a core's table (see [Conductor](#conductor)), only when `ParcoreConfig.writableNocTables` is on; it is off by default (418), so the tables are Parcore's wiring as constants; a core's network interface resets with the core. Each interface builds only the `MBOX` side its core uses: core 0's receives, core 2's sends (to its default target, core 0), and cores 1 and 3 have neither (an `MBOX` sent to them is answered and discarded). The five links, with their length on the ring:
 
 | Link (receive buffer) | Writer (channel) | Reader (channel) | Contents |
 |---|---|---|---|
@@ -183,6 +185,7 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 2 KiB
 | `0xF000_0018` | `SPI_DIV`: bits 15:0, SPI clock divider |
 | `0xF000_0020` | `STATUS`: bits 7:0 the board LEDs while the conductor has them; bit 8 gives them to the guest (core 3's I/O, see [Guest I/O](#guest-io)) |
 | `0xF000_0024` | `BUTTONS` (read only): 1 = pressed; bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT, 5 RIGHT |
+| `0xF000_0028` | `CORE_STATE` (read only): 2 bits per stage core, core *n* at bits 2*n*+1:2*n*: 0 running, 1 asleep in a `WAIT`, 2 halted (`HALT`), 3 held in reset (`RST_CTRL`) |
 | `0xFFFF_FF0C` | `NI_CONFIG` (write only, with `ParcoreConfig.writableNocTables` on): a store sends a `CONFIG` packet setting one entry of a core's table, or of every core's (see [MBOX design](mbox_design.md), part 6). Parcore's firmware doesn't use it, and the switch is off by default (418) |
 
 The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START) while idle starts an 8-bit transfer, most significant bit first. SCK changes once every `SPI_DIV + 1` cycles. MISO is sampled on each rising SCK edge and shifted in on the next falling edge, which is also when the next MOSI bit appears, so MOSI never changes while SCK is high.

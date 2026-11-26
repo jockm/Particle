@@ -29,6 +29,8 @@
 ; 5 RIGHT (1 = pressed).
 .define STATUS_OFFSET       0x20
 .define BUTTONS_OFFSET      0x24
+.define CORE_STATE_OFFSET   0x28    ; CORE_STATE (read): 2 bits per core, 0 running,
+                                    ; 1 in a WAIT, 2 halted, 3 held in reset
 .define STATUS_GUEST_LEDS   0x0100
 
 ; ------------------------------------------------------------------------------

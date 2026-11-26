@@ -22,7 +22,7 @@ This revision of the specification is aligned with the reference simulator `psim
     - `XCHGALL`: Swaps `R1`–`R15` with `S1`–`S15`.
     - `XCHGMOST`: Swaps `R1`–`R14` with `S1`–`S14` while preserving `SP` (`R15`) for instantaneous zero-memory-spill interrupt/trap entry.
 - **Reset**: All registers and shadow registers are zero after reset. (The hardware takes 16 cycles after reset to clear its register file before fetching from the reset vector.)
-- **Optional features**: A core may be built without the pointer modes (load and store modes that change the pointer register), without byte and halfword loads and stores, or without the shadow bank. The instructions of a feature a core leaves out raise Vector 15, as an undefined opcode does. A core may also be built without the 2-word PC-relative instructions (§4.9: `BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, and `LEA`), without the immediate `BEXTR` (§4.6, `0x8D`), or not to take `MBOX` traps. (`CpuConfig` in the HDL; psim's `--no-pointer-modes`, `--no-subword`, `--no-shadow-bank`, `--no-long-branches`, `--no-imm-bextr` and `--no-mbox-receive`; pasm's `--no-long-branches` assembles for a core without the 2-word instructions.)
+- **Optional features**: A core may be built without the pointer modes (load and store modes that change the pointer register), without byte and halfword loads and stores, or without the shadow bank. The instructions of a feature a core leaves out raise Vector 15, as an undefined opcode does. A core may also be built without the 2-word PC-relative instructions (§4.9: `BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, and `LEA`), without the immediate `BEXTR` (§4.6, `0x8D`), without `WAIT` and `HALT` (§4.10), or not to take `MBOX` traps. (`CpuConfig` in the HDL; psim's `--no-pointer-modes`, `--no-subword`, `--no-shadow-bank`, `--no-long-branches`, `--no-imm-bextr`, `--no-wait-halt` and `--no-mbox-receive`; pasm's `--no-long-branches` assembles for a core without the 2-word instructions.)
 - **Flagless Design**: No traditional ALU condition code flags. Branching evaluates registers directly (`FBRA.Z`, `FBRA.NZ`, `FBRA.P`, `BBRA.Z`, etc.), while relational evaluations yield integer boolean results (`0` or `1`) directly in destination registers.
 - **Immediates**: `Imm4` and `Imm8` are zero-extended unless an instruction is marked **(signed imm)**, in which case `Imm4` is sign-extended to $-8 \ldots 7$ and `Imm8` to $-128 \ldots 127$. The `-Imm4` / `-Imm8` forms encode a magnitude ($0 \ldots 15$ / $0 \ldots 255$) and use its negation.
 - **Alignment**: Instruction fetch requires an even PC. 16-bit memory accesses require 2-byte alignment and 32-bit accesses require 4-byte alignment; a misaligned access or fetch raises Vector 14. Byte accesses have no alignment requirement.
@@ -279,6 +279,8 @@ FIFO channels are 256 entries deep. A channel number is taken modulo the number 
 - `0xE5`: `MBOX Rr, Imm4` — As `MBOX Rr, Rl`, with vector `Imm4`, to the core's default target (set by the HDL or psim's `mbox_target`, and changed by `CONFIG`)
 - `0xE8`: `EI` — Enable the asynchronous traps (today `MBOX`)
 - `0xE9`: `DI` — Disable the asynchronous traps: an `MBOX` waits until `EI` or `RETI`
+- `0xEA`: `WAIT` — Sleep until an asynchronous trap is pending (today an `MBOX`), whether or not it is masked. Unmasked, it is taken, with `EPC` past the `WAIT` (`RETI` returns after it); masked, execution goes on after the `WAIT` and the `MBOX` stays queued, so `DI` … check … `WAIT` … `EI` has no race. On a core that doesn't take `MBOX` traps a `WAIT` never ends
+- `0xEB`: `HALT` — Sleep until the core is reset (the conductor restarts it through `RST_CTRL`). No `MBOX` is taken while halted
 - `0xE6`: `FIFO.TRYR Rr, Rl` — Non-blocking read from channel `Rl`: if data, $Rr \leftarrow$ data and $R14 \leftarrow 1$; else $R14 \leftarrow 0$ ($Rr$ unchanged)
 - `0xE7`: `FIFO.TRYW Rr, Rl` — Non-blocking write of `Rr` to channel `Rl`: $R14 \leftarrow 1$ if accepted, $0$ if full
 
@@ -316,6 +318,7 @@ Merged from the retired `particle_processor_architecture_specification.md`, and 
 Added the 2-word PC-relative instructions (item 13 of Road to GHz, 420–433):
 - §4.1: `LEA` (`0x09`). §4.9: the long branches `0xBC`–`0xBF` and `0xCC`–`0xCF`. §2: they can be left out of a core.
 - §4.6: the immediate `BEXTR`/`SBEXTR` (`0x8D`), which can be left out too; `JTBL` takes its entry size from `Rl[1:0]`.
+- §4.10: `WAIT` (`0xEA`) and `HALT` (`0xEB`), which can be left out too.
 
 Removed `RBASE` (register windowing):
 - §2: 16 registers and 16 shadow registers; `XCHGALL` swaps `R1`–`R15`.

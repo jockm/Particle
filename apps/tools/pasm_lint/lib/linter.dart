@@ -149,7 +149,7 @@ const Set<String> allValidMnemonics = {
 
   // Streaming FIFOs & Inter-core Mailbox
   "FIFO.W", "FIFO.R", "FIFO.STAT", "FIFO.TRYW", "FIFO.TRYR", "MBOX",
-  "EI", "DI", "RETI",
+  "EI", "DI", "RETI", "WAIT", "HALT",
 
   // Memory Operations
   "LD", "LDI", "LDIS", "LD8", "LD16", "LD32", "ST8", "ST16", "ST32", "TAS",
@@ -224,7 +224,7 @@ const Map<String, List<String>> instructionForms = {
   "FIFO.R": ["R,R"], "FIFO.W": ["R,R"],
   "FIFO.STAT": ["R,R"], "FIFO.TRYR": ["R,R"], "FIFO.TRYW": ["R,R"],
   "MBOX": ["R,R", "R,V:0:15"],
-  "EI": [""], "DI": [""], "RETI": [""],
+  "EI": [""], "DI": [""], "RETI": [""], "WAIT": [""], "HALT": [""],
 };
 
 final _memOperand = RegExp(r"^\((\+\+|--)?\s*([A-Za-z0-9]+)\s*(\+\+|--)?\)$");

@@ -107,6 +107,8 @@ class ParcoreTop extends Module {
     final condMemARData = Logic(name: 'cond_mem_a_rdata', width: ParticleWidths.halfWord);
     final condMemBRData = Logic(name: 'cond_mem_b_rdata', width: ParticleWidths.word);
 
+    // The conductor's MBOX goes through its network interface (built below)
+    final condMboxSendWait = Logic(name: 'cond_mbox_send_wait');
     final conductor = ParticleCpuCore(
       clk: clk,
       reset: reset,
@@ -114,6 +116,7 @@ class ParcoreTop extends Module {
       memPortBRData: condMemBRData,
       mboxStrobeIn: Const(0),
       mboxVectorIn: Const(0, width: 4),
+      mboxSendWait: condMboxSendWait,
       config: ParcoreConfig.conductorConfig,
       name: 'parcore_conductor',
     );
@@ -189,6 +192,18 @@ class ParcoreTop extends Module {
     final regStatus = Logic(name: 'reg_status', width: 9);
     final isStatusSel = condMemAddr.eq(Const(0xF0000020, width: 32));
     final isButtonsSel = condMemAddr.eq(Const(0xF0000024, width: 32));
+    // CORE_STATE (0xF000_0028, read only): 2 bits per stage core, core n at
+    // bits 2n+1:2n: 0 running, 1 asleep in a WAIT, 2 halted (HALT), 3 held
+    // in reset (RST_CTRL). The cores' outputs are driven once they exist.
+    final isCoreStateSel = condMemAddr.eq(Const(0xF0000028, width: 32));
+    final coreWaiting = [for (var n = 0; n < 4; n++) Logic(name: 'core${n}_waiting')];
+    final coreHalted = [for (var n = 0; n < 4; n++) Logic(name: 'core${n}_halted')];
+    final coreState = [
+      for (var n = 0; n < 4; n++)
+        mux(condCoreReset[n], Const(3, width: 2),
+            mux(coreHalted[n], Const(2, width: 2),
+                mux(coreWaiting[n], Const(1, width: 2), Const(0, width: 2)))),
+    ].rswizzle();
     Sequential(clk, reset: reset, resetValues: {
       regStatus: Const(conductorBinary != null ? 0 : 0x100, width: 9),
     }, [
@@ -209,11 +224,13 @@ class ParcoreTop extends Module {
     Sequential(clk, [
       readSelRst < isRstCtrlSel,
       readSelSpi < isSpiSel,
-      readSelIo < isStatusSel | isButtonsSel,
+      readSelIo < isStatusSel | isButtonsSel | isCoreStateSel,
       readRstVal < regRstCtrl,
       readSpiVal < spiCtrl.rData,
       readIoVal <
-          mux(isStatusSel, regStatus.zeroExtend(32), buttonsSync.zeroExtend(32)),
+          mux(isStatusSel, regStatus.zeroExtend(32),
+              mux(isCoreStateSel, coreState.zeroExtend(32),
+                  buttonsSync.zeroExtend(32))),
     ]);
     condMemBRData <= mux(
       readSelRst,
@@ -340,7 +357,14 @@ class ParcoreTop extends Module {
       ejectValid: routers[0].ejectValid,
       injectTaken: routers[0].injectTaken,
       ringCores: ringOrder,
-      mboxSend: false,
+      // The conductor's MBOX Rr, Rl reaches any core (to wake one from a
+      // WAIT, say); MBOX Rr, Imm4 has no default target and is dropped
+      mboxSend: true,
+      mboxSendStrobe: conductor.mboxStrobeOut,
+      mboxSendVector: conductor.mboxVectorOut,
+      mboxSendData: conductor.mboxDataOut,
+      mboxSendTarget: conductor.mboxTargetOut,
+      mboxSendTargetValid: conductor.mboxTargetValid,
       mboxReceive: false,
       acceptConfig: false,
       configSender: ParcoreConfig.writableNocTables,
@@ -351,6 +375,7 @@ class ParcoreTop extends Module {
     );
     ringInject[0] <= condNi.inject;
     ringInjectValid[0] <= condNi.injectValid;
+    condMboxSendWait <= condNi.mboxSendWait;
 
     // Each core's FIFO port, and its stores to the FLUSH register, driven
     // once the core exists
@@ -493,6 +518,9 @@ class ParcoreTop extends Module {
 
     void driveMbox((Logic, Logic, Logic, Logic, Logic, Logic) m,
         ParticleCpuCore core) {
+      final n = [c0Mbox, c1Mbox, c2Mbox, c3Mbox].indexOf(m);
+      coreWaiting[n] <= core.waiting;
+      coreHalted[n] <= core.halted;
       m.$1 <= core.mboxStrobeOut;
       m.$2 <= core.mboxVectorOut;
       m.$3 <= core.mboxDataOut;

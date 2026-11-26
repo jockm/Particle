@@ -58,6 +58,11 @@ class CpuConfig {
   /// When false they trap as illegal (vector 15). Default: true.
   final bool enableImmBextr;
 
+  /// WAIT (sleep until an MBOX is pending) and HALT (sleep until reset), and
+  /// the core's waiting and halted outputs. When false they trap as illegal
+  /// (vector 15). Default: true.
+  final bool enableWaitHalt;
+
   /// On-chip tightly-coupled BRAM size in bytes (Default: 64 KB)
   final int tcmSizeBytes;
 
@@ -98,6 +103,7 @@ class CpuConfig {
     this.enableShadowBank = true,
     this.enableLongBranches = true,
     this.enableImmBextr = true,
+    this.enableWaitHalt = true,
     this.tcmSizeBytes = 65536,
     this.mmioBaseAddr = 0xF0000000,
     this.enableUlx3sFtdiUart = true,

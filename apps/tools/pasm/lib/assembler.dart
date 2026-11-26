@@ -629,7 +629,7 @@ class ParticleAssembler {
   /// checked where they are encoded).
   static const Map<String, int> operandCounts = {
     'NOP': 0, 'XCHGALL': 0, 'XCHGMOST': 0,
-    'RETI': 0, 'EI': 0, 'DI': 0,
+    'RETI': 0, 'EI': 0, 'DI': 0, 'WAIT': 0, 'HALT': 0,
     'NEG': 1, 'NOT': 1, 'NEZ': 1, 'SEXT8': 1, 'SEXT16': 1, 'REV32': 1,
     'XCHG': 1, 'BRANCH': 1, 'TRAP': 1,
     'FBRA': 1, 'BBRA': 1,
@@ -1250,6 +1250,9 @@ class ParticleAssembler {
     if (mnem == 'RETI') return 0xE300;
     if (mnem == 'EI') return 0xE800;
     if (mnem == 'DI') return 0xE900;
+    // Sleeping: until an MBOX is pending (WAIT), or until reset (HALT)
+    if (mnem == 'WAIT') return 0xEA00;
+    if (mnem == 'HALT') return 0xEB00;
 
     throw AssemblerError(
         "Unimplemented instruction mnemonic '$mnem'", fname, lno);

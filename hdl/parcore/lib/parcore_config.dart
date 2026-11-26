@@ -31,6 +31,8 @@ class ParcoreConfig {
     // Its firmware is assembled with -D __NO_LONG_BRANCHES (the Makefile)
     enableLongBranches: false,
     enableImmBextr: false,
+    // It wakes cores (an MBOX); it never sleeps itself
+    enableWaitHalt: false,
   );
 
   /// Core 0: Instruction Fetch Stage (IF)

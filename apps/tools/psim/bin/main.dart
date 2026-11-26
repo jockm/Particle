@@ -340,6 +340,8 @@ void main(List<String> args) {
       leftOut.add("long_branches");
     } else if (arg == "--no-imm-bextr") {
       leftOut.add("imm_bextr");
+    } else if (arg == "--no-wait-halt") {
+      leftOut.add("wait_halt");
     } else if (arg == "-C" || arg == "--cluster") {
       if (i + 1 >= args.length) {
         stderr.writeln("[ERROR] $arg needs a cluster file");
@@ -371,7 +373,7 @@ void main(List<String> args) {
       return;
     }
     if (leftOut.isNotEmpty) {
-      stderr.writeln("[ERROR] With -C, set pointer_modes, subword, shadow_bank, mbox_receive, long_branches and imm_bextr per core in the cluster file");
+      stderr.writeln("[ERROR] With -C, set pointer_modes, subword, shadow_bank, mbox_receive, long_branches, imm_bextr and wait_halt per core in the cluster file");
       exitCode = exitPsimError;
       return;
     }
@@ -387,6 +389,7 @@ void main(List<String> args) {
   core.mboxReceive = !leftOut.contains("mbox_receive");
   core.longBranches = !leftOut.contains("long_branches");
   core.immBextr = !leftOut.contains("imm_bextr");
+  core.waitHalt = !leftOut.contains("wait_halt");
 
   if (binary != null) {
     final file = File(binary);

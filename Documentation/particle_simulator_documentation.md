@@ -29,6 +29,7 @@ build/tools/psim -C <cluster.json> [options]
 | `--no-shadow-bank` | — | No shadow bank: `XCHG`, `XCHGALL` and `XCHGMOST` raise vector 15. |
 | `--no-long-branches` | — | No 2-word PC-relative instructions (`BRA`, `BRA.Z`/`NZ`/`N`/`P`, `RJUMP disp16`, `BEQ`, `BNE`, `LEA`): they raise vector 15. |
 | `--no-imm-bextr` | — | No immediate `BEXTR`/`SBEXTR` (`0x8D`): it raises vector 15. |
+| `--no-wait-halt` | — | No `WAIT`/`HALT` (`0xEA`/`0xEB`): they raise vector 15. |
 | `--no-mbox-receive` | — | The core ignores `MBOX` traps from other cores. In a cluster, set these per core in the cluster file instead (below). |
 
 ### Exit codes
@@ -67,6 +68,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 * **FIFO routing**: a core's `fifo_connections.tx` routes each local channel to a receive channel on another core. A write to a routed channel (`FIFO.W`, `FIFO.TRYW`) goes into the target core's channel, where its `FIFO.R`/`FIFO.TRYR` read it. A channel that is not routed stays local, as on a single core. `FIFO.STAT` reports the core's own (receiving) channel.
 * **Shared memory**: when `shared_memory_size` is not 0, the window from `shared_memory_base` is the same memory on every core. Loads, stores and `TAS` in it are seen at once by all cores, so `TAS` works as a lock between cores.
 * **MBOX** (`Documentation/mbox_design.md`): `MBOX Rr, Imm4` raises trap `Imm4` on the core's default target (in a two-core cluster the other core; otherwise its `mbox_target`), and `MBOX Rr, Rl` on core `Rl[7:0]` with vector `Rl[11:8]` (`0xFF`: every other core). It goes into the target's queue (4 deep, plus one slot for a broadcast) and waits while that is full; the target takes it before its next instruction unless masked (`DI`/`EI`). Taking it sets `EPC` to the interrupted instruction (a stalled one runs again), masks, and leaves R14 and memory alone; the handler loads the value from `0xFFFF_FF04` and the sender from `0xFFFF_FF08`, and `RETI` returns to `EPC` and unmasks. An `MBOX` to a core that has stopped does nothing. With a single core, `MBOX` does nothing.
+* **WAIT and HALT:** `WAIT` stalls the core until an `MBOX` is pending: unmasked it is taken, with `EPC` past the `WAIT`; masked (`DI`) the core goes on after the `WAIT` and the `MBOX` stays queued. A run in which every core still running is in a `WAIT` or an empty `FIFO.R`, with nothing in flight, is a deadlock (exit 19), and the message names each core's `WAIT`. `HALT` stops the core, as `TRAP 0` does (exit 0): on its own the run ends, and in a cluster the core stops and an `MBOX` to it does nothing. Cluster test `wait_halt`.
 * **Deadlock**: when every running core is waiting (on an empty FIFO, or to send) and no `MBOX` trap can be taken, nothing can change. psim stops with exit code 19 and names each core and the channel it waits on.
 
 ### Cluster file
@@ -110,7 +112,7 @@ These are specific to the simulator (see also §5 of `particle_spec.md`):
 | `initial_registers` | none | Starting values: `R0`–`R15` or `SP`. |
 | `fifo_connections.tx` | none | Routes: local `channel` (0–3) to `target_channel` (0–3, default the same) on `target_core`. |
 | `mbox_target` | the other core of a pair | The core this core's `MBOX` signals. |
-| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive`, `long_branches`, `imm_bextr` | `true` | The core's optional features, as the options above: `false` leaves one out. |
+| `pointer_modes`, `subword`, `shadow_bank`, `mbox_receive`, `long_branches`, `imm_bextr`, `wait_halt` | `true` | The core's optional features, as the options above: `false` leaves one out. |
 
 Numbers may be JSON numbers or strings (`"0x80000000"`). Other fields are ignored.
 

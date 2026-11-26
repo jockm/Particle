@@ -207,6 +207,8 @@ const Map<String, String> mnemonicDocs = {
   "TRAP": "`TRAP Rr` | `TRAP Imm4` (`0xA2` / `0xA3`) — Triggers exception vector `0..15` (base `0x00000100`, 16-byte stride), saving `PC + 2` in `R14`.",
   "BRANCH": "`BRANCH Rr` (`0xA4`) — PC-relative branch by the signed halfword count in `Rr` (PC + `Rr` × 2), without a link.",
   "JUMP": "`JUMP <label>` (pseudo-instruction) — Jumps to `<label>` at any distance. The assembler picks the smallest form that reaches it: `FBRA`/`BBRA` (1 halfword, up to 255 halfwords away), `BRA` (2 halfwords, up to 32K), `LDI R14, label` + `JMP R14, R0` (3 halfwords, target below 64K), or `LDI` + 2 `PUSH8` + `JMP R14, R0` (5 halfwords). The longer forms overwrite `R14`.",
+  "WAIT": "`WAIT` (`0xEA`) — Sleeps until an `MBOX` is pending. Unmasked, the `MBOX` trap is taken and `RETI` returns past the `WAIT`; masked (`DI`), execution goes on after the `WAIT` and the `MBOX` stays queued, so `DI` … `WAIT` … `EI` has no race.",
+  "HALT": "`HALT` (`0xEB`) — Sleeps until the core is reset (the conductor restarts it through `RST_CTRL`). In psim it ends the core's run.",
   "BRA": "`BRA <label>` (`0xCC`, 2 words) — Branches to `<label>`, up to 32K halfwords either way.",
   "BRA.Z": "`BRA.Z Rr, <label>` (`0xBC`, 2 words) — Branches if `Rr == 0`, up to 32K halfwords either way.",
   "BRA.NZ": "`BRA.NZ Rr, <label>` (`0xBD`, 2 words) — Branches if `Rr != 0`, up to 32K halfwords either way.",

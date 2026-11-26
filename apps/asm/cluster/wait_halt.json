@@ -1,0 +1,14 @@
+{
+  "cores": [
+    {
+      "id": 0,
+      "name": "sender",
+      "binary": "../../../build/cluster/wait_halt_sender.bin"
+    },
+    {
+      "id": 1,
+      "name": "receiver",
+      "binary": "../../../build/cluster/wait_halt_receiver.bin"
+    }
+  ]
+}

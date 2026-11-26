@@ -53,6 +53,11 @@ class ParticleCpuCore extends Module {
   /// one at a time); a network interface hands over its queue one by one.
   Logic get mboxReady => output('mboxReady');
 
+  /// Asleep in a WAIT (until an MBOX is pending), and asleep after a HALT
+  /// (until reset): for the conductor's CORE_STATE.
+  Logic get waiting => output('waiting');
+  Logic get halted => output('halted');
+
   // Streaming FIFO Subsystem Interface
   Logic get fifoChanSelect => output('fifoChanSelect');
   Logic get fifoPushData => output('fifoPushData');
@@ -134,6 +139,8 @@ class ParticleCpuCore extends Module {
     addOutput('mboxTargetOut', width: 8);
     addOutput('mboxTargetValid');
     addOutput('mboxReady');
+    addOutput('waiting');
+    addOutput('halted');
 
     addOutput('fifoChanSelect', width: 2);
     addOutput('fifoPushData', width: ParticleWidths.word);
@@ -727,7 +734,9 @@ class ParticleCpuCore extends Module {
             (config.enableLongBranches ||
                 !ParticleOpcodes.longBranchOps.contains(code)) &&
             (config.enableImmBextr ||
-                !ParticleOpcodes.immBextrOps.contains(code)))
+                !ParticleOpcodes.immBextrOps.contains(code)) &&
+            (config.enableWaitHalt ||
+                !ParticleOpcodes.waitHaltOps.contains(code)))
           code,
     ])).named('validOpcode');
     final illegal = ~validOpcode;
@@ -753,8 +762,12 @@ class ParticleCpuCore extends Module {
     // (epc, mboxMasked, mboxValueReg and mboxSourceReg are declared above)
     final divWaiting = eValid & eDivStarted;
     // Without MBOX receive an incoming strobe is ignored
+    // A HALT sleeps until reset: no MBOX is taken while it is in E
+    final haltInE = config.enableWaitHalt
+        ? (eValid & op(ParticleOpcodes.haltOp)).named('haltInE')
+        : Const(0);
     final mboxTake = config.enableMboxReceive
-        ? mboxPending & ~mboxMasked & eValid
+        ? mboxPending & ~mboxMasked & eValid & ~haltInE
         : Const(0);
     mboxReady <= ~mboxPending;
     final mboxTarget = vectorAddr(mboxPendingVec);
@@ -954,7 +967,20 @@ class ParticleCpuCore extends Module {
     final fifoWriteStall = (op(ParticleOpcodes.fifoW) & fifoPushWait) |
         ((op(ParticleOpcodes.mbox) | op(ParticleOpcodes.mboxR)) &
             mboxSendWait);
+    // WAIT stays in E until an MBOX is pending: unmasked it is taken (EPC
+    // past the WAIT); masked the WAIT completes and the MBOX waits. HALT
+    // stays in E until reset.
+    final waitStall = config.enableWaitHalt
+        ? doExec & op(ParticleOpcodes.waitOp) & ~mboxPending
+        : Const(0);
+    final haltStall = config.enableWaitHalt
+        ? doExec & op(ParticleOpcodes.haltOp)
+        : Const(0);
+    waiting <= waitStall;
+    halted <= haltStall;
     final eStall = ((doExec & fifoReadStall) |
+        waitStall |
+        haltStall |
         (doExec & fifoWriteStall) |
         (doExec & isDivOp) |
         (divWaiting & ~divDone & ~mboxTake)).named('eStall');
@@ -1118,7 +1144,10 @@ class ParticleCpuCore extends Module {
       ]),
       // Taking an MBOX trap: EPC, the mask and the MBOX registers
       If(mboxTake, then: [
-        epc < pc,
+        // Taken at a WAIT, it ends the WAIT: RETI returns past it
+        epc < (config.enableWaitHalt
+            ? mux(op(ParticleOpcodes.waitOp), pcPlus2, pc)
+            : pc),
         mboxMasked < Const(1),
         mboxValueReg < mboxPendingData,
         mboxSourceReg < mboxPendingSrc,

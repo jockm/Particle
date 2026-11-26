@@ -367,7 +367,7 @@ test-particle-isa: $(PARTICLE_TEST_DEPS)
 test-parcore: setup firmware guest-tests
 	@echo "==> Running Parcore unit tests..."
 	@(cd $(PARCORE_DIR) && $(DART) test test/parcore_top_test.dart test/parcore_pipeline_trace_test.dart \
-		test/spi_flash_rom_test.dart test/conductor_boot_test.dart)
+		test/spi_flash_rom_test.dart test/conductor_boot_test.dart test/parcore_sleep_test.dart)
 	@echo "==> Booting the whole Parcore ULX3S design from its image ROM (Verilator)..."
 	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) $(DART) test test/parcore_ulx3s_boot_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
@@ -394,7 +394,7 @@ test-sim: $(PSIM) $(BUILD_DIR)/branch_suite.bin
 # Multi-core simulator tests: each cluster file in apps/asm/cluster runs its
 # programs (assembled into build/cluster) and must end with the exit code
 # listed here: 0 when every core ends with TRAP 0, 19 for a deadlock.
-CLUSTER_TESTS := stream:0 mbox:0 shared:0 deadlock:19 mbox_queue:0 mbox_any:0 ring_stream:0 ring_flow:0 ring_flush:0 ring_mbox_queue:0 ring_mbox_any:0 ring_config:0
+CLUSTER_TESTS := stream:0 mbox:0 shared:0 deadlock:19 mbox_queue:0 mbox_any:0 ring_stream:0 ring_flow:0 ring_flush:0 ring_mbox_queue:0 ring_mbox_any:0 ring_config:0 wait_halt:0
 
 test-sim-cluster: $(PSIM) $(PASM_BIN)
 	@echo "==> Running multi-core simulator tests..."

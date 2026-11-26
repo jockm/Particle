@@ -1,9 +1,9 @@
-; A core without the 2-word branches or the immediate BEXTR: BRA,
-; BRA.Z/NZ/N/P, RJUMP disp16, BEQ, BNE, LEA and BEXTR/SBEXTR Rr, Rl, pos, len
-; take vector 15 with R14 = the instruction, like any undefined opcode, and
+; A core without the 2-word branches, the immediate BEXTR or WAIT/HALT: BRA,
+; BRA.Z/NZ/N/P, RJUMP disp16, BEQ, BNE, LEA, BEXTR/SBEXTR Rr, Rl, pos, len,
+; WAIT and HALT take vector 15 with R14 = the instruction, like any undefined opcode, and
 ; change nothing. The handler skips the first word; the second is 0 (NOP).
 ; They are written as halfwords (pasm rejects the branches here).
-; config: no-long-branches no-imm-bextr
+; config: no-long-branches no-imm-bextr no-wait-halt
 .include "lib/vectors.inc"
     RESET_SLOT _main
     TRAP_SLOT_UNEXPECTED 1
@@ -41,6 +41,8 @@ _main:
     .half   0xCF12, 0x0000  ; BNE R1, R2
     .half   0x0906, 0x0000  ; LEA R6: R6 unchanged
     .half   0x8D72, 0x0000  ; BEXTR R7, R2, 0, 0: R7 unchanged
+    .half   0xEA00          ; WAIT
+    .half   0xEB00          ; HALT
     RCALL   _sub            ; LDI + JMP with --no-long-branches
     JUMP    _far            ; LDI + JMP: over 255 halfwords
 _sub:

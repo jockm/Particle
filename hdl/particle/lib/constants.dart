@@ -253,6 +253,8 @@ abstract class ParticleOpcodes {
   static const int fifoTryW = 0xE7;
   static const int ei = 0xE8; // enable the asynchronous traps (MBOX)
   static const int di = 0xE9; // disable the asynchronous traps (MBOX)
+  static const int waitOp = 0xEA; // sleep until an MBOX is pending
+  static const int haltOp = 0xEB; // sleep until reset
 
   /// The loads and stores that change their pointer register (pre/post
   /// increment and decrement): left out with `CpuConfig.enablePointerModes`.
@@ -283,6 +285,9 @@ abstract class ParticleOpcodes {
     braZDisp16, braNZDisp16, braNDisp16, braPDisp16,
     braDisp16, rjumpDisp16, beqDisp16, bneDisp16, lea,
   ];
+
+  /// WAIT and HALT: left out with `CpuConfig.enableWaitHalt`.
+  static const List<int> waitHaltOps = [waitOp, haltOp];
 
   /// The immediate BEXTR: left out with `CpuConfig.enableImmBextr`.
   static const List<int> immBextrOps = [bextrImm];
@@ -455,5 +460,7 @@ abstract class ParticleOpcodes {
     reti,
     ei,
     di,
+    waitOp,
+    haltOp,
   ];
 }

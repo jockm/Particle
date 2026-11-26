@@ -145,6 +145,12 @@ class ParticleCore {
   /// The immediate BEXTR and SBEXTR (0x8D). When false they are illegal.
   bool immBextr = true;
 
+  /// WAIT (0xEA) and HALT (0xEB). When false they are illegal.
+  bool waitHalt = true;
+
+  /// Whether the core is in a WAIT, waiting for an MBOX.
+  bool inWait = false;
+
   /// The opcodes of [longBranches].
   static const longBranchOps = {
     0xBC, 0xBD, 0xBE, 0xBF, 0xCC, 0xCD, 0xCE, 0xCF, 0x09,
@@ -166,6 +172,7 @@ class ParticleCore {
     if (!shadowBank && opcode >= 0xD0 && opcode <= 0xD2) return true;
     if (!longBranches && longBranchOps.contains(opcode)) return true;
     if (!immBextr && opcode == 0x8D) return true;
+    if (!waitHalt && (opcode == 0xEA || opcode == 0xEB)) return true;
     return false;
   }
 
@@ -407,9 +414,13 @@ class ParticleCore {
       final (vector, value, source) = entry;
       stalled = false;
       waitingChannel = null;
+      inWait = false;
       mboxValue = value;
       mboxSource = source;
-      epc = pc;
+      // Taken at a WAIT, it ends the WAIT: RETI returns past it
+      final atWait = waitHalt && ((read16(pc) >> 8) & 0xFF) == 0xEA;
+      _trapTaken = false;
+      epc = atWait ? (pc + 2) & mask32 : pc;
       mboxMasked = true;
       pc = (trapBase + vector * trapStride) & mask32;
       cycleCount++;
@@ -426,6 +437,7 @@ class ParticleCore {
     _trapTaken = false;
     stalled = false;
     waitingChannel = null;
+    inWait = false;
 
     final inst = read16(pc);
     final opcode = (inst >> 8) & 0xFF;
@@ -990,6 +1002,25 @@ class ParticleCore {
       mboxMasked = false; // EI
     } else if (opcode == 0xE9) {
       mboxMasked = true; // DI
+    } else if (opcode == 0xEA) {
+      // WAIT: until an MBOX is pending. Unmasked, it is taken (above, with
+      // EPC past the WAIT); masked, execution goes on and it stays queued
+      final pending = mboxReceive && (mboxQueue.isNotEmpty || mboxBroadcastSlot != null);
+      if (!pending) {
+        stalled = true;
+        inWait = true;
+        waitingChannel = null;
+        cycleCount++;
+        return true;
+      }
+    } else if (opcode == 0xEB) {
+      // HALT: the core sleeps until it is reset; on its own it ends the run
+      final pcHex = pc.toRadixString(16).toUpperCase().padLeft(8, "0");
+      stdout.writeln("\n[SIM] ${label == null ? "" : "$label: "}HALT at PC: 0x$pcHex (Cycles=$cycleCount)");
+      halted = true;
+      haltCode = 0;
+      cycleCount++;
+      return false;
     } else if (opcode == 0xE4) {
       final fid = r[rl] % fifos.length;
       if (network != null && network!.sends(fid)) {

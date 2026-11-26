@@ -99,6 +99,7 @@ class Cluster {
       core.mboxReceive = feature("mbox_receive");
       core.longBranches = feature("long_branches");
       core.immBextr = feature("imm_bextr");
+      core.waitHalt = feature("wait_halt");
       final name = (entry["name"] as String?) ?? "core$id";
       core.label = name;
       if (shared != null) {
@@ -238,7 +239,7 @@ class Cluster {
   List<String> get waiting => [
         for (var i = 0; i < cores.length; i++)
           if (!cores[i].halted && cores[i].stalled)
-            "${names[i]} (core ${ids[i]}) waits on channel ${cores[i].waitingChannel} at PC 0x${cores[i].pc.toRadixString(16).toUpperCase().padLeft(8, '0')}"
+            "${names[i]} (core ${ids[i]}) ${cores[i].inWait ? "waits for an MBOX (WAIT)" : "waits on channel ${cores[i].waitingChannel}"} at PC 0x${cores[i].pc.toRadixString(16).toUpperCase().padLeft(8, '0')}"
       ];
 
   /// The exit code once every core has stopped: 0 when all ended with
