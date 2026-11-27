@@ -68,12 +68,38 @@ class Ecp5PllSettings {
 
 /// The board top level, `ulx3s_board`, which instantiates [coreModule].
 /// With [buttons], the core module also has a `buttons` input, given
-/// btn[6:1] (FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT; 1 = pressed).
+/// btn[6:1] (FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT; 1 = pressed). With
+/// [flash], it also has `flash_csn`, `flash_sck` and `flash_mosi` outputs
+/// and a `flash_miso` input, wired to the board's SPI flash: its clock pin is
+/// the ECP5's configuration clock, reached through the USRMCLK primitive
+/// (the LPF must then have MASTER_SPI_PORT=DISABLE), and HOLD# and WP# are
+/// held high.
 String ulx3sBoardVerilog({
   required Ecp5PllSettings pll,
   String coreModule = 'particle_ulx3s_top',
   bool buttons = false,
+  bool flash = false,
 }) {
+  final flashPorts = flash
+      ? '\n  output logic        flash_csn,'
+          '\n  output logic        flash_mosi,'
+          '\n  input  logic        flash_miso,'
+          '\n  output logic        flash_holdn,'
+          '\n  output logic        flash_wpn,'
+      : '';
+  final flashPins = flash
+      ? '\n    .flash_csn(flash_csn),'
+          '\n    .flash_sck(flashSck),'
+          '\n    .flash_mosi(flash_mosi),'
+          '\n    .flash_miso(flash_miso),'
+      : '';
+  final flashClock = flash
+      ? '\n  // The flash\'s clock is the configuration clock pin, driven '
+          'through USRMCLK'
+          '\n  USRMCLK flash_clock (.USRMCLKI(flashSck), .USRMCLKTS(1\'b0));'
+          '\n  assign flash_holdn = 1\'b1;'
+          '\n  assign flash_wpn = 1\'b1;\n'
+      : '';
   String mhz(int hz) => (hz / 1e6).toString().replaceAll(RegExp(r'\.0$'), '');
   return '''
 // =============================================================================
@@ -86,7 +112,7 @@ module ulx3s_board (
   output logic [7:0]  led,
   input  logic        ftdi_txd,
   output logic        ftdi_rxd,
-  inout  wire  [27:0] gp,
+  inout  wire  [27:0] gp,$flashPorts
   output logic        wifi_gpio0
 );
   logic clk;
@@ -128,7 +154,7 @@ module ulx3s_board (
     .LOCK(pllLocked)
   );
 
-  logic gpioTx;
+  logic gpioTx;${flash ? '\n  logic flashSck;' : ''}
 
   $coreModule core_top (
     .clk(clk),
@@ -136,10 +162,10 @@ module ulx3s_board (
     .ftdi_rx_pin(ftdi_txd),
     .gpio_rx_pin(gp[1]),
     .ftdi_tx_pin(ftdi_rxd),
-    .gpio_tx_pin(gpioTx),${buttons ? '\n    .buttons(btn[6:1]),' : ''}
+    .gpio_tx_pin(gpioTx),${buttons ? '\n    .buttons(btn[6:1]),' : ''}$flashPins
     .leds(led)
   );
-
+$flashClock
   assign gp[0] = gpioTx;
   assign gp[27:1] = 27'bz;
   assign wifi_gpio0 = 1'b1;

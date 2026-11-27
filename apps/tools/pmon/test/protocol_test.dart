@@ -10,7 +10,13 @@ import 'package:test/test.dart';
 
 /// pmon's frames, as the firmware handles them, over memory.
 class FakePmon {
+  FakePmon({this.flashWritable = false});
+
   final memory = <int, int>{}; // byte address -> byte
+  final flashMemory = <int, int>{}; // erased (0xFF) where absent
+  final bool flashWritable;
+  var erases = 0;
+  var programs = 0;
   int rstCtrl = 0x80000000;
   int cycles = 1000;
   final List<int> pcs = [0x2000, 0x268, 0x230, 0x21A];
@@ -25,7 +31,7 @@ class FakePmon {
     if (_in.length < 8) return;
     final cmd = String.fromCharCode(_in[1]);
     final len = _in[6] | _in[7] << 8;
-    final dataLen = cmd == 'W' ? len : 0;
+    final dataLen = cmd == 'W' || cmd == 'P' ? len : 0;
     if (_in.length < 8 + dataLen + 2) return;
     final f = List.of(_in);
     _in.clear();
@@ -64,6 +70,28 @@ class FakePmon {
           for (final w in [0xC0, cycles, ...pcs, rstCtrl]) ...le32(w),
         ]);
       case 'B':
+        out.add(ack);
+      case 'F':
+        if (err != 0) return _nak(err);
+        _reply([for (var i = 0; i < len; i++) flashMemory[addr + i] ?? 0xFF]);
+      case 'E':
+        if (addr % 4096 != 0) return _nak(3);
+        if (!flashWritable) return _nak(6);
+        if (addr < 0x400000 || addr + 4096 > 0x1000000) return _nak(5);
+        for (var i = 0; i < 4096; i++) {
+          flashMemory.remove(addr + i);
+        }
+        erases++;
+        out.add(ack);
+      case 'P':
+        if (err != 0) return _nak(err);
+        if (addr % 256 + len > 256) return _nak(3);
+        if (!flashWritable) return _nak(6);
+        if (addr < 0x400000 || addr + len > 0x1000000) return _nak(5);
+        for (var i = 0; i < len; i++) {
+          flashMemory[addr + i] = (flashMemory[addr + i] ?? 0xFF) & f[8 + i];
+        }
+        programs++;
         out.add(ack);
       default:
         _nak(2);
@@ -264,6 +292,57 @@ void main() {
     expect(e is PmonException, isTrue, reason: '$e');
     expect('$e', contains('after 4 tries'));
     expect(link.written.length, equals(4));
+  });
+
+  test('flash erases the sectors, programs the pages, skips blank ones, '
+      'and verifies', () async {
+    final pmon = FakePmon(flashWritable: true);
+    pmon.flashMemory[0x401000] = 0x00; // old data, erased first
+    final image = [
+      for (var i = 0; i < 5001; i++) i < 256 || i >= 512 ? (i * 3) & 0xFF : 0xFF,
+    ];
+    final stages = <String>[];
+    await client(FakeLink(pmon)).flash(0x400000, image,
+        progress: (stage, done, total) {
+      if (stages.isEmpty || stages.last != stage) stages.add(stage);
+    });
+    expect(pmon.erases, equals(2));
+    // 5004 bytes (padded with 0xFF): 20 pages, the blank second one skipped
+    expect(pmon.programs, equals(19));
+    for (var i = 0; i < image.length; i++) {
+      expect(pmon.flashMemory[0x400000 + i] ?? 0xFF, equals(image[i]));
+    }
+    expect(pmon.flashMemory[0x401000 + 905] ?? 0xFF, equals(0xFF),
+        reason: 'past the image, still erased');
+    expect(stages, equals(['erase', 'program', 'verify']));
+  });
+
+  test('readFlash reads the flash (or the on-chip ROM)', () async {
+    final pmon = FakePmon();
+    pmon.flashMemory[0x400000] = 0x50;
+    pmon.flashMemory[0x400001] = 0x41;
+    expect(await client(FakeLink(pmon)).readFlash(0x400000, 4),
+        equals([0x50, 0x41, 0xFF, 0xFF]));
+  });
+
+  test("The flash can't be written without PARCORE_REAL_FLASH: NAK 6",
+      () async {
+    final c = client(FakeLink(FakePmon()));
+    final e = await errorOf(c.eraseSector(0x400000));
+    expect(e is PmonException && e.code == PmonErrorCode.noFlash, isTrue,
+        reason: '$e');
+  });
+
+  test('Below 0x400000 (the bitstream): refused by the tool, NAK 5 by pmon',
+      () async {
+    final c = client(FakeLink(FakePmon(flashWritable: true)));
+    expect(await errorOf(c.flash(0x3FF000, [1, 2, 3, 4])) is ArgumentError,
+        isTrue);
+    final e = await errorOf(c.eraseSector(0x3FF000));
+    expect(e is PmonException && e.code == PmonErrorCode.range, isTrue,
+        reason: '$e');
+    expect(await errorOf(c.programPage(0x4000FC, List.filled(8, 0))) is
+        ArgumentError, isTrue, reason: 'across a page');
   });
 
   test('Misaligned addresses and lengths are refused before sending',

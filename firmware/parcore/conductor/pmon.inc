@@ -8,16 +8,18 @@
 ; supervisor calls it from its loop with R5 = RST_CTRL (0xF000_0000); it
 ; keeps R5, R6, R11 and R13 (R13 is the length of the line typed so far).
 ;
-; The leaf routines (those that don't save R14) use only FBRA and BBRA: the
-; conductor has no 2-word branches, so a JUMP.cc out of their range becomes
-; LDI R14 and JMP, which would lose the return address.
+; The leaf routines (those that don't save R14) use only FBRA and BBRA, or
+; a JUMP.cc away for good (to _pf_nak): the conductor has no 2-word
+; branches, so a JUMP.cc out of their range becomes LDI R14 and JMP, which
+; would lose the return address.
 ;
-; Needs conductor_regs.inc and _reset_vector.
+; Needs conductor_regs.inc, spi.inc (F, E, P) and _reset_vector.
 ; ==============================================================================
 
-.define PMON_LINE_BUF       0x0E00  ; the line typed, a character a word (128
-                                    ; bytes): SECTION_TABLE's, which only boot
-                                    ; uses
+.define PMON_LINE_BUF       0x1C80  ; the line typed, a character a word (128
+                                    ; bytes)
+.define PMON_FRAME_BUF      0x1D00  ; a P frame's data (256 bytes), checked
+                                    ; before it goes to the flash
 .define PMON_LINE_MAX       32
 .define PMON_SOH            0x01
 .define PMON_ACK            0x06
@@ -27,6 +29,14 @@
 .define PMON_ERR_ALIGN      3       ; address or length not a multiple of 4,
                                     ; or a length over 256
 .define PMON_ERR_HELD       4       ; a core's TCM, with the core not held
+.define PMON_ERR_RANGE      5       ; E, P: below 0x40_0000 (the bitstream's)
+                                    ; or past 16 MiB
+.define PMON_ERR_NO_FLASH   6       ; E, P: the flash can't be written (the
+                                    ; on-chip ROM; STATUS bit 9 clear)
+.define PMON_ERR_FLASH      7       ; E, P: the flash stayed busy
+.ifndef PMON_FLASH_SHIFT
+.define PMON_FLASH_SHIFT    27      ; how long E and P wait for the flash:
+.endif                              ; 1 << 27 cycles (5.4 s at 25 MHz)
 .ifndef PMON_TIMEOUT_SHIFT
 .define PMON_TIMEOUT_SHIFT  21      ; a frame's bytes: 1 << 21 cycles (2.1
 .endif                              ; million, 84 ms at 25 MHz); 16 to 30
@@ -208,7 +218,7 @@ _pmon_prompt:
 ;   r ADDR [N]      read N words (1 by default)
 ;   w ADDR VALUE    write a word
 ;   b               boot again from flash
-;   ?               help
+;   ?, help         help
 ; Numbers are hex. Uses R1-R4, R7-R10, R12.
 ; ------------------------------------------------------------------------------
 _pmon_command:
@@ -259,6 +269,30 @@ _pmon_command:
     RCALL   _pmon_status_text
     JUMP    ._cmd_done
 ._cmd_h:
+    ; "help" (4 characters: h, e, l, p, in either case)
+    LD      R2, R13
+    SUB     R2, 4
+    JUMP.NZ R2, ._hold
+    LDI     R3, PMON_LINE_BUF + 4
+    LD32    R1, (R3++)
+    LD      R14, 32
+    OR      R1, R14
+    LD      R14, 0x65               ; 'e'
+    SUB     R1, R14
+    JUMP.NZ R1, ._hold
+    LD32    R1, (R3++)
+    LD      R14, 32
+    OR      R1, R14
+    LD      R14, 0x6C               ; 'l'
+    SUB     R1, R14
+    JUMP.NZ R1, ._hold
+    LD32    R1, (R3++)
+    LD      R14, 32
+    OR      R1, R14
+    LD      R14, 0x70               ; 'p'
+    SUB     R1, R14
+    JUMP.Z  R1, ._cmd_help
+._hold:
     RCALL   _pmon_hex
     JUMP.Z  R2, ._cmd_bad
     LD      R14, 0x3F
@@ -424,6 +458,14 @@ _pmon_status_text:
 ;   W       write the data      R       read LENGTH bytes
 ;   S       status: CORE_STATE, CYCLES, the PCs of cores 0-3, RST_CTRL
 ;   B       boot again from flash (after the ACK)
+;   F       read LENGTH bytes of the flash (or the on-chip ROM) at ADDR
+;   E       erase the flash's 4 KiB sector at ADDR
+;   P       program the data into the flash at ADDR, within one 256-byte
+;           page (erased first: programming only clears bits)
+; E and P need a flash that can be written (STATUS bit 9: a
+; PARCORE_REAL_FLASH=1 build; else NAK 6), and keep to 0x40_0000 up to
+; 16 MiB (NAK 5): below is the bitstream. P's data is checked (its CRC)
+; before any of it goes to the flash.
 ; For W and R, the address and length are multiples of 4 and the length at
 ; most 256 (else NAK PMON_ERR_ALIGN); only W carries data. A frame whose
 ; bytes stop for 1 << PMON_TIMEOUT_SHIFT cycles is dropped unanswered.
@@ -457,9 +499,27 @@ _pmon_frame:
     JUMP.Z  R1, ._checked
     LD      R11, 0
 ._checked:
-    ; Only W carries data: it is written as it arrives (the cores it goes to
-    ; are held), so a W with a bad CRC has written its data anyway; the host
-    ; sends it again
+    ; P's data goes to PMON_FRAME_BUF, to be checked before it is programmed
+    LD      R14, 0x50               ; 'P'
+    LD      R2, R7
+    SUB     R2, R14
+    JUMP.NZ R2, ._not_p
+    JUMP.NZ R11, ._skip_data
+    LDI     R11, PMON_FRAME_BUF     ; (R11 is 0: no error)
+    LD      R13, R9
+    SHIFTR  R13, 2
+._p_data:
+    JUMP.Z  R13, ._p_done
+    RCALL   _pf_word
+    ST32    (R11++), R1
+    SUB     R13, 1
+    JUMP    ._p_data
+._p_done:
+    LD      R11, 0
+    JUMP    ._crc
+._not_p:
+    ; W's data is written as it arrives (the cores it goes to are held), so
+    ; a W with a bad CRC has written its data anyway; the host sends it again
     LD      R14, 0x57               ; 'W'
     LD      R2, R7
     SUB     R2, R14
@@ -512,6 +572,18 @@ _pmon_frame:
     LD      R2, R7
     SUB     R2, R14
     JUMP.Z  R2, ._f_b
+    LD      R14, 0x46               ; 'F'
+    LD      R2, R7
+    SUB     R2, R14
+    JUMP.Z  R2, ._f_f
+    LD      R14, 0x45               ; 'E'
+    LD      R2, R7
+    SUB     R2, R14
+    JUMP.Z  R2, ._f_e
+    LD      R14, 0x50               ; 'P'
+    LD      R2, R7
+    SUB     R2, R14
+    JUMP.Z  R2, ._f_p
     LD      R1, PMON_ERR_COMMAND
     JUMP    _pf_nak
 ._f_h:
@@ -571,6 +643,192 @@ _pmon_frame:
 ._f_b:
     RCALL   _pf_send_ack
     JUMP    _reset_vector
+._f_f:
+    LD      R1, R11
+    JUMP.NZ R1, _pf_nak
+    RCALL   _pf_spi
+    RCALL   _fl_select
+    LD      R1, 0x03                ; read
+    RCALL   _spi_xfer_byte
+    LD      R4, R8
+    RCALL   _fl_addr
+    RCALL   _pf_send_ack
+    LDI     R10, 0xFFFF
+    LD      R13, R9
+    SHIFTR  R13, 2
+._ff_word:
+    JUMP.Z  R13, ._ff_end
+    RCALL   _spi_read_word_raw
+    RCALL   _pf_send_word
+    SUB     R13, 1
+    JUMP    ._ff_word
+._ff_end:
+    RCALL   _spi_end_read
+    JUMP    _pf_send_crc
+._f_e:
+    LD      R1, PMON_ERR_ALIGN
+    LDI     R2, 0x0FFF
+    LD      R3, R8
+    AND     R3, R2
+    JUMP.NZ R3, _pf_nak             ; not a sector's start
+    LDI     R9, 0x1000
+    RCALL   _pf_writable
+    RCALL   _pf_range
+    RCALL   _pf_spi
+    RCALL   _fl_wren
+    RCALL   _fl_select
+    LD      R14, 0x20               ; sector erase
+    LD      R1, R14
+    RCALL   _spi_xfer_byte
+    LD      R4, R8
+    RCALL   _fl_addr
+    RCALL   _spi_end_read
+    JUMP    ._fl_wait_done
+._f_p:
+    LD      R1, R11
+    JUMP.NZ R1, _pf_nak
+    LD      R1, PMON_ERR_ALIGN      ; within one page
+    LDI     R2, 0xFF
+    LD      R3, R8
+    AND     R3, R2
+    ADD     R3, R9
+    LDI     R2, 257
+    SLT     R3, R2
+    JUMP.Z  R3, _pf_nak
+    RCALL   _pf_writable
+    RCALL   _pf_range
+    RCALL   _pf_spi
+    RCALL   _fl_wren
+    RCALL   _fl_select
+    LD      R1, 0x02                ; page program
+    RCALL   _spi_xfer_byte
+    LD      R4, R8
+    RCALL   _fl_addr
+    LDI     R11, PMON_FRAME_BUF
+    LD      R13, R9
+    SHIFTR  R13, 2
+._fp_word:
+    JUMP.Z  R13, ._fp_sent
+    LD32    R4, (R11++)
+    LD      R7, 4
+._fp_byte:
+    LD      R1, R4
+    RCALL   _spi_xfer_byte
+    SHIFTR  R4, 8
+    SUB     R7, 1
+    JUMP.NZ R7, ._fp_byte
+    SUB     R13, 1
+    JUMP    ._fp_word
+._fp_sent:
+    RCALL   _spi_end_read
+._fl_wait_done:
+    RCALL   _fl_wait
+    LD      R2, R1
+    LD      R1, PMON_ERR_FLASH
+    JUMP.NZ R2, _pf_nak
+    JUMP    _pf_ack
+
+; R6 = SPI_CTRL (0xF000_0010), for the boot's _spi_ routines (_pmon_frame
+; puts the supervisor's R6 back)
+_pf_spi:
+    LD      R6, R5
+    ADD     R6, 15
+    ADD     R6, 1
+    RRET
+
+; E and P need a flash that can be written: STATUS bit 9 (uses R1, R2)
+_pf_writable:
+    LD      R2, R5
+    ADD     R2, 15
+    ADD     R2, 15
+    ADD     R2, 2                   ; STATUS (0xF000_0020)
+    LD32    R2, (R2)
+    SHIFTR  R2, 9
+    AND     R2, 1
+    LD      R1, PMON_ERR_NO_FLASH
+    JUMP.Z  R2, _pf_nak
+    RRET
+
+; R8 to R8 + R9 must lie in 0x40_0000 to 16 MiB (uses R1-R3)
+_pf_range:
+    LD      R1, PMON_ERR_RANGE
+    LDI     R2, 0x40
+    SHIFTL  R2, 15
+    SHIFTL  R2, 1                   ; 0x0040_0000
+    LD      R3, R8
+    SLT     R3, R2
+    JUMP.NZ R3, _pf_nak             ; the bitstream's
+    LDI     R2, 0x100
+    SHIFTL  R2, 15
+    SHIFTL  R2, 1
+    ADD     R2, 1                   ; 0x0100_0001
+    LD      R3, R8
+    ADD     R3, R9
+    SLT     R3, R2
+    JUMP.Z  R3, _pf_nak             ; past 16 MiB
+    RRET
+
+; CS_N high, then low: a new flash command (uses R1)
+_fl_select:
+    LD      R1, 1
+    ST32    (R6), R1
+    ST32    (R6), R0
+    RRET
+
+; The 24-bit flash address in R4, high byte first (uses R1-R3)
+_fl_addr:
+    ST32    (--SP), R14
+    LD      R1, R4
+    SHIFTR  R1, 15
+    SHIFTR  R1, 1
+    RCALL   _spi_xfer_byte
+    LD      R1, R4
+    SHIFTR  R1, 8
+    RCALL   _spi_xfer_byte
+    LD      R1, R4
+    RCALL   _spi_xfer_byte
+    LD32    R14, (SP++)
+    RRET
+
+; Write enable (uses R1-R3)
+_fl_wren:
+    ST32    (--SP), R14
+    RCALL   _fl_select
+    LD      R1, 0x06
+    RCALL   _spi_xfer_byte
+    RCALL   _spi_end_read
+    LD32    R14, (SP++)
+    RRET
+
+; Wait while the flash is busy (status bit 0, WIP): R1 = 0 once it isn't,
+; 1 if it still is after 1 << PMON_FLASH_SHIFT cycles (uses R1-R4)
+_fl_wait:
+    ST32    (--SP), R14
+    LDI     R4, CYCLES_OFFSET
+    ADD     R4, R5
+    LD32    R4, (R4)                ; when it started
+    RCALL   _fl_select
+    LD      R1, 0x05                ; read status, again and again
+    RCALL   _spi_xfer_byte
+._busy:
+    LD      R1, 0
+    RCALL   _spi_xfer_byte
+    AND     R1, 1
+    JUMP.Z  R1, ._ready
+    LDI     R2, CYCLES_OFFSET
+    ADD     R2, R5
+    LD32    R1, (R2)
+    SUB     R1, R4
+    SHIFTR  R1, 15
+    SHIFTR  R1, PMON_FLASH_SHIFT - 15
+    JUMP.Z  R1, ._busy
+    LD      R1, 1
+._ready:
+    ST32    (--SP), R1
+    RCALL   _spi_end_read
+    LD32    R1, (SP++)
+    LD32    R14, (SP++)
+    RRET
 
 ; A W into a core's TCM (0x1000_0000 + (n << 16)) needs core n held: R11 =
 ; PMON_ERR_HELD if it isn't (uses R1-R3)
@@ -649,18 +907,18 @@ _pf_send:
     LD32    R14, (SP++)
     RRET
 
-; Send the word in R1, little-endian, adding it to the CRC (uses R1-R4, R6)
+; Send the word in R1, little-endian, adding it to the CRC (uses R1-R4, R7)
 _pf_send_word:
     ST32    (--SP), R14
-    LD      R6, R1
+    LD      R7, R1
     LD      R14, 4
     ST32    (--SP), R14
 ._byte4:
-    LD      R1, R6
+    LD      R1, R7
     LDI     R2, 0xFF
     AND     R1, R2
     RCALL   _pf_send
-    SHIFTR  R6, 8
+    SHIFTR  R7, 8
     LD32    R1, (SP)
     SUB     R1, 1
     ST32    (SP), R1
@@ -716,7 +974,7 @@ _str_prompt:
 _str_what:
     .asciz  "?\r\n"
 _str_help:
-    .asciz  "s status | h MASK hold | g MASK go | r ADDR [N] read | w ADDR VALUE write | b boot\r\n"
+    .asciz  "s status | h MASK hold | g MASK go | r ADDR [N] read | w ADDR VALUE write | b boot | ? help\r\n"
 _str_state:
     .asciz  "state "
 _str_cycles:

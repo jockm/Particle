@@ -25,7 +25,12 @@ class ParcoreTop extends Module {
 
   /// FTDI UART divisor: clock cycles per bit (clkFreqMhz MHz / ftdiBaud).
   final int ftdiDivisor;
+
+  /// The console UART's divisor (clkFreqMhz MHz / consoleBaud).
   final int consoleDivisor;
+
+  /// The SPI lines go to a flash that can be written (STATUS bit 9).
+  final bool flashWritable;
 
   Logic get clk => input('clk');
   Logic get reset => input('reset');
@@ -65,6 +70,7 @@ class ParcoreTop extends Module {
     int ftdiBaud = 1000000,
     Logic? consoleRx,
     int consoleBaud = 115200,
+    this.flashWritable = false,
     List<int>? conductorBinary,
     List<int>? core0Binary,
     List<int>? core1Binary,
@@ -142,7 +148,7 @@ class ParcoreTop extends Module {
     final condMemWEn   = conductor.memPortBWEn;
     final condMemREn   = conductor.memPortBREn;
 
-    // Conductor local TCM (4 KB)
+    // Conductor local TCM (8 KB)
     final condAddrBits = (log(ParcoreConfig.conductorConfig.tcmSizeBytes) / ln2).round();
     final condLocalSelect = condMemAddr.slice(31, 28).eq(Const(0x0, width: 4));
     final condTcm = ParcoreTcm(
@@ -203,7 +209,9 @@ class ParcoreTop extends Module {
 
     // STATUS (0xF000_0020): bits [7:0] the LEDs while the conductor has them,
     // bit 8 gives them to the guest. Without a conductor the guest has them
-    // from reset. BUTTONS (0xF000_0024, read only).
+    // from reset. Bit 9 (read only): the SPI lines go to a flash that can be
+    // written (flashWritable), so pmon may erase and program it.
+    // BUTTONS (0xF000_0024, read only).
     final regStatus = Logic(name: 'reg_status', width: 9);
     final isStatusSel = condMemAddr.eq(Const(0xF0000020, width: 32));
     final isButtonsSel = condMemAddr.eq(Const(0xF0000024, width: 32));
@@ -352,7 +360,8 @@ class ParcoreTop extends Module {
       readRstVal < regRstCtrl,
       readSpiVal < spiCtrl.rData,
       readIoVal <
-          mux(isStatusSel, regStatus.zeroExtend(32),
+          mux(isStatusSel,
+              [Const(flashWritable ? 1 : 0), regStatus].swizzle().zeroExtend(32),
               mux(isCoreStateSel, coreState.zeroExtend(32),
                   mux(isCyclesSel, cycles,
                       mux(isCorePcSel, corePcRead,

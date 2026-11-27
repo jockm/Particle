@@ -21,7 +21,8 @@
 .define SPI_DIV_ADDR        0xF0000018
 
 ; STATUS (0xF000_0020): bits [7:0] the LEDs while the conductor has them;
-; bit 8 gives the LEDs to the guest (core 3's I/O, 0x1000_0008).
+; bit 8 gives the LEDs to the guest (core 3's I/O, 0x1000_0008); bit 9 (read
+; only) the SPI lines go to a flash that can be written (PARCORE_REAL_FLASH).
 ; BUTTONS (0xF000_0024, read): bit 0 FIRE1, 1 FIRE2, 2 UP, 3 DOWN, 4 LEFT,
 ; 5 RIGHT (1 = pressed).
 .define STATUS_OFFSET       0x20

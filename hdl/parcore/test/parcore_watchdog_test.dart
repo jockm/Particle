@@ -38,7 +38,7 @@ _reset_vector:
     JMP     R14, R0
 .org 0x200
 _main:
-    LDI     SP, 0x1000
+    LDI     SP, 0x2000
     LOAD32  R5, 0xF0000000      ; RST_CTRL
     LD      R14, ${0x3F & ~release}
     ST32    (R5), R14
@@ -53,6 +53,7 @@ _fault_delay:
     RRET
 .include "firmware/parcore/conductor/watchdog.inc"
 .include "firmware/parcore/conductor/pmon.inc"
+.include "firmware/parcore/conductor/spi.inc"
 ''';
 
 /// Core 1: about 1,000 cycles of work, then a FIFO.R that never ends (its

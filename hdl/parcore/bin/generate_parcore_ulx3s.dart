@@ -7,13 +7,20 @@
 //
 // dart run bin/generate_parcore_ulx3s.dart --conductor <conductor.bin>
 //     --image <parcore_image.bin> --out <dir> [--clock-hz <hz>]
+//     [--real-flash]
+//
+// --real-flash (PARCORE_REAL_FLASH=1; 448, 449): no ROM; the conductor reads
+// the image from the board's flash (put there with make
+// parcore-flash-image-jtag or pmon flash) and pmon can erase and program it.
+// The image is then not needed. Off by default.
 //
 // Writes into <dir>:
 //   parcore_ulx3s.sv      top level ulx3s_board
 //   <tcm>_bank0/1.hex     each TCM's initial contents ($readmemh): the
 //                         conductor's code; the stage cores' TCMs empty (the
 //                         conductor loads them from the image)
-//   parcore_image_rom.hex the boot image ROM, one byte per line
+//   parcore_image_rom.hex the boot image ROM, one byte per line (not with
+//                         --real-flash)
 
 import 'dart:io';
 
@@ -28,7 +35,8 @@ const ulx3sOscillatorHz = 25000000;
 Never usage(String message) {
   stderr.writeln('generate_parcore_ulx3s: $message');
   stderr.writeln('usage: dart run bin/generate_parcore_ulx3s.dart '
-      '--conductor <bin> --image <bin> --out <dir> [--clock-hz <hz>]');
+      '--conductor <bin> --image <bin> --out <dir> [--clock-hz <hz>] '
+      '[--real-flash]');
   exit(2);
 }
 
@@ -37,6 +45,7 @@ Future<void> main(List<String> args) async {
   String? imagePath;
   String? outDir;
   var clockHz = 25000000;
+  var realFlash = false;
   for (var i = 0; i < args.length; i++) {
     String next() =>
         i + 1 < args.length ? args[++i] : usage('${args[i]} needs a value');
@@ -49,12 +58,14 @@ Future<void> main(List<String> args) async {
         outDir = next();
       case '--clock-hz':
         clockHz = int.tryParse(next()) ?? usage('--clock-hz needs a number');
+      case '--real-flash':
+        realFlash = true;
       default:
         usage('unknown option: ${args[i]}');
     }
   }
   if (conductorPath == null) usage('--conductor is required');
-  if (imagePath == null) usage('--image is required');
+  if (imagePath == null && !realFlash) usage('--image is required');
   if (outDir == null) usage('--out is required');
 
   final pll = () {
@@ -66,7 +77,7 @@ Future<void> main(List<String> args) async {
   }();
 
   final conductor = File(conductorPath).readAsBytesSync();
-  final image = File(imagePath).readAsBytesSync();
+  final image = imagePath == null ? null : File(imagePath).readAsBytesSync();
   final dir = Directory(outDir)..createSync(recursive: true);
 
   // Each TCM's bank files, as ParcoreTop(tcmInitDir:) expects
@@ -93,19 +104,26 @@ Future<void> main(List<String> args) async {
     gpioRxPin: Logic(name: 'gpio_rx_pin'),
     buttons: Logic(name: 'buttons', width: 6),
     conductorBinary: conductor,
-    image: image,
+    image: realFlash ? null : image,
+    realFlash: realFlash,
+    flashMiso: realFlash ? Logic(name: 'flash_miso') : null,
     clockHz: clockHz,
     tcmInitDir: '.',
     romInitFile: 'parcore_image_rom.hex',
   );
   await top.build();
-  final rom = top.subModules.whereType<SpiFlashRom>().single;
-  File('${dir.path}/parcore_image_rom.hex')
-      .writeAsStringSync(SpiFlashRom.hexFile(rom.contents));
+  final rom = top.subModules.whereType<SpiFlashRom>().firstOrNull;
+  if (rom != null) {
+    File('${dir.path}/parcore_image_rom.hex')
+        .writeAsStringSync(SpiFlashRom.hexFile(rom.contents));
+  }
 
   final sv = StringBuffer()
     ..writeln(ulx3sBoardVerilog(
-        pll: pll, coreModule: top.definitionName, buttons: true))
+        pll: pll,
+        coreModule: top.definitionName,
+        buttons: true,
+        flash: realFlash))
     ..writeln(top.generateSynth());
   final svFile = File('${dir.path}/parcore_ulx3s.sv')
     ..writeAsStringSync(sv.toString());
@@ -114,7 +132,12 @@ Future<void> main(List<String> args) async {
   print('    ${svFile.path}: top level ulx3s_board, ${clockHz / 1e6} MHz '
       '(PLL: CLKI_DIV ${pll.clkiDiv}, CLKFB_DIV ${pll.clkfbDiv}, '
       'CLKOP_DIV ${pll.clkopDiv}, VCO ${pll.vcoHz / 1e6} MHz)');
-  print('    boot image: ${image.length} bytes in a ${rom.romBytes}-byte ROM '
-      'at flash address 0x${rom.baseAddr.toRadixString(16)}');
+  if (rom != null) {
+    print('    boot image: ${image!.length} bytes in a ${rom.romBytes}-byte ROM '
+        'at flash address 0x${rom.baseAddr.toRadixString(16)}');
+  } else {
+    print('    boot image: read from the board\'s flash at 0x400000 '
+        '(writable: pmon can erase and program it)');
+  }
   print('    conductor: ${conductor.length} bytes');
 }

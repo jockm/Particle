@@ -23,6 +23,13 @@ const coreWindow = 0x10000000;
 /// The cores pmon can hold and let go: RST_CTRL bits 5:0.
 const coreMask = 0x3F;
 
+/// The flash: 4 KiB sectors (E), 256-byte pages (P); E and P keep to
+/// [flashWriteStart] up to [flashEnd] (below is the bitstream).
+const flashSector = 4096;
+const flashPage = 256;
+const flashWriteStart = 0x400000;
+const flashEnd = 0x1000000;
+
 /// CRC-16/CCITT-FALSE: polynomial 0x1021, starting at 0xFFFF.
 int crc16(List<int> bytes, [int crc = 0xFFFF]) {
   for (final b in bytes) {
@@ -63,7 +70,10 @@ enum PmonErrorCode {
   crc(1, 'bad CRC'),
   command(2, 'unknown command'),
   align(3, 'address or length not a multiple of 4, or over 256'),
-  held(4, "the core isn't held");
+  held(4, "the core isn't held"),
+  range(5, 'the flash below 0x400000 (the bitstream) or past 16 MiB'),
+  noFlash(6, "the flash can't be written (not a PARCORE_REAL_FLASH=1 build)"),
+  flash(7, 'the flash stayed busy');
 
   const PmonErrorCode(this.code, this.text);
   final int code;
@@ -138,11 +148,15 @@ class PmonStatus {
 class PmonClient {
   PmonClient(this.link,
       {this.timeout = const Duration(milliseconds: 500),
+      this.flashTimeout = const Duration(seconds: 6),
       this.dropTime = const Duration(milliseconds: 150),
       this.retries = 3});
 
   final PmonLink link;
   final Duration timeout;
+
+  /// How long an E or P may take to answer (pmon gives the flash 5.4 s).
+  final Duration flashTimeout;
   final Duration dropTime;
   final int retries;
 
@@ -151,6 +165,84 @@ class PmonClient {
 
   /// Boot again from flash (pmon answers, then reboots).
   Future<void> boot() => _simple('B', 0);
+
+  /// Reads [length] bytes (a multiple of 4) of the flash at [address].
+  Future<Uint8List> readFlash(int address, int length,
+      {void Function(int done, int total)? progress}) async {
+    _checkAligned(address);
+    if (length % 4 != 0) {
+      throw ArgumentError('the length must be a multiple of 4, not $length');
+    }
+    final out = BytesBuilder();
+    for (var at = 0; at < length; at += maxFrameData) {
+      final n = (length - at).clamp(0, maxFrameData);
+      out.add(await _withReply('F', address + at, n));
+      progress?.call(at + n, length);
+    }
+    return out.toBytes();
+  }
+
+  /// Erases the 4 KiB sector at [address] (a sector's start).
+  Future<void> eraseSector(int address) async {
+    if (address % flashSector != 0) {
+      throw ArgumentError('0x${address.toRadixString(16)} is not the start '
+          'of a sector');
+    }
+    await _exchange(encodeFrame('E', address), 0, wait: flashTimeout);
+  }
+
+  /// Programs [data] (a multiple of 4 bytes, within one page) at [address].
+  Future<void> programPage(int address, List<int> data) async {
+    _checkAligned(address);
+    if (data.length % 4 != 0 ||
+        (address % flashPage) + data.length > flashPage) {
+      throw ArgumentError('a page program must be a multiple of 4 bytes '
+          'within one 256-byte page');
+    }
+    await _exchange(encodeFrame('P', address, data: data), 0,
+        wait: flashTimeout);
+  }
+
+  /// Writes [image] into the flash at [offset] (a sector's start): erases
+  /// the sectors it covers, programs it a page at a time (pages of 0xFF are
+  /// left as erased), and reads it back if [verify]. The image is padded
+  /// with 0xFF to a multiple of 4 bytes.
+  Future<void> flash(int offset, List<int> image,
+      {bool verify = true,
+      void Function(String stage, int done, int total)? progress}) async {
+    if (offset % flashSector != 0) {
+      throw ArgumentError('the offset must be a sector\'s start (a multiple '
+          'of 4096), not 0x${offset.toRadixString(16)}');
+    }
+    final data = [...image, ...List.filled((4 - image.length % 4) % 4, 0xFF)];
+    if (offset < flashWriteStart || offset + data.length > flashEnd) {
+      throw ArgumentError('the flash can only be written from 0x400000 up '
+          'to 16 MiB');
+    }
+    final sectors = (data.length + flashSector - 1) ~/ flashSector;
+    for (var i = 0; i < sectors; i++) {
+      await eraseSector(offset + i * flashSector);
+      progress?.call('erase', i + 1, sectors);
+    }
+    for (var at = 0; at < data.length; at += flashPage) {
+      final end = (at + flashPage).clamp(0, data.length);
+      final page = data.sublist(at, end);
+      if (page.any((b) => b != 0xFF)) await programPage(offset + at, page);
+      progress?.call('program', end, data.length);
+    }
+    if (verify) {
+      final back = await readFlash(offset, data.length,
+          progress: (d, t) => progress?.call('verify', d, t));
+      for (var i = 0; i < data.length; i++) {
+        if (back[i] != data[i]) {
+          throw PmonException('verify: flash 0x'
+              '${(offset + i).toRadixString(16)} reads '
+              '0x${back[i].toRadixString(16)}, not '
+              '0x${data[i].toRadixString(16)}');
+        }
+      }
+    }
+  }
 
   Future<PmonStatus> status() async {
     final data = await _withReply('S', 0, 28);
@@ -232,13 +324,14 @@ class PmonClient {
   /// Sends [frame] and reads the answer: ACK and [replyLength] bytes of
   /// data with their CRC (none if 0). Tries again on silence, a bad CRC
   /// either way, or a short answer.
-  Future<Uint8List> _exchange(List<int> frame, int replyLength) async {
+  Future<Uint8List> _exchange(List<int> frame, int replyLength,
+      {Duration? wait}) async {
     String? last;
     for (var attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) await Future<void>.delayed(dropTime);
       link.discardInput();
       link.write(frame);
-      final first = await link.readByte(timeout);
+      final first = await link.readByte(wait ?? timeout);
       if (first == null) {
         last = 'no answer';
         continue;

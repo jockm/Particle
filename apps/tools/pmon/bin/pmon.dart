@@ -25,6 +25,12 @@ Commands:
   load FILE --core N [--offset OFF] [--no-verify] [--no-go]
                             Load a binary into core N's TCM at OFF (default
                             0x100): hold the core, write, read back, let it go
+  flash FILE [--offset OFF] [--no-verify]
+                            Write a file into the flash at OFF (default
+                            0x400000, the boot image's place): erase, program,
+                            read back. Needs a PARCORE_REAL_FLASH=1 bitstream
+  fread ADDR [LENGTH]       Read LENGTH bytes (default 256) of the flash, as
+                            hex
   boot                      Boot again from flash
   console                   The text monitor and the guest's console; Ctrl-]
                             leaves
@@ -152,6 +158,45 @@ Future<int> run(SerialLink link, String command, List<String> args) async {
           '${hex8(coreWindow + (core << 16) + offset)} in '
           '${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)} s'
           '${release ? '' : ' (held)'}');
+    case 'flash':
+      String? file;
+      var offset = flashWriteStart;
+      var verify = true;
+      for (var i = 0; i < args.length; i++) {
+        final a = args[i];
+        if (a == '--offset' && i + 1 < args.length) {
+          offset = number(args[++i], '--offset');
+        } else if (a == '--no-verify') {
+          verify = false;
+        } else if (file == null) {
+          file = a;
+        } else {
+          fail('flash: unexpected $a');
+        }
+      }
+      if (file == null) fail('flash FILE [--offset OFF]');
+      final image = File(file).readAsBytesSync();
+      final sw = Stopwatch()..start();
+      var lastStage = '';
+      await pmon.flash(offset, image, verify: verify,
+          progress: (stage, done, total) {
+        if (stage != lastStage && lastStage.isNotEmpty) stdout.writeln();
+        lastStage = stage;
+        stdout.write('\r$stage ${done * 100 ~/ total}% ($done/$total)');
+      });
+      stdout.writeln();
+      print('wrote ${image.length} bytes into the flash at ${hex8(offset)} in '
+          '${(sw.elapsedMilliseconds / 1000).toStringAsFixed(1)} s');
+    case 'fread':
+      if (args.isEmpty || args.length > 2) fail('fread ADDR [LENGTH]');
+      final addr = number(args[0], 'ADDR');
+      final len = args.length > 1 ? number(args[1], 'LENGTH') : 256;
+      final data = await pmon.readFlash(addr, len);
+      for (var i = 0; i < data.length; i += 16) {
+        final row = data.sublist(i, (i + 16).clamp(0, data.length));
+        print('${hex8(addr + i)}: '
+            '${row.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+      }
     case 'boot':
       await pmon.boot();
     case 'console':

@@ -78,7 +78,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
         lint lint-asm build generate generate-particle generate-parcore \
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
         parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
-        parcore-console parcore-status parcore-load test-pmon
+        parcore-console parcore-status parcore-load test-pmon parcore-flash-image parcore-flash-image-jtag
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -121,7 +121,8 @@ help:
 	@echo "  make ulx3s-term       - Open the ULX3S FTDI UART (ULX3S_PORT=..., ULX3S_BAUD=1000000); Ctrl-] leaves"
 	@echo "  make parcore-guest    - Build the RISC-V guest program (PARCORE_GUEST=apps/riscv/hello.S; RISC-V GCC or LLVM)"
 	@echo "  make parcore-image    - Build the Parcore boot image (stage firmware + guest) in build/parcore_ulx3s"
-	@echo "  make parcore-bit      - Synthesize, place and route Parcore for the ULX3S (PARCORE_CLOCK_HZ=...)"
+	@echo "  make parcore-bit      - Synthesize, place and route Parcore for the ULX3S (PARCORE_CLOCK_HZ=...;"
+	@echo "                          PARCORE_REAL_FLASH=1 boots from the board's flash, which pmon can write)"
 	@echo "  make parcore-size     - Report Parcore's size per core and per module (build/parcore_ulx3s/size_report.txt)"
 	@echo "  make parcore-timing   - Show the last Parcore build's Fmax and critical path"
 	@echo "  make parcore-prog     - Load build/parcore_ulx3s/parcore_ulx3s.bit into the ULX3S"
@@ -130,6 +131,9 @@ help:
 	@echo "  make parcore-console  - Open pmon, the conductor's console (PMON_PORT=/dev/...); Ctrl-] leaves"
 	@echo "  make parcore-status   - Show the cores' states and PCs through pmon (PMON_PORT=...)"
 	@echo "  make parcore-load     - Load PMON_FILE into core PMON_CORE's TCM at PMON_OFFSET (0x100) through pmon"
+	@echo "  make parcore-flash-image      - Write the boot image to the flash at 0x400000 through pmon"
+	@echo "                                  (a PARCORE_REAL_FLASH=1 bitstream must be running)"
+	@echo "  make parcore-flash-image-jtag - Write the boot image to the flash at 0x400000 over JTAG"
 	@echo "  make pmon             - Build the pmon host tool (build/tools/pmon)"
 	@echo "  make test-pmon        - Run the pmon host tool's tests"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
@@ -274,6 +278,15 @@ PARCORE_ULX3S_BLD  := $(BUILD_DIR)/parcore_ulx3s
 PARCORE_GUEST      ?= apps/riscv/hello.S
 PARCORE_GUEST_BIN  := $(BUILD_DIR)/riscv/$(basename $(notdir $(PARCORE_GUEST))).bin
 PARCORE_CLOCK_HZ   ?= 25000000
+# 1: no image ROM in the bitstream; the conductor boots from the board's
+# flash (the image at 0x400000: make parcore-flash-image-jtag), and pmon can
+# erase and program it (448, 449). Off by default.
+PARCORE_REAL_FLASH ?= 0
+PARCORE_FLASH_FLAG := $(if $(filter 1,$(PARCORE_REAL_FLASH)),--real-flash)
+# The flash's pins are the user's once configured only with
+# MASTER_SPI_PORT=DISABLE (as ulx3s_v20.lpf's comment says)
+PARCORE_LPF        := $(if $(filter 1,$(PARCORE_REAL_FLASH)),ulx3s_flash.lpf,../../$(ULX3S_LPF))
+PARCORE_IMAGE_BIN  := $(PARCORE_ULX3S_BLD)/parcore_image.bin
 
 parcore-guest:
 	@bash apps/riscv/build_riscv_guest.sh "$(PARCORE_GUEST)" "$(PARCORE_GUEST_BIN)"
@@ -290,7 +303,8 @@ generate-parcore-ulx3s: parcore-image
 	@cd $(PARCORE_DIR) && $(DART) run bin/generate_parcore_ulx3s.dart \
 		--conductor ../../$(PARCORE_BLD)/conductor/conductor.bin \
 		--image ../../$(PARCORE_ULX3S_BLD)/parcore_image.bin \
-		--out ../../$(PARCORE_ULX3S_BLD) --clock-hz $(PARCORE_CLOCK_HZ)
+		--out ../../$(PARCORE_ULX3S_BLD) --clock-hz $(PARCORE_CLOCK_HZ) $(PARCORE_FLASH_FLAG)
+	@sed 's/MASTER_SPI_PORT=ENABLE/MASTER_SPI_PORT=DISABLE/' $(ULX3S_LPF) > $(PARCORE_ULX3S_BLD)/ulx3s_flash.lpf
 	@$(DOT_CLEAN_CMD)
 
 parcore-bit: generate-parcore-ulx3s
@@ -298,7 +312,7 @@ parcore-bit: generate-parcore-ulx3s
 	@cd $(PARCORE_ULX3S_BLD) && $(YOSYS) -q -l yosys.log \
 		-p "read_verilog -sv parcore_ulx3s.sv; synth_ecp5 -top ulx3s_board -json parcore_ulx3s.json"
 	@echo "==> Placing and routing for the 85F (nextpnr; log in build/parcore_ulx3s/nextpnr.log)..."
-	@cd $(PARCORE_ULX3S_BLD) && $(NEXTPNR_ECP5) -q --85k --package CABGA381 --lpf ../../$(ULX3S_LPF) \
+	@cd $(PARCORE_ULX3S_BLD) && $(NEXTPNR_ECP5) -q --85k --package CABGA381 --lpf $(PARCORE_LPF) \
 		--json parcore_ulx3s.json --textcfg parcore_ulx3s.config --router router2 \
 		--freq $$(( $(PARCORE_CLOCK_HZ) / 1000000 )) -l nextpnr.log
 	@cd $(PARCORE_ULX3S_BLD) && $(ECPPACK) --compress parcore_ulx3s.config parcore_ulx3s.bit
@@ -348,6 +362,11 @@ parcore-flash:
 	fi
 	$(OPENFPGALOADER) -b ulx3s -f "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
 
+# The boot image into the board's flash at 0x400000, for a
+# PARCORE_REAL_FLASH=1 bitstream (written separately: parcore-flash)
+parcore-flash-image-jtag: parcore-image
+	$(OPENFPGALOADER) -b ulx3s -f -o 0x400000 --file-type raw "$(PARCORE_IMAGE_BIN)"
+
 # pmon, the conductor's console (Documentation/pmon.md), on the header's
 # gp[0] (Parcore transmits) and gp[1] (Parcore receives), through a 3.3 V
 # USB serial adapter at 115200 baud. PMON_PORT is that adapter's port (an
@@ -375,6 +394,13 @@ parcore-load: $(PMON_BIN)
 		echo "[FAIL] Give PMON_FILE=... and PMON_CORE=0..3 (and PMON_OFFSET=..., 0x100 by default)"; exit 1; \
 	fi
 	@$(PMON_BIN) --port $(PMON_PORT) load "$(PMON_FILE)" --core $(PMON_CORE) --offset $(PMON_OFFSET)
+
+# The boot image into the flash through pmon (erase, program, verify); the
+# running bitstream must be a PARCORE_REAL_FLASH=1 one. FIRE1 (or pmon's b)
+# then boots it.
+parcore-flash-image: $(PMON_BIN) parcore-image
+	$(PMON_NEED_PORT)
+	@$(PMON_BIN) --port $(PMON_PORT) flash "$(PARCORE_IMAGE_BIN)" --offset 0x400000
 
 # ------------------------------------------------------------------------------
 # Verification & Test Suites
@@ -626,10 +652,9 @@ build: firmware apps
 firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS) conductor-size
 	@$(DOT_CLEAN_CMD)
 
-# The conductor's code must end below SECTION_TABLE (0x0E00): above it are
-# the section table (pmon's line buffer once booted) and the stack, in its
-# 4 KiB TCM
-CONDUCTOR_CODE_LIMIT := 0x0E00
+# The conductor's code must end below SECTION_TABLE (0x1C00): above it are
+# the section table, pmon's buffers and the stack, in its 8 KiB TCM
+CONDUCTOR_CODE_LIMIT := 0x1C00
 conductor-size: $(PARCORE_BLD)/conductor/conductor.bin
 	@end=$$(sed -n 's/^; __image_end  *= 0x\([0-9A-Fa-f]*\).*/\1/p' $(PARCORE_BLD)/conductor/conductor.lst); \
 	  if [ -z "$$end" ]; then echo "conductor-size: no __image_end in conductor.lst"; exit 1; fi; \
