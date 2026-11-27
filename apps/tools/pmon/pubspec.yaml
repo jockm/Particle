@@ -1,0 +1,8 @@
+name: pmon
+description: The host side of pmon, the Parcore conductor's console
+version: 0.1.0
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dev_dependencies:
+  test: ^1.24.0

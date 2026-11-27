@@ -25,6 +25,7 @@ class ParcoreTop extends Module {
 
   /// FTDI UART divisor: clock cycles per bit (clkFreqMhz MHz / ftdiBaud).
   final int ftdiDivisor;
+  final int consoleDivisor;
 
   Logic get clk => input('clk');
   Logic get reset => input('reset');
@@ -32,6 +33,11 @@ class ParcoreTop extends Module {
   // FTDI UART pins
   Logic get uartRx => input('uart_rx');
   Logic get uartTx => output('uart_tx');
+
+  // The pmon console's UART (the conductor's; item 16), 115200 baud by
+  // default
+  Logic get consoleRx => input('console_rx');
+  Logic get consoleTx => output('console_tx');
 
   // Physical SPI Flash Pins (ULX3S)
   Logic get spiCsN => output('spi_cs_n');
@@ -57,6 +63,8 @@ class ParcoreTop extends Module {
     Logic? buttons,
     int clkFreqMhz = 25,
     int ftdiBaud = 1000000,
+    Logic? consoleRx,
+    int consoleBaud = 115200,
     List<int>? conductorBinary,
     List<int>? core0Binary,
     List<int>? core1Binary,
@@ -64,7 +72,12 @@ class ParcoreTop extends Module {
     List<int>? core3Binary,
     this.tcmInitDir,
     super.name = 'parcore_top',
-  }) : ftdiDivisor = (clkFreqMhz * 1000000 / ftdiBaud).round() {
+  })  : ftdiDivisor = (clkFreqMhz * 1000000 / ftdiBaud).round(),
+        consoleDivisor = (clkFreqMhz * 1000000 / consoleBaud).round() {
+    if (consoleDivisor < 2 || consoleDivisor > 0xFFFF) {
+      throw ArgumentError('consoleBaud $consoleBaud gives divisor '
+          '$consoleDivisor at $clkFreqMhz MHz; it must be 2 to 65535');
+    }
     if (ftdiDivisor < 2 || ftdiDivisor > 0xFFFF) {
       throw ArgumentError('ftdiBaud $ftdiBaud gives divisor $ftdiDivisor '
           'at $clkFreqMhz MHz; it must be 2 to 65535');
@@ -72,10 +85,12 @@ class ParcoreTop extends Module {
     addInput('clk', clk);
     addInput('reset', reset);
     addInput('uart_rx', uartRx);
+    addInput('console_rx', consoleRx ?? Const(1));
     addInput('spi_miso', spiMiso ?? Const(0));
     addInput('buttons', buttons ?? Const(0, width: 6), width: 6);
 
     addOutput('uart_tx');
+    addOutput('console_tx');
     addOutput('spi_cs_n');
     addOutput('spi_sck');
     addOutput('spi_mosi');
@@ -233,6 +248,75 @@ class ParcoreTop extends Module {
     Sequential(clk, reset: reset, resetValues: {activity: Const(0, width: 9)}, [
       activity < (mux(activityRead, Const(0, width: 9), activity) | activityNow),
     ]);
+    // The console UART (pmon): CONSOLE_DATA (0xF000_0050) sends a byte when
+    // written (dropped if the transmitter is busy: check CONSOLE_STATUS
+    // first) and, read, gives the oldest byte received and takes it;
+    // CONSOLE_STATUS (0xF000_0054, read only): bit 0 a byte has been
+    // received, bit 1 the transmitter is busy. Bytes received wait in a
+    // 16-byte FIFO, so that those arriving while pmon sends (an echo, a
+    // command's answer) aren't lost; past 16, they are.
+    final isConsoleDataSel = condMemAddr.eq(Const(0xF0000050, width: 32));
+    final isConsoleStatusSel = condMemAddr.eq(Const(0xF0000054, width: 32));
+    final consoleRxMeta = Logic(name: 'console_rx_meta');
+    final consoleRxSync = Logic(name: 'console_rx_sync');
+    Sequential(clk, reset: reset, resetValues: {
+      consoleRxMeta: Const(1),
+      consoleRxSync: Const(1),
+    }, [
+      consoleRxMeta < consoleRx,
+      consoleRxSync < consoleRxMeta,
+    ]);
+    final consoleRxTake = Logic(name: 'console_rx_take');
+    final consoleUart = ParticleUartTransceiver(
+      clk: clk,
+      reset: reset,
+      rxPin: consoleRxSync,
+      txData: condMemWData.slice(7, 0),
+      txValid: condMemWEn & isConsoleDataSel,
+      rxReady: consoleRxTake,
+      baudDivisor: Const(consoleDivisor, width: 16),
+      name: 'parcore_console_uart',
+    );
+    consoleTx <= consoleUart.output('txPin');
+    // The FIFO takes each byte from the UART as it arrives
+    const consoleRxDepth = 16;
+    consoleRxTake <= consoleUart.output('rxValid');
+    final rxFifo = [
+      for (var i = 0; i < consoleRxDepth; i++)
+        Logic(name: 'console_rx_fifo_$i', width: 8),
+    ];
+    final rxHead = Logic(name: 'console_rx_head', width: 4);
+    final rxTail = Logic(name: 'console_rx_tail', width: 4);
+    final rxCount = Logic(name: 'console_rx_count', width: 5);
+    final rxPush = consoleUart.output('rxValid') &
+        rxCount.lt(Const(consoleRxDepth, width: 5));
+    final rxNotEmpty = rxCount.neq(Const(0, width: 5));
+    final rxPop = condMemREn & isConsoleDataSel & rxNotEmpty;
+    Sequential(clk, [
+      for (var i = 0; i < consoleRxDepth; i++)
+        If(rxPush & rxTail.eq(Const(i, width: 4)), then: [
+          rxFifo[i] < consoleUart.output('rxData'),
+        ]),
+    ]);
+    Sequential(clk, reset: reset, resetValues: {
+      rxHead: Const(0, width: 4),
+      rxTail: Const(0, width: 4),
+      rxCount: Const(0, width: 5),
+    }, [
+      If(rxPush, then: [rxTail < rxTail + Const(1, width: 4)]),
+      If(rxPop, then: [rxHead < rxHead + Const(1, width: 4)]),
+      rxCount < rxCount +
+          rxPush.zeroExtend(5) -
+          rxPop.zeroExtend(5),
+    ]);
+    var rxHeadData = rxFifo[0];
+    for (var i = 1; i < consoleRxDepth; i++) {
+      rxHeadData = mux(rxHead.eq(Const(i, width: 4)), rxFifo[i], rxHeadData);
+    }
+    final consoleStatus = [
+      rxNotEmpty,
+      ~consoleUart.output('txReady'),
+    ].rswizzle();
     final corePcRead = mux(
         condMemAddr[3],
         mux(condMemAddr[2], corePc[3], corePc[2]),
@@ -262,7 +346,9 @@ class ParcoreTop extends Module {
           isCoreStateSel |
           isCyclesSel |
           isCorePcSel |
-          isActivitySel,
+          isActivitySel |
+          isConsoleDataSel |
+          isConsoleStatusSel,
       readRstVal < regRstCtrl,
       readSpiVal < spiCtrl.rData,
       readIoVal <
@@ -271,9 +357,14 @@ class ParcoreTop extends Module {
                   mux(isCyclesSel, cycles,
                       mux(isCorePcSel, corePcRead,
                           mux(isActivitySel, activity.zeroExtend(32),
-                              buttonsSync.zeroExtend(32)))))),
+                              mux(isConsoleDataSel,
+                                  rxHeadData.zeroExtend(32),
+                                  mux(isConsoleStatusSel,
+                                      consoleStatus.zeroExtend(32),
+                                      buttonsSync.zeroExtend(32)))))))),
     ]);
-    condMemBRData <= mux(
+    final condOwnRData = Logic(name: 'cond_own_rdata', width: 32);
+    condOwnRData <= mux(
       readSelRst,
       readRstVal,
       mux(readSelSpi, readSpiVal,
@@ -283,6 +374,11 @@ class ParcoreTop extends Module {
     // -------------------------------------------------------------------------
     // Helper: Build Core TCM with Port B Conductor Staging Multiplexer
     // -------------------------------------------------------------------------
+    // The conductor reads a held core's TCM (for pmon) through its port B:
+    // the data comes the cycle after the address, as from its own TCM
+    final condCoreReadSel = <Logic>[];
+    final condCoreReadData = <Logic>[];
+
     void buildTcm({
       required int coreIndex,
       required String name,
@@ -332,6 +428,11 @@ class ParcoreTop extends Module {
 
       portARData <= tcm.rDataA;
       portBRData <= tcm.rDataB;
+
+      final readSel = Logic(name: '${name}_cond_read_sel');
+      Sequential(clk, [readSel < isConductorActive]);
+      condCoreReadSel.add(readSel);
+      condCoreReadData.add(tcm.rDataB);
     }
 
     // -------------------------------------------------------------------------
@@ -772,6 +873,12 @@ class ParcoreTop extends Module {
       portBRData: c3TcmBRData,
       initialBytes: core3Binary,
     );
+
+    var condRData = condOwnRData;
+    for (var n = condCoreReadSel.length - 1; n >= 0; n--) {
+      condRData = mux(condCoreReadSel[n], condCoreReadData[n], condRData);
+    }
+    condMemBRData <= condRData;
 
     // Core 3's own I/O, at 0xF000_0000 in its address space (writes there
     // never reach its TCM): 0xF000_0000 the guest's LEDs (bits 7:0, written),

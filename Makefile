@@ -30,6 +30,7 @@ PASM_LINT_BIN:= $(TOOL_BIN_DIR)/pasm_lint$(EXEEXT)
 PASM_LSP_BIN := $(TOOL_BIN_DIR)/pasm_lsp$(EXEEXT)
 PASM_BIN     := $(TOOL_BIN_DIR)/pasm$(EXEEXT)
 ACTION_BIN   := $(TOOL_BIN_DIR)/action$(EXEEXT)
+PMON_BIN     := $(TOOL_BIN_DIR)/pmon$(EXEEXT)
 ACTION_LLVM_BIN := $(TOOL_BIN_DIR)/action_llvm$(EXEEXT)
 LLVM_BUILD_DIR := $(BUILD_DIR)/llvm
 ACTION_LSP_BIN := $(TOOL_BIN_DIR)/action_lsp$(EXEEXT)
@@ -76,7 +77,8 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 .PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
-        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile
+        parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
+        parcore-console parcore-status parcore-load test-pmon
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -125,6 +127,11 @@ help:
 	@echo "  make parcore-prog     - Load build/parcore_ulx3s/parcore_ulx3s.bit into the ULX3S"
 	@echo "  make parcore-flash    - Write build/parcore_ulx3s/parcore_ulx3s.bit to the ULX3S flash"
 	@echo "  make parcore-profile  - Profile Parcore running PARCORE_PROFILE_GUEST (apps/riscv/bench.S) in Verilator"
+	@echo "  make parcore-console  - Open pmon, the conductor's console (PMON_PORT=/dev/...); Ctrl-] leaves"
+	@echo "  make parcore-status   - Show the cores' states and PCs through pmon (PMON_PORT=...)"
+	@echo "  make parcore-load     - Load PMON_FILE into core PMON_CORE's TCM at PMON_OFFSET (0x100) through pmon"
+	@echo "  make pmon             - Build the pmon host tool (build/tools/pmon)"
+	@echo "  make test-pmon        - Run the pmon host tool's tests"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
 	@echo "  make clean            - Remove all build artifacts and generated SV"
@@ -341,11 +348,39 @@ parcore-flash:
 	fi
 	$(OPENFPGALOADER) -b ulx3s -f "$(PARCORE_ULX3S_BLD)/parcore_ulx3s.bit"
 
+# pmon, the conductor's console (Documentation/pmon.md), on the header's
+# gp[0] (Parcore transmits) and gp[1] (Parcore receives), through a 3.3 V
+# USB serial adapter at 115200 baud. PMON_PORT is that adapter's port (an
+# ESP-Prog's UART is its second port); it isn't guessed, since the ULX3S's
+# own USB port looks the same.
+PMON_PORT   ?=
+PMON_CORE   ?=
+PMON_FILE   ?=
+PMON_OFFSET ?= 0x100
+PMON_NEED_PORT = @if [ -z "$(PMON_PORT)" ]; then \
+		echo "[FAIL] Give PMON_PORT=/dev/... (the USB serial adapter on gp[0]/gp[1])"; exit 1; \
+	fi
+
+parcore-console: $(PMON_BIN)
+	$(PMON_NEED_PORT)
+	@$(PMON_BIN) --port $(PMON_PORT) console
+
+parcore-status: $(PMON_BIN)
+	$(PMON_NEED_PORT)
+	@$(PMON_BIN) --port $(PMON_PORT) status
+
+parcore-load: $(PMON_BIN)
+	$(PMON_NEED_PORT)
+	@if [ -z "$(PMON_FILE)" ] || [ -z "$(PMON_CORE)" ]; then \
+		echo "[FAIL] Give PMON_FILE=... and PMON_CORE=0..3 (and PMON_OFFSET=..., 0x100 by default)"; exit 1; \
+	fi
+	@$(PMON_BIN) --port $(PMON_PORT) load "$(PMON_FILE)" --core $(PMON_CORE) --offset $(PMON_OFFSET)
+
 # ------------------------------------------------------------------------------
 # Verification & Test Suites
 # ------------------------------------------------------------------------------
 
-test: test-particle test-parcore test-sim test-sim-cluster
+test: test-particle test-parcore test-sim test-sim-cluster test-pmon
 	@$(DOT_CLEAN_CMD)
 
 # The tests assemble programs with pasm, compare the core with psim, and run
@@ -371,6 +406,8 @@ test-parcore: setup firmware guest-tests
 		test/parcore_watchdog_test.dart)
 	@echo "==> Booting the whole Parcore ULX3S design from its image ROM (Verilator)..."
 	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) $(DART) test test/parcore_ulx3s_boot_test.dart)
+	@echo "==> pmon on the whole Parcore ULX3S design (Verilator)..."
+	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) $(DART) test test/parcore_pmon_test.dart)
 	@echo "==> Running Parcore RV32IM pipeline regression suite..."
 	@(cd $(PARCORE_DIR) && PARCORE_FAST_SIM=$(PARCORE_FAST_SIM) bash ./test_pipeline.sh)
 
@@ -586,8 +623,19 @@ test-lint: pasm-lint
 
 build: firmware apps
 
-firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS)
+firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS) conductor-size
 	@$(DOT_CLEAN_CMD)
+
+# The conductor's code must end below SECTION_TABLE (0x0E00): above it are
+# the section table (pmon's line buffer once booted) and the stack, in its
+# 4 KiB TCM
+CONDUCTOR_CODE_LIMIT := 0x0E00
+conductor-size: $(PARCORE_BLD)/conductor/conductor.bin
+	@end=$$(sed -n 's/^; __image_end  *= 0x\([0-9A-Fa-f]*\).*/\1/p' $(PARCORE_BLD)/conductor/conductor.lst); \
+	  if [ -z "$$end" ]; then echo "conductor-size: no __image_end in conductor.lst"; exit 1; fi; \
+	  if [ $$((0x$$end)) -gt $$(($(CONDUCTOR_CODE_LIMIT))) ]; then \
+	    echo "conductor-size: the conductor's code ends at 0x$$end, past $(CONDUCTOR_CODE_LIMIT)"; exit 1; fi; \
+	  echo "conductor: code ends at 0x$$end (limit $(CONDUCTOR_CODE_LIMIT))"
 
 # The conductor and cores 1 and 3 are built without the 2-word branches
 # (ParcoreConfig), so their firmware is assembled for that: JUMP, JUMP.cc and
@@ -628,9 +676,9 @@ $(BUILD_DIR):
 # Toolchain Targets
 # ------------------------------------------------------------------------------
 .PHONY: deps vendor deps-tests
-.PHONY: tools pasm-lint pasm-lsp psim pasm action action-lsp llvm-tools llvm-tests vscode-ext vscode-install vscode-remove-old-pasm lint-tool dot-clean install-hooks
+.PHONY: tools pmon pasm-lint pasm-lsp psim pasm action action-lsp llvm-tools llvm-tests vscode-ext vscode-install vscode-remove-old-pasm lint-tool conductor-size dot-clean install-hooks
 
-tools: pasm-lint pasm-lsp pasm psim action action-lsp
+tools: pasm-lint pasm-lsp pasm psim action action-lsp pmon
 	@$(DOT_CLEAN_CMD)
 
 lint-tool: pasm-lint
@@ -652,6 +700,18 @@ $(PASM_LSP_BIN): $(shell find apps/tools/pasm_lsp -name "*.dart" 2>/dev/null) $(
 
 pasm: $(PASM_BIN)
 	@$(DOT_CLEAN_CMD)
+
+pmon: $(PMON_BIN)
+	@$(DOT_CLEAN_CMD)
+
+$(PMON_BIN): $(shell find apps/tools/pmon -name "*.dart" 2>/dev/null) apps/tools/pmon/pubspec.yaml | $(TOOL_BIN_DIR)
+	@echo "==> Compiling pmon..."
+	@cd apps/tools/pmon && $(DART) pub get > /dev/null
+	@$(DART) compile exe apps/tools/pmon/bin/pmon.dart -o $@
+
+test-pmon:
+	@echo "==> Running the pmon host tool's tests..."
+	@cd apps/tools/pmon && $(DART) pub get > /dev/null && $(DART) test
 
 $(PASM_BIN): $(shell find apps/tools/pasm -name "*.dart" 2>/dev/null) | $(TOOL_BIN_DIR)
 	@echo "==> Compiling pasm..."

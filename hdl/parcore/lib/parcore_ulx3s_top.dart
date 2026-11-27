@@ -12,8 +12,9 @@
 //   reset_n      the power button and PLL lock (active low)
 //   ftdi_rx_pin  FTDI UART receive: the guest's UART (core 3)
 //   ftdi_tx_pin  FTDI UART transmit
-//   gpio_rx_pin  unused (the wrapper's second UART)
-//   gpio_tx_pin  held high
+//   gpio_rx_pin  the pmon console's UART receive (gp[1], the wrapper's second
+//                UART)
+//   gpio_tx_pin  the pmon console's UART transmit (gp[0])
 //   buttons      FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT (1 = pressed)
 //   leds         the conductor's boot progress and fault codes, then the
 //                guest's LEDs
@@ -52,7 +53,7 @@ class ParcoreUlx3sTop extends Module {
     clk = addInput('clk', clk);
     resetN = addInput('reset_n', resetN);
     ftdiRxPin = addInput('ftdi_rx_pin', ftdiRxPin);
-    addInput('gpio_rx_pin', gpioRxPin);
+    final gpioRx = addInput('gpio_rx_pin', gpioRxPin);
     buttons = addInput('buttons', buttons, width: 6);
     addOutput('ftdi_tx_pin');
     addOutput('gpio_tx_pin');
@@ -69,6 +70,7 @@ class ParcoreUlx3sTop extends Module {
       clk: clk,
       reset: reset,
       uartRx: ftdiRxPin,
+      consoleRx: gpioRx,
       spiMiso: miso,
       buttons: buttons,
       clkFreqMhz: (clockHz / 1e6).round(),
@@ -88,7 +90,7 @@ class ParcoreUlx3sTop extends Module {
     miso <= rom.miso;
 
     ftdiTxPin <= parcore.uartTx;
-    gpioTxPin <= Const(1);
+    gpioTxPin <= parcore.consoleTx;
     leds <= parcore.leds;
   }
 }

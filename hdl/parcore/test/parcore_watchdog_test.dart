@@ -3,7 +3,8 @@
 // conductor program, over the ACTIVITY register. Core 1 runs a while and
 // then blocks for good in a FIFO.R: the watchdog fires and blinks FAULT_HANG
 // with LED 7 (0x86) - unless core 0 is asleep in its WAIT, the sign that the
-// guest program has ended.
+// guest program has ended. pmon (pmon.inc) runs in the loop too, its console
+// at a fast baud rate.
 
 import 'dart:async';
 import 'dart:io';
@@ -37,6 +38,7 @@ _reset_vector:
     JMP     R14, R0
 .org 0x200
 _main:
+    LDI     SP, 0x1000
     LOAD32  R5, 0xF0000000      ; RST_CTRL
     LD      R14, ${0x3F & ~release}
     ST32    (R5), R14
@@ -50,6 +52,7 @@ _fault_delay:
     BBRA.NZ R1, ._d
     RRET
 .include "firmware/parcore/conductor/watchdog.inc"
+.include "firmware/parcore/conductor/pmon.inc"
 ''';
 
 /// Core 1: about 1,000 cycles of work, then a FIFO.R that never ends (its
@@ -105,7 +108,12 @@ Future<List<(int, int)>> run(ParcoreTop top, SimpleClockGenerator clk,
 
 const timings = [
   '-D', '__NO_LONG_BRANCHES', '-D', 'WATCH_POLL=200', '-D', 'WATCH_LIMIT=20',
+  '-D', 'WATCH_BLINK=1',
 ];
+
+/// The console's baud rate: 4 cycles a bit at 25 MHz, so that pmon's
+/// messages take little time
+const fastBaud = 6250000;
 
 void main() {
   tearDown(() async {
@@ -123,6 +131,7 @@ void main() {
       uartRx: uartRx,
       conductorBinary: assemble(conductor(0x02), timings),
       core1Binary: assemble(core1Source),
+      consoleBaud: fastBaud,
     );
     final seen = await run(top, clk, reset, uartRx, 20000);
     final leds = [for (final s in seen) s.$1];
@@ -145,6 +154,7 @@ void main() {
       conductorBinary: assemble(conductor(0x03), timings),
       core0Binary: assemble(core0Source),
       core1Binary: assemble(core1Source),
+      consoleBaud: fastBaud,
     );
     final seen = await run(top, clk, reset, uartRx, 15000);
     final leds = [for (final s in seen) s.$1];

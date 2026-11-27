@@ -35,19 +35,22 @@
 .define FAULT_SECTION       4       ; no cores, cores beyond 5, or an offset
                                     ; or length that isn't a multiple of 4
 .define FAULT_CRC           5       ; the CRC-32 doesn't match
-.define FAULT_HANG          6       ; the watchdog (watchdog.inc)
+.define FAULT_HANG          6       ; the watchdog (watchdog.inc): LED 7 blinks
+                                    ; (the code stays lit)
 ; While booting, LED 0 is lit and one more LED lights per section loaded.
-; Once the cores are running, the guest has the LEDs, and FIRE1 reloads the
-; image and restarts them.
+; Once the cores are running, the guest has the LEDs, FIRE1 reloads the
+; image and restarts them, and pmon (pmon.inc) answers on the console.
 
 .define IMAGE_BASE_HI       0x0040  ; image at 0x0040_0000
 .define IMAGE_MAGIC_HI      0x5041
 .define IMAGE_MAGIC_LO      0x5243
 .define IMAGE_VERSION       2
 .define MAX_SECTIONS        8
-.define SECTION_TABLE       0x0E00  ; copy of the section table (96 bytes),
-                                    ; above the code (which ends near 0x640)
-                                    ; and below the stack (from 0x1000 down)
+.define SECTION_TABLE       0x0E00  ; copy of the section table (96 bytes;
+                                    ; pmon's line buffer once booted), above
+                                    ; the code (which must end below it: make
+                                    ; firmware checks) and below the stack
+                                    ; (from 0x1000 down)
 
 ; ------------------------------------------------------------------------------
 ; Register Convention
@@ -281,6 +284,7 @@ _sections_done:
 ; Supervisor: FIRE1 reloads the image and restarts the cores (once released)
 ; ------------------------------------------------------------------------------
 .include "watchdog.inc"
+.include "pmon.inc"
 
 ; ------------------------------------------------------------------------------
 ; Fault: R1 = code. Every core stays held in reset; the code is on LEDs 0-3,

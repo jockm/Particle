@@ -32,6 +32,10 @@
 .define CORE_PC_OFFSET      0x30    ; CORE_PC (read): core n's PC at 0x30 + 4n
 .define ACTIVITY_OFFSET     0x40    ; ACTIVITY (read; clears): bit n core n ran,
                                     ; bit 8 the ring moved, since the last read
+.define CONSOLE_DATA_OFFSET 0x50    ; CONSOLE_DATA: write sends a byte, read
+                                    ; takes the byte received
+.define CONSOLE_STATUS_OFFSET 0x54  ; CONSOLE_STATUS (read): bit 0 a byte
+                                    ; received, bit 1 the transmitter busy
 
 ; Show R1 on the LEDs (uses R2; R5 = RST_CTRL)
 .macro SET_LEDS

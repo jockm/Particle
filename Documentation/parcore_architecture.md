@@ -74,6 +74,7 @@ The demo guest, its link script and build script are in `apps/riscv/`.
 |---|---|---|---|
 | `clk`, `reset` | in | 1 | Clock and active-high reset |
 | `uart_rx`, `uart_tx` | in / out | 1 | FTDI console UART, connected to core 3: the guest's memory-mapped UART (see [Guest I/O](#guest-io)) |
+| `console_rx`, `console_tx` | in / out | 1 | The conductor's console UART, for pmon (see [pmon](pmon.md)); 115200 baud unless `consoleBaud` says otherwise |
 | `leds` | out | 8 | The board LEDs: the conductor's boot progress and fault codes, then the guest's |
 | `buttons` | in | 6 | The board buttons, 1 = pressed: FIRE1, FIRE2, UP, DOWN, LEFT, RIGHT |
 | `spi_cs_n`, `spi_sck`, `spi_mosi`, `spi_miso` | out / in | 1 | SPI flash, driven by the conductor |
@@ -178,7 +179,7 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 4 KiB
 | Address | Use |
 |---|---|
 | `0x0000_0000`–`0x0000_0FFF` | Its own TCM |
-| `0x1000_0000 + (core << 16)` | A window into stage core `core`'s TCM (writes go to that TCM's port B while the core is held in reset) |
+| `0x1000_0000 + (core << 16)` | A window into stage core `core`'s TCM: while the core is held in reset, its TCM's port B is the conductor's, for writes and reads |
 | `0xF000_0000` | `RST_CTRL` |
 | `0xF000_0010` | `SPI_CTRL`: bit 0 CS_N, bit 1 START, bit 2 BUSY (read only) |
 | `0xF000_0014` | `SPI_DATA`: bits 7:0, transmit and receive |
@@ -189,6 +190,8 @@ The conductor is a minimal Particle core (no multiplier, divider or FIFOs, 4 KiB
 | `0xF000_002C` | `CYCLES` (read only): clock cycles since reset (wraps after 2³² cycles, about 172 s at 25 MHz) |
 | `0xF000_0030 + 4n` | `CORE_PC` (read only): the PC of the instruction in stage core *n*'s E stage |
 | `0xF000_0040` | `ACTIVITY` (read only; a read clears it): bit *n* is set once stage core *n* has run a cycle out of reset without being blocked (asleep in a `FIFO.R`, `WAIT` or `HALT`, or waiting to send), bit 8 once a packet has moved on the ring, since the last read |
+| `0xF000_0050` | `CONSOLE_DATA`: a write sends the byte in bits 7:0 on `console_tx` (dropped if the transmitter is busy); a read takes the oldest byte received, from a 16-byte FIFO |
+| `0xF000_0054` | `CONSOLE_STATUS` (read only): bit 0 a byte has been received, bit 1 the transmitter is busy |
 | `0xFFFF_FF0C` | `NI_CONFIG` (write only, with `ParcoreConfig.writableNocTables` on): a store sends a `CONFIG` packet setting one entry of a core's table, or of every core's (see [MBOX design](mbox_design.md), part 6). Parcore's firmware doesn't use it, and the switch is off by default (418) |
 
 The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START) while idle starts an 8-bit transfer, most significant bit first. SCK changes once every `SPI_DIV + 1` cycles. MISO is sampled on each rising SCK edge and shifted in on the next falling edge, which is also when the next MOSI bit appears, so MOSI never changes while SCK is high.
@@ -200,7 +203,7 @@ The SPI controller uses SPI mode 0. Writing `SPI_DATA` (or `SPI_CTRL` with START
 | 5:0 | Per-core reset/hold (1 = held in reset, and its TCM port B is connected to the conductor). Only bits 3:0 have cores. |
 | 31 | Boot complete |
 
-Reads of `RST_CTRL`, the SPI registers, `STATUS`, `BUTTONS` and the conductor's TCM all answer like memory: the value is captured at the clock edge after the address, and arrives in the next cycle.
+Reads of `RST_CTRL`, the SPI registers, the I/O registers, the conductor's TCM and a held core's TCM all answer like memory: the value is captured at the clock edge after the address, and arrives in the next cycle.
 
 At reset `RST_CTRL` is `0x3F` (every core held) when a conductor binary is given, and `0` otherwise, so without a conductor the stage cores start immediately from their preloaded TCMs. Likewise `STATUS` starts at `0` (LEDs off, the conductor's) with a conductor, and at `0x100` (the guest's) without one.
 
@@ -208,7 +211,11 @@ The conductor's firmware is `firmware/parcore/conductor/conductor.asm`, written 
 
 ### Watchdog
 
-Once the cores run, the conductor's supervisor loop (`firmware/parcore/conductor/watchdog.inc`, 446–447) reads `ACTIVITY` every millisecond (`WATCH_POLL`, 25,000 cycles at 25 MHz, timed with `CYCLES`). When cores 1–3 and the ring have done nothing for half a second (`WATCH_LIMIT`, 500 polls) and core 0 isn't asleep in its `WAIT` at the end of the program, the pipeline has hung: the conductor takes the LEDs back from the guest and blinks fault code 6 with LED 7, leaving the cores as they are for inspection. FIRE1 reloads the image and restarts them, as it does any time; building with `-D WATCH_RESTART=1` does that at once instead. Core 0 isn't watched: it never blocks, but loops while `ifToId` is full, so in a hang it keeps running. `parcore_watchdog_test.dart` runs the same code with short timings. The console (`pmon`, item 16's second package) will report the cores' states and PCs as well.
+Once the cores run, the conductor's supervisor loop (`firmware/parcore/conductor/watchdog.inc`, 446–447) reads `ACTIVITY` every millisecond (`WATCH_POLL`, 25,000 cycles at 25 MHz, timed with `CYCLES`). When cores 1–3 and the ring have done nothing for half a second (`WATCH_LIMIT`, 500 polls) and core 0 isn't asleep in its `WAIT` at the end of the program, the pipeline has hung: the conductor takes the LEDs back from the guest and blinks fault code 6 with LED 7, says so on the console with the cores' states and PCs, and leaves the cores as they are for inspection with pmon. FIRE1 reloads the image and restarts them, as it does any time; building with `-D WATCH_RESTART=1` does that at once instead. Core 0 isn't watched: it never blocks, but loops while `ifToId` is full, so in a hang it keeps running. Nor is a core held in reset (by pmon, say); with cores 1–3 all held there is nothing to watch. `parcore_watchdog_test.dart` runs the same code with short timings.
+
+### Console
+
+The same loop runs pmon, the conductor's console on `console_rx`/`console_tx` (`firmware/parcore/conductor/pmon.inc`; item 16): a text monitor and a framed binary protocol for the host tool `apps/tools/pmon`, to see the cores' states and PCs, hold and release cores, and read and write their TCMs. See [pmon](pmon.md). With it, the conductor's code ends just below `0xE00` (`make firmware` checks it); pmon keeps the line typed at `0xE00`, where the boot keeps the section table.
 
 ### Boot Image
 
@@ -240,7 +247,7 @@ On the ULX3S the image comes from `SpiFlashRom` (`lib/spi_flash_rom.dart`), an o
 
 ### The ULX3S design
 
-`ParcoreUlx3sTop` (`lib/parcore_ulx3s_top.dart`) is `ParcoreTop` with the conductor's code in its TCM, the stage cores' TCMs empty, the boot image in a `SpiFlashRom`, and a two-flip-flop reset synchroniser. The board wrapper (the particle package's `ulx3sBoardVerilog`) adds the PLL and pins: the power button resets, the FTDI UART is the guest's console, `btn[6:1]` are the buttons and `led[7:0]` the LEDs. `bin/generate_parcore_ulx3s.dart` writes the design and the memories' contents.
+`ParcoreUlx3sTop` (`lib/parcore_ulx3s_top.dart`) is `ParcoreTop` with the conductor's code in its TCM, the stage cores' TCMs empty, the boot image in a `SpiFlashRom`, and a two-flip-flop reset synchroniser. The board wrapper (the particle package's `ulx3sBoardVerilog`) adds the PLL and pins: the power button resets, the FTDI UART is the guest's console, the header's `gp[0]` (transmit) and `gp[1]` (receive) are pmon's console, `btn[6:1]` are the buttons and `led[7:0]` the LEDs. `bin/generate_parcore_ulx3s.dart` writes the design and the memories' contents.
 
 The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, shows the buttons on LEDs 0–5 with a heartbeat on LED 7, and names each button as it's pressed. It debounces the buttons in software: a change counts once they have read the same for 64 passes of its main loop, about 10 ms. `apps/riscv/build_riscv_guest.sh` builds a guest with a RISC-V GCC or LLVM toolchain (see `apps/riscv/riscv_toolchain.sh`), linked by `apps/riscv/link.ld` at `0x500` like the official tests.
 
@@ -260,8 +267,9 @@ The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, sho
 | `make parcore-timing` | The last `parcore-bit`'s Fmax and critical path |
 | `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator and prints the cycles per RISC-V instruction, overall and per phase, and where each stage core's cycles go (see [Profiling](#profiling)) |
 | `make parcore-prog`, `make parcore-flash` | Load the bitstream into the ULX3S, or write it to its flash |
+| `make parcore-console`, `make parcore-status`, `make parcore-load` | pmon, the conductor's console, through a USB serial adapter on `gp[0]`/`gp[1]` (`PMON_PORT`; see [pmon](pmon.md)) |
 
-On the board, `make ulx3s-term` opens the guest's console.
+On the board, `make ulx3s-term` opens the guest's console, and `make parcore-console PMON_PORT=...` the conductor's.
 
 ## Profiling
 
@@ -286,6 +294,8 @@ The benchmark guest, `apps/riscv/bench.S`, has five phases: ALU work, memory cop
 | `spi_flash_rom_test.dart` | `SpiFlashRom` through the conductor's SPI controller, at `SPI_DIV` 1 and 3: reads at the start and middle, past the image and the ROM (`0xFF`), below it, and an unknown command |
 | `conductor_boot_test.dart` | The conductor loads a format 2 image from a `SpiFlashRom` (one section into two cores), checks its CRC-32 and releases the cores; each of the five faults leaves the cores held with its code on the LEDs; the CRC-32 matches the standard check value |
 | `parcore_ulx3s_boot_test.dart` | The whole ULX3S design in Verilator, from reset: the conductor loads the stage firmware and a guest from the image ROM, and the guest prints on the FTDI UART |
+| `parcore_watchdog_test.dart` | The conductor's supervisor loop (`watchdog.inc` and `pmon.inc`) with short timings: it fires once core 1 blocks for good, and not while core 0 sleeps in its `WAIT` |
+| `parcore_pmon_test.dart` | The whole ULX3S design in Verilator: after the boot, pmon's banner, text commands (status, write and read in a held core's TCM, an unknown command, backspace, two lines at once), and frames sent back to back (`H`, `G`, `W`, `R`, `S`; a bad CRC, a misaligned read, an unknown command, a write to a core not held; a frame cut short, dropped after the timeout) |
 
 ### Simulators
 
