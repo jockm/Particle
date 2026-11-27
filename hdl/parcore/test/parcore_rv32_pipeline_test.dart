@@ -114,11 +114,11 @@ Future<PipelineResult> runRohdPipeline({
   final regs = <int, int>{};
   final out = StringBuffer();
   for (var r = 0; r < 32; r++) {
-    regs[r] = core1Tcm!.readWord(r * 4);
+    regs[r] = core1Tcm!.readWord(parcoreGuestRegAddr(r));
     out.writeln('R$r=0x${regs[r]!.toRadixString(16).padLeft(8, '0')}');
   }
-  for (var a = 0xF00; a < 0xF20; a += 4) {
-    out.writeln('IN_FLIGHT[0x${a.toRadixString(16)}]=0x${core1Tcm!.readWord(a).toRadixString(16)}');
+  for (var r = 0; r < 32; r++) {
+    out.writeln('IN_FLIGHT[x$r]=${core1Tcm!.readWord(parcoreGuestRegAddr(r) + 4)}');
   }
   return (regs: regs, cycles: maxCycles, stdout: out.toString());
 }
@@ -149,7 +149,12 @@ Future<String> _pipelineSystemVerilog() async {
   return sv;
 }
 
-const _simMain = r"""
+/// The C++ harness, with core 1's register stride filled in
+/// (parcoreGuestRegAddr).
+final _simMain = _simMainTemplate.replaceAll(
+    'GUEST_REG_STRIDE', '${parcoreGuestRegAddr(1)}');
+
+const _simMainTemplate = r"""
 #include "VParcoreTop.h"
 #include "VParcoreTop___024root.h"
 #include "verilated.h"
@@ -197,11 +202,11 @@ int main(int argc, char** argv) {
                 top->rootp->ParcoreTop__DOT__core1_id__DOT__ePc,
                 top->rootp->ParcoreTop__DOT__core2_ex__DOT__ePc,
                 top->rootp->ParcoreTop__DOT__core3_mem__DOT__ePc);
-    for (int a = 0xF00; a < 0xF20; a += 4) {
-        std::printf("IN_FLIGHT[0x%04x]=0x%08x\n", a, word(c1_b0, c1_b1, a));
+    for (int r = 0; r < 32; r++) {
+        std::printf("IN_FLIGHT[x%d]=%u\n", r, word(c1_b0, c1_b1, r * GUEST_REG_STRIDE + 4));
     }
     for (int r = 0; r < 32; r++) {
-        std::printf("R%d=0x%08x\n", r, word(c1_b0, c1_b1, r * 4));
+        std::printf("R%d=0x%08x\n", r, word(c1_b0, c1_b1, r * GUEST_REG_STRIDE));
     }
     delete top;
     return 0;

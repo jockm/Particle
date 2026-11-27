@@ -25,7 +25,10 @@
 ;   R11  the mirror entry being applied (0 when none)
 ;   R12  _apply_mirror's return address
 ; For each instruction: R5 the instruction, R3 the control word, R4 w1, R6
-; w2, R7 B, R13 W3, R15 the next PC; R2 and R14 scratch.
+; w2, R7 B, R13 W3, R15 the next PC; R2 and R14 scratch. Registers named in
+; w1, w2 and B go as their number times 8 (parcore_ops.inc): R4 is scaled as
+; it is extracted, R6 (rd or rs2) at _push, since the control word's Rd is the
+; plain number.
 ; ==============================================================================
 ; This core is built without the shadow bank (ParcoreConfig)
 .define NO_SHADOW_BANK 1
@@ -190,8 +193,9 @@ _if_main_loop:
     ADD     R15, 4              ; the next PC, unless predicted otherwise
     LD      R13, R10            ; W3: the PC
     LD      R3, R9              ; the control word: the flags so far
-    FIELD   R6, R5, 7, 5        ; w2: rd
-    FIELD   R4, R5, 15, 5       ; w1: rs1
+    FIELD   R6, R5, 7, 5        ; w2: rd (scaled at _push)
+    FIELD   R4, R5, 15, 5
+    SHIFTL  R4, 3               ; w1: rs1 * 8 (core 1's register slot)
     FIELD   R2, R5, 0, 7
     JTBL    R2
     FBRA    _h_illegal          ; 0x00
@@ -451,6 +455,7 @@ _send_rd:
     SHIFTL  R2, 8
     OR      R3, R2
 _push:
+    SHIFTL  R6, 3               ; w2: rd or rs2, times 8
     FIFO.W  R3, R1              ; the control word
     FIFO.W  R4, R1              ; w1
     FIFO.W  R6, R1              ; w2
@@ -475,7 +480,8 @@ _h_op:
     FBRA.NZ R14, _t_op_funct7
     ADD     R2, OP_MUL          ; M: MUL ... REMU
 _op_send:
-    FIELD   R7, R5, 20, 5       ; B: rs2
+    FIELD   R7, R5, 20, 5
+    SHIFTL  R7, 3               ; B: rs2 * 8
     SHIFTL  R2, 8
     LD      R14, CLASS_RS1_RS2 * 16
     OR      R2, R14
@@ -504,6 +510,7 @@ _h_jalr:
     FBRA    ._jalr_send
 ._jalr_rd0:
     LD      R14, R4
+    SHIFTR  R14, 3              ; rs1 (R4 is rs1 * 8)
     OR      R14, 4
     SUB     R14, 5
     FBRA.NZ R14, ._jalr_send    ; rs1 not x1 or x5: not a return
@@ -636,6 +643,7 @@ _h_system:
     FBRA.Z  R14, ._csr_send
     LD      R14, CLASS_ZIMM * 16 ; the immediate forms: w1 = zext(rs1 field)
     OR      R2, R14
+    SHIFTR  R4, 3               ; (not scaled: it is a value)
 ._csr_send:
     JUMP    _send_rd
 

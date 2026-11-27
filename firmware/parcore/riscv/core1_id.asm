@@ -13,11 +13,15 @@
 ;
 ; Registers kept for the whole run:
 ;   R0   0, and FIFO channel 0 (ifToId, from core 0)
-;   R1   COUNT_BASE
 ;   R2   1: FIFO channel 1 (idToEx, to core 2)
-;   R3   2: FIFO channel 2 (writebacks from core 3: [Rd, data])
-; For each packet: R4 the control word, R15 rs1, R7 rs2, R13 rd (0: none),
-; R5 operand A, R9 operand B, R10 word 3; R11 and R12 a writeback.
+;   R3   2: FIFO channel 2 (writebacks from core 3: [Rd * 8, data])
+; For each packet: R4 the control word, R15 w1, R13 w2, R9 B, R10 W3 (the
+; registers in them already times 8: parcore_ops.inc); R5 operand A, R9
+; operand B; R7 a copy of rs2; R11 and R12 a writeback; R6, R8, R14 scratch.
+;
+; The register file (461): x(r) at 8r, the number of its writes in flight at
+; 8r + 4, so one pointer reaches both: LD32 (++Rn) reads the count, LD32
+; (--Rn) the value (the pointer modes are built in for this, 464).
 ; ==============================================================================
 ; This core is built without the shadow bank (ParcoreConfig)
 .define NO_SHADOW_BANK 1
@@ -25,76 +29,32 @@
 .include "parcore_ops.inc"
 
 ; Zero page
-.define REG_BASE          0x0000  ; x0..x31, a word each (0x00..0x7F); x0 stays 0
-.define COUNT_BASE        0x0F00  ; 32 bytes (0xF00..0xF1F): writes in flight per register
+.define REG_BASE        0x0000  ; x0..x31, 8 bytes each (0x000-0x0FF): the
+                                ; value, then its writes in flight; x0 stays 0
+.define CANCEL_BASE     0x0800  ; a cancel's value lands at 0x800 + 8 * Rd,
+                                ; which nothing reads; the code must end below
+                                ; it (make firmware checks)
 
-; A writeback [Rd, data] in R11, R12. Rd + 0x20 is a cancel: nothing is
-; committed (its data goes to 0x80 + 4 * Rd, which nothing uses). Either way
-; x(Rd) has one write fewer in flight. Writebacks for x0 are ignored (x0 is
-; never counted, and a cancel never names it). Uses R6, R8.
+; A writeback [Rd * 8, data] in R11, R12. Rd * 8 + 0x800 is a cancel: its value
+; goes to CANCEL_BASE + 8 * Rd. Either way x(Rd) has one write fewer in flight.
+; Writebacks for x0 are ignored (x0 is never counted, and a cancel never names
+; it). Uses R6, R8.
 .macro RETIRE_WB
     LD      R6, R11
-    BCLR    R6, 5               ; R6 = Rd
+    BCLR    R6, 11              ; R6 = Rd * 8
     FBRA.Z  R6, .%_done
-    LD      R8, R11
-    SHIFTL  R8, 2
-    ST32    (R8), R12           ; commit: REG_BASE + (Rd << 2)
-    ADD     R6, R1
-    LD8     R8, (R6)
+    ST32    (R11), R12          ; commit (a cancel's goes to CANCEL_BASE)
+    LD32    R8, (++R6)          ; its writes in flight
     SUB     R8, 1
-    ST8     (R6), R8
+    ST32    (R6), R8
 .%_done:
 .endmacro
 
-; Go to %stall if x(R15) has a write in flight. Uses R8, R14.
-.macro WAIT_RS1 chk, stall
-%chk:
-    LD      R8, R15
-    ADD     R8, R1
-    LD8     R14, (R8)
-    FBRA.NZ R14, %stall
-.endmacro
-
-; The same for x(R15) and x(R7). Uses R6, R8, R14.
-.macro WAIT_RS1_RS2 chk, stall
-%chk:
-    LD      R8, R15
-    ADD     R8, R1
-    LD8     R6, (R8)
-    LD      R8, R7
-    ADD     R8, R1
-    LD8     R14, (R8)
-    OR      R14, R6
-    FBRA.NZ R14, %stall
-.endmacro
-
-; A stall stub, placed after its handler: retire one writeback (waiting for
-; it), then check again. Uses R6, R8, R11, R12.
-.macro STALL_STUB stall, chk
-%stall:
+; A stall: retire one writeback (waiting for it), then check again
+.macro STALL_RETIRE
     FIFO.R  R11, R3
     FIFO.R  R12, R3
     RETIRE_WB
-    JUMP    %chk
-.endmacro
-
-; dst = x(src index register). x0 reads as zero: its word is never written.
-.macro READ_REG dst, src
-    LD      R14, %src
-    SHIFTL  R14, 2
-    LD32    %dst, (R14)
-.endmacro
-
-; The rest of a packet: w1, w2, B, W3 into the registers given. If W3 is a
-; marker, a flush cut this packet short (core 1 had read its first words,
-; and the rest are core 0's markers): drop it.
-.macro REST w1, w2, b
-    FIFO.R  %w1, R0
-    FIFO.R  %w2, R0
-    FIFO.R  %b, R0
-    FIFO.R  R10, R0
-    LD      R14, R10
-    BBRA.N  R14, _id_main_loop
 .endmacro
 
     RESET_SLOT _reset_vector
@@ -116,57 +76,26 @@
     UNEXPECTED_TRAP_ROUTINE
 
 _reset_vector:
-    LDI     R1, COUNT_BASE
     LD      R2, 1               ; idToEx
     LD      R3, 2               ; writebacks
-
     ; x0..x31 = 0, and nothing in flight
-    LD      R4, 0
-    LDI     R6, 32
+    LD      R4, REG_BASE
+    LDI     R6, 64
 ._clear_regs:
-    ST32    (R4), R0          ; no pointer modes in this core
-    ADD     R4, 4
+    ST32    (R4++), R0
     SUB     R6, 1
     BBRA.NZ R6, ._clear_regs
-    LD      R4, R1
-    LD      R6, 8
-._clear_counts:
-    ST32    (R4), R0          ; no pointer modes in this core
-    ADD     R4, 4
-    SUB     R6, 1
-    BBRA.NZ R6, ._clear_counts
     JUMP    _id_main_loop
-
-; A writeback the main loop found (its first word in R11)
-_retire:
-    FIFO.R  R12, R3
-    RETIRE_WB
-    JUMP    _id_main_loop
-
-; ------------------------------------------------------------------------------
-; The shared tail; it falls into the main loop. R4 the control word, R5 and
-; R9 operands A and B, R10 word 3; x(R13) has one more write in flight
-; (R13 = 0: no destination).
-; ------------------------------------------------------------------------------
-_send:
-    FBRA.Z  R13, ._push
-    LD      R8, R13
-    ADD     R8, R1
-    LD8     R6, (R8)
-    ADD     R6, 1
-    ST8     (R8), R6
-._push:
-    FIFO.W  R4, R2              ; control word
-    FIFO.W  R5, R2              ; operand A
-    FIFO.W  R9, R2              ; operand B
-    FIFO.W  R10, R2             ; word 3
 
 ; ==============================================================================
-; Main loop: retire the writebacks waiting, then take one packet
+; Main loop: retire a writeback if one is waiting, then take one packet
 ; ==============================================================================
 _id_main_loop:
     FIFO.TRYR R11, R3           ; a writeback?
-    BBRA.NZ R14, _retire
+    FBRA.Z  R14, ._no_wb
+    FIFO.R  R12, R3
+    RETIRE_WB
+._no_wb:
     ; Take a packet only when idToEx has room for what it sends (a FIFO.W to
     ; a full channel is dropped): fewer than 128 words in it (status bit 15)
     FIFO.STAT R14, R2
@@ -174,81 +103,112 @@ _id_main_loop:
     BBRA.NZ R14, _id_main_loop
     FIFO.TRYR R4, R0            ; a control word?
     BBRA.Z  R14, _id_main_loop
-    BEXTR   R9, R4, 20, 4       ; the class
-    JTBL    R9
-    FBRA    _c_rs1_imm          ; CLASS_RS1_IMM
-    FBRA    _c_rs1_rs2          ; CLASS_RS1_RS2
-    FBRA    _c_store            ; CLASS_STORE
-    FBRA    _c_branch           ; CLASS_BRANCH
-    FBRA    _c_imm              ; CLASS_IMM
-    FBRA    _c_zimm             ; CLASS_ZIMM
-    FBRA    _skip               ; 6-14: not used
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip
-    FBRA    _skip               ; CLASS_MARKER: a marker word on its own
+    LD      R14, R4
+    BBRA.N  R14, _id_main_loop  ; a marker on its own (operations are < 128)
+    FIFO.R  R15, R0             ; w1
+    FIFO.R  R13, R0             ; w2
+    FIFO.R  R9, R0              ; B
+    FIFO.R  R10, R0             ; W3
+    ; If W3 is a marker, a flush cut this packet short (core 1 had read its
+    ; first words, and the rest are core 0's markers): drop it
+    LD      R14, R10
+    BBRA.N  R14, _id_main_loop
+    BEXTR   R8, R4, 20, 4       ; the class
+    JTBL    R8, 16              ; 16-byte entries: the classes inline
 
-_skip:
+    ; CLASS_RS1_IMM: A = x(rs1), B = B
+._ri_chk:
+    LD32    R14, (++R15)        ; x(rs1)'s writes in flight
+    FBRA.NZ R14, ._ri_stall
+    LD32    R5, (--R15)         ; A = x(rs1)
+    FBRA    _send
+    NOP
+    NOP
+    NOP
+    NOP
+    ; CLASS_IMM: A = 0, B = B
+    LD      R5, 0
+    FBRA    _send
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    ; CLASS_ZIMM: A = w1 (the immediate), B = B
+    LD      R5, R15
+    FBRA    _send
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    NOP
+    ; CLASS_STORE: A = x(rs1), B = the offset, word 3 = x(rs2) (the data)
+._st_chk:
+    LD32    R6, (++R15)
+    LD32    R14, (++R13)        ; rs2 is w2
+    OR      R14, R6
+    FBRA.NZ R14, ._st_stall
+    LD32    R5, (--R15)
+    LD32    R10, (--R13)
+    FBRA    ._push              ; no destination
+    NOP
+    ; CLASS_BRANCH: A = x(rs1), B = x(rs2), word 3 = W3 (the address if the
+    ; prediction is wrong)
+._br_chk:
+    LD32    R6, (++R15)
+    LD32    R14, (++R13)        ; rs2 is w2
+    OR      R14, R6
+    FBRA.NZ R14, ._br_stall
+    LD32    R5, (--R15)
+    LD32    R9, (--R13)
+    FBRA    ._push              ; no destination
+    NOP
+    ; CLASS_RS1_RS2: A = x(rs1), B = x(rs2) (rs2 is B); runs on into _send
+._rr_chk:
+    LD      R7, R9
+    LD32    R6, (++R15)
+    LD32    R14, (++R7)
+    OR      R14, R6
+    FBRA.NZ R14, ._rr_stall
+    LD32    R5, (--R15)
+    LD32    R9, (--R7)
+    NOP
+
+; ------------------------------------------------------------------------------
+; The shared tail. R4 the control word, R5 and R9 operands A and B, R10 word
+; 3; x(rd) (R13 = rd * 8, 0: none) has one more write in flight
+; ------------------------------------------------------------------------------
+_send:
+    FBRA.Z  R13, ._push
+    LD32    R6, (++R13)
+    ADD     R6, 1
+    ST32    (R13), R6
+._push:
+    FIFO.W  R4, R2              ; control word
+    FIFO.W  R5, R2              ; operand A
+    FIFO.W  R9, R2              ; operand B
+    FIFO.W  R10, R2             ; word 3
     JUMP    _id_main_loop
 
-; ------------------------------------------------------------------------------
-; CLASS_RS1_IMM: A = x(rs1), B = B
-; ------------------------------------------------------------------------------
-_c_rs1_imm:
-    REST    R15, R13, R9
-    WAIT_RS1 ._ri_chk, ._ri_stall
-    READ_REG R5, R15
-    JUMP    _send
-    STALL_STUB ._ri_stall, ._ri_chk
-
-; ------------------------------------------------------------------------------
-; CLASS_RS1_RS2: A = x(rs1), B = x(rs2) (rs2 in the B word)
-; ------------------------------------------------------------------------------
-_c_rs1_rs2:
-    REST    R15, R13, R7
-    WAIT_RS1_RS2 ._rr_chk, ._rr_stall
-    READ_REG R5, R15
-    READ_REG R9, R7
-    JUMP    _send
-    STALL_STUB ._rr_stall, ._rr_chk
-
-; ------------------------------------------------------------------------------
-; CLASS_STORE: A = x(rs1), B = the offset, word 3 = x(rs2) (the data)
-; ------------------------------------------------------------------------------
-_c_store:
-    REST    R15, R7, R9
-    WAIT_RS1_RS2 ._st_chk, ._st_stall
-    READ_REG R5, R15
-    READ_REG R10, R7
-    LD      R13, 0
-    JUMP    _send
-    STALL_STUB ._st_stall, ._st_chk
-
-; ------------------------------------------------------------------------------
-; CLASS_BRANCH: A = x(rs1), B = x(rs2), word 3 = W3 (the address if the
-; prediction is wrong)
-; ------------------------------------------------------------------------------
-_c_branch:
-    REST    R15, R7, R9
-    WAIT_RS1_RS2 ._br_chk, ._br_stall
-    READ_REG R5, R15
-    READ_REG R9, R7
-    LD      R13, 0
-    JUMP    _send
-    STALL_STUB ._br_stall, ._br_chk
-
-; ------------------------------------------------------------------------------
-; CLASS_IMM: A = 0, B = B; CLASS_ZIMM: A = w1
-; ------------------------------------------------------------------------------
-_c_imm:
-    REST    R5, R13, R9
-    LD      R5, 0
-    JUMP    _send
-_c_zimm:
-    REST    R5, R13, R9
-    JUMP    _send
+; Stalls: a source register has a write in flight. Put the pointers back,
+; retire one writeback (waiting for it), and check again.
+._ri_stall:
+    SUB     R15, 4
+    STALL_RETIRE
+    JUMP    ._ri_chk
+._st_stall:
+    SUB     R15, 4
+    SUB     R13, 4
+    STALL_RETIRE
+    JUMP    ._st_chk
+._br_stall:
+    SUB     R15, 4
+    SUB     R13, 4
+    STALL_RETIRE
+    JUMP    ._br_chk
+._rr_stall:
+    SUB     R15, 4              ; (R7 is copied again from B)
+    STALL_RETIRE
+    JUMP    ._rr_chk

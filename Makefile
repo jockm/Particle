@@ -669,7 +669,7 @@ test-lint: pasm-lint
 
 build: firmware apps
 
-firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS) conductor-size
+firmware: $(PASM_BIN) $(PASM_LINT_BIN) $(FIRMWARE_BINS) conductor-size core1-size
 	@$(DOT_CLEAN_CMD)
 
 # The conductor's code must end below SECTION_TABLE (0x1C00): above it are
@@ -681,6 +681,15 @@ conductor-size: $(PARCORE_BLD)/conductor/conductor.bin
 	  if [ $$((0x$$end)) -gt $$(($(CONDUCTOR_CODE_LIMIT))) ]; then \
 	    echo "conductor-size: the conductor's code ends at 0x$$end, past $(CONDUCTOR_CODE_LIMIT)"; exit 1; fi; \
 	  echo "conductor: code ends at 0x$$end (limit $(CONDUCTOR_CODE_LIMIT))"
+
+# Core 1's code must end below CANCEL_BASE (0x800): a cancelled writeback's
+# value lands at 0x800 + 8 * Rd (core1_id.asm)
+CORE1_CODE_LIMIT := 0x0800
+core1-size: $(PARCORE_BLD)/riscv/core1_id.bin
+	@end=$$(sed -n 's/^; __image_end  *= 0x\([0-9A-Fa-f]*\).*/\1/p' $(PARCORE_BLD)/riscv/core1_id.lst); \
+	  if [ -z "$$end" ]; then echo "core1-size: no __image_end in core1_id.lst"; exit 1; fi; \
+	  if [ $$((0x$$end)) -gt $$(($(CORE1_CODE_LIMIT))) ]; then \
+	    echo "core1-size: core 1's code ends at 0x$$end, past $(CORE1_CODE_LIMIT)"; exit 1; fi
 
 # The conductor and cores 1 and 3 are built without the 2-word branches
 # (ParcoreConfig), so their firmware is assembled for that: JUMP, JUMP.cc and
@@ -721,7 +730,7 @@ $(BUILD_DIR):
 # Toolchain Targets
 # ------------------------------------------------------------------------------
 .PHONY: deps vendor deps-tests
-.PHONY: tools pmon pasm-lint pasm-lsp psim pasm action action-lsp llvm-tools llvm-tests vscode-ext vscode-install vscode-remove-old-pasm lint-tool conductor-size dot-clean install-hooks
+.PHONY: tools pmon pasm-lint pasm-lsp psim pasm action action-lsp llvm-tools llvm-tests vscode-ext vscode-install vscode-remove-old-pasm lint-tool conductor-size core1-size dot-clean install-hooks
 
 tools: pasm-lint pasm-lsp pasm psim action action-lsp pmon
 	@$(DOT_CLEAN_CMD)

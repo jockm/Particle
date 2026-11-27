@@ -5,6 +5,10 @@
 
 import 'package:particle_rohd/cpu_config.dart';
 
+/// Where core 1 keeps the guest's register x[r] in its TCM (461): 8 bytes a
+/// register, its value and then the number of its writes in flight.
+int parcoreGuestRegAddr(int r) => r * 8;
+
 class ParcoreConfig {
   /// Whether the network interfaces' tables (routes, senders, the default
   /// MBOX target) can be changed by CONFIG packets, and the conductor's
@@ -25,7 +29,7 @@ class ParcoreConfig {
     enableDivider: false,
     enableUlx3sFtdiUart: false,
     trapTableBase: 0x00000100,
-    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    // Leave out what its firmware doesn't use (366b): it traps as illegal.
     enablePointerModes: true,
     enableSubword: false,
     enableMboxReceive: false,
@@ -48,7 +52,7 @@ class ParcoreConfig {
     enableMultiplier: false,
     enableDivider: false,
     enableUlx3sFtdiUart: false,
-    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    // Leave out what its firmware doesn't use (366b): it traps as illegal.
     enablePointerModes: false,
     enableSubword: true,
     enableMboxReceive: true,
@@ -63,8 +67,10 @@ class ParcoreConfig {
     fifoDepth: 256,
     enableMultiplier: false,
     enableDivider: false,
-    // Leave out what its firmware doesn't use (366b): it traps as illegal
-    enablePointerModes: false,
+    // Leave out what its firmware doesn't use (366b): it traps as illegal.
+    // The pointer modes are in: core 1's register file reads a register's
+    // count and value through one pointer (464)
+    enablePointerModes: true,
     enableSubword: true,
     enableMboxReceive: false,
     enableShadowBank: false,
@@ -81,7 +87,7 @@ class ParcoreConfig {
     fifoDepth: 256,
     enableMultiplier: true,
     enableDivider: true,
-    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    // Leave out what its firmware doesn't use (366b): it traps as illegal.
     enablePointerModes: false,
     enableSubword: false,
     enableMboxReceive: false,
@@ -100,7 +106,7 @@ class ParcoreConfig {
     enableDivider: false,
     enableUlx3sFtdiUart: true,
     ulx3sUartFifoChannel: 3,
-    // Leave out what its firmware doesn't use (366b): it traps as illegal
+    // Leave out what its firmware doesn't use (366b): it traps as illegal.
     enablePointerModes: false,
     enableSubword: true,
     enableMboxReceive: false,

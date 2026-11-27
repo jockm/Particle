@@ -73,15 +73,15 @@ int main(int argc, char** argv) {
         if (drain > 0) {
             if (--drain == 0) break;
         } else if ((cyc & 0x3F) == 0) {
-            uint32_t x31 = read_c1_word(0x0000 + 31 * 4);
+            uint32_t x31 = read_c1_word(${parcoreGuestRegAddr(31)});
             if (x31 == 0xCAFE0001 || (x31 & 0xFFFF0000) == 0xDEAD0000) {
                 drain = 32;
             }
         }
     }
-    uint32_t x31 = read_c1_word(0x0000 + 31 * 4);
-    uint32_t gp  = read_c1_word(0x0000 + 3 * 4);
-    uint32_t a0  = read_c1_word(0x0000 + 10 * 4);
+    uint32_t x31 = read_c1_word(${parcoreGuestRegAddr(31)});
+    uint32_t gp  = read_c1_word(${parcoreGuestRegAddr(3)});
+    uint32_t a0  = read_c1_word(${parcoreGuestRegAddr(10)});
     std::printf("RESULT x31=0x%08x gp=%u a0=0x%08x cyc=%d\\n", x31, gp, a0, cyc);
     delete top;
     return 0;
@@ -294,7 +294,6 @@ void main() {
             reset.put(1);
             uartRx.put(1);
 
-            const regBase = 0x0000;
             final c1Tcm = top.subModules
                 .firstWhere((m) => m.name == 'core1_tcm') as ParcoreTcm;
 
@@ -321,7 +320,7 @@ void main() {
                 totalCycles = targetCycle;
                 await Future<void>.delayed(Duration.zero);
 
-                x31 = c1Tcm.readWord(regBase + 31 * 4) & 0xFFFFFFFF;
+                x31 = c1Tcm.readWord(parcoreGuestRegAddr(31)) & 0xFFFFFFFF;
                 if (x31 == 0xCAFE0001 || (x31 & 0xFFFF0000) == 0xDEAD0000) {
                   Simulator.registerAction((totalCycles + 32) * 10, () {
                     totalCycles += 32;
@@ -331,7 +330,7 @@ void main() {
                 }
 
                 if (totalCycles % 4096 == 0 || totalCycles >= 55000) {
-                  final gpNow = c1Tcm.readWord(regBase + 3 * 4) & 0xFFFFFFFF;
+                  final gpNow = c1Tcm.readWord(parcoreGuestRegAddr(3)) & 0xFFFFFFFF;
                   final secs = sw.elapsed.inSeconds;
                   final mm = (secs ~/ 60).toString().padLeft(2, '0');
                   final ss = (secs % 60).toString().padLeft(2, '0');
@@ -340,11 +339,11 @@ void main() {
                   );
                   if (gpNow == lastGp && totalCycles % 4096 == 0) {
                     stallWindows++;
-                    final tpNow = c1Tcm.readWord(regBase + 4 * 4) & 0xFFFFFFFF;
-                    final t0Now = c1Tcm.readWord(regBase + 5 * 4) & 0xFFFFFFFF;
-                    final sbNow = c1Tcm.readWord(0x0080) & 0xFFFFFFFF;
+                    final tpNow = c1Tcm.readWord(parcoreGuestRegAddr(4)) & 0xFFFFFFFF;
+                    final t0Now = c1Tcm.readWord(parcoreGuestRegAddr(5)) & 0xFFFFFFFF;
+                    final t0Wif = c1Tcm.readWord(parcoreGuestRegAddr(5) + 4) & 0xFFFFFFFF;
                     stderr.writeln(
-                      '  [STALL DIAG] tp=$tpNow t0=$t0Now sb=0x${sbNow.toRadixString(16)} '
+                      '  [STALL DIAG] tp=$tpNow t0=$t0Now t0_in_flight=$t0Wif '
                       'c0_pc=0x${c0Core.output('memPortAAddr').value.toInt().toRadixString(16)} '
                       'c1_pc=0x${c1Core.output('memPortAAddr').value.toInt().toRadixString(16)} '
                       'c2_pc=0x${c2Core.output('memPortAAddr').value.toInt().toRadixString(16)} '
@@ -376,9 +375,9 @@ void main() {
             scheduleCheckpoint(sliceCycles);
             await Simulator.run();
 
-            x31 = c1Tcm.readWord(regBase + 31 * 4) & 0xFFFFFFFF;
-            final gp = c1Tcm.readWord(regBase + 3 * 4) & 0xFFFFFFFF;
-            final a0 = c1Tcm.readWord(regBase + 10 * 4) & 0xFFFFFFFF;
+            x31 = c1Tcm.readWord(parcoreGuestRegAddr(31)) & 0xFFFFFFFF;
+            final gp = c1Tcm.readWord(parcoreGuestRegAddr(3)) & 0xFFFFFFFF;
+            final a0 = c1Tcm.readWord(parcoreGuestRegAddr(10)) & 0xFFFFFFFF;
 
             expect(
               x31,

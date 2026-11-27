@@ -80,7 +80,10 @@
 .define OP_COUNT    56
 
 ; Core 0 sends core 1 five words: [control word, w1, w2, B, W3]. Core 1 sends
-; core 2 four: [control word, operand A, operand B, word 3]. By class:
+; core 2 four: [control word, operand A, operand B, word 3]. A register named
+; in w1, w2 or B is sent as its number times 8, the offset of its 8-byte slot
+; in core 1's register file (x(r) at 8r, its writes in flight at 8r + 4; 461);
+; the control word's Rd (bits 15:8) stays the plain number. By class:
 ;   CLASS_RS1_IMM  w1 rs1, w2 rd;  A = x(rs1), B = B, word 3 = W3 (the PC)
 ;   CLASS_RS1_RS2  w1 rs1, w2 rd, B rs2;  A = x(rs1), B = x(rs2), word 3 = W3
 ;   CLASS_STORE    w1 rs1, w2 rs2;  A = x(rs1), B = B (the offset),
@@ -88,15 +91,17 @@
 ;   CLASS_BRANCH   w1 rs1, w2 rs2;  A = x(rs1), B = x(rs2), word 3 = W3 (the
 ;                  address to go to if the prediction is wrong)
 ;   CLASS_IMM      w2 rd;  A = 0, B = B, word 3 = W3 (the PC)
-;   CLASS_ZIMM     w1 the immediate, w2 rd;  A = w1, B = B, word 3 = W3
+;   CLASS_ZIMM     w1 the immediate (not scaled), w2 rd;  A = w1, B = B,
+;                  word 3 = W3
 ; Core 1 counts rd (w2) as having a write in flight, for the classes with
 ; one. A word of all ones (CLASS_MARKER in bits 23:20) is a marker: core 0
 ; sends five after every redirect, so core 1 can tell where packets start
-; again after a flush (W3 is never all ones).
-.define CLASS_RS1_IMM  0
-.define CLASS_RS1_RS2  1
-.define CLASS_STORE    2
-.define CLASS_BRANCH   3
-.define CLASS_IMM      4
-.define CLASS_ZIMM     5
+; again after a flush (W3 is never all ones). The classes are numbered in the
+; order of core 1's jump table; the last runs on into the shared send.
+.define CLASS_RS1_IMM  0      ; 0: core 0's OP-IMM path counts on it
+.define CLASS_IMM      1
+.define CLASS_ZIMM     2
+.define CLASS_STORE    3
+.define CLASS_BRANCH   4
+.define CLASS_RS1_RS2  5
 .define CLASS_MARKER   15

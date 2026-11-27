@@ -120,7 +120,7 @@ $dumps            }
     }
     auto& b0 = r->ParcoreTop__DOT__core1_tcm__DOT__ram_bank0;
     auto& b1 = r->ParcoreTop__DOT__core1_tcm__DOT__ram_bank1;
-    std::printf("A0 %08x\\n", uint32_t(b0[10]) | (uint32_t(b1[10]) << 16));
+    std::printf("A0 %08x\\n", uint32_t(b0[${parcoreGuestRegAddr(10) ~/ 4}]) | (uint32_t(b1[${parcoreGuestRegAddr(10) ~/ 4}]) << 16));
     std::printf("END %ld %ld\\n", cyc, doneAt);
     delete top;
     return 0;

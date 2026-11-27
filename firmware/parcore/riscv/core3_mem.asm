@@ -42,19 +42,21 @@ _mem_main_loop:
     FIFO.R  R11, R0             ; result
     FIFO.R  R12, R0             ; address
     FIFO.R  R13, R0             ; store data
-    BEXTR   R4, R10, 8, 5       ; R4 = Rd
+    BEXTR   R4, R10, 8, 5
+    SHIFTL  R4, 3               ; R4 = Rd * 8, its slot in core 1's register file
     LD      R14, R10
     AND     R14, R1
     FBRA.NZ R14, _not_alu       ; a memory operation or a cancel
 _send_wb_tokens:
     ; A writeback for core 1 (one for x0 is ignored there)
-    FIFO.W  R4, R2              ; Rd
+    FIFO.W  R4, R2              ; Rd * 8 (+ 0x800: a cancel)
     FIFO.W  R11, R2             ; the value
     BBRA    _mem_main_loop
 
 ; ------------------------------------------------------------------------------
-; A cancel from core 2 (bit 2): core 1 gets Rd + 0x20, which takes the
-; register off its in-flight count without writing it. Otherwise dispatch on
+; A cancel from core 2 (bit 2): core 1 gets Rd * 8 + 0x800, which takes the
+; register off its in-flight count without writing it (the value goes to
+; 0x800 + 8 * Rd, which nothing uses). Otherwise dispatch on
 ; the memory operation (bits 19:16): 1-5 loads LB, LH, LW, LBU, LHU; 8-10
 ; stores SB, SH, SW; 11 FENCE.I.
 ; ------------------------------------------------------------------------------
@@ -62,7 +64,7 @@ _not_alu:
     LD      R14, R10
     AND     R14, 4
     FBRA.Z  R14, ._not_cancel
-    BSET    R4, 5               ; Rd + 0x20
+    BSET    R4, 11              ; Rd * 8 + 0x800
     JUMP    _send_wb_tokens
 ._not_cancel:
     LD      R3, R10
@@ -212,7 +214,7 @@ _mirror_wait:
 ; Other addresses from 0x1000_0000 to 0x1FFF_FFFF: stores are ignored, loads
 ; return 0. The LEDs and buttons are core 3's own I/O at 0xF000_0000 and
 ; 0xF000_0004. Loads aren't sign-extended. R12 address, R13 store data, R3 the
-; memory operation, R4 Rd (kept for the writeback).
+; memory operation, R4 Rd * 8 (kept for the writeback).
 ; ==============================================================================
 _io_access:
     LD      R6, 3               ; FIFO channel 3: the UART
