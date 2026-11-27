@@ -29,6 +29,14 @@ repository root unless a step says otherwise.
   Verilator runs the Parcore tests and `make parcore-profile` quickly
   (`make test-parcore` uses it by default). Download the build for your
   platform from the [official OSS CAD Suite releases](https://github.com/YosysHQ/oss-cad-suite/releases).
+- **sv2v** (optional): converts ROHD's SystemVerilog to the Verilog-2001 that
+  Xilinx ISE reads, for the Pano Logic G2 (`make pano-uart-rohd`). From the
+  [sv2v releases](https://github.com/zachjs/sv2v/releases), or Homebrew.
+- **Xilinx ISE 14.7** (optional), for the Pano Logic G2 (a Spartan-6 board):
+  Xilinx's ISE VM for Windows 10 and 11, reached over ssh, with a Xilinx
+  Platform Cable USB (or a clone) for JTAG, and a USB serial adapter that
+  takes 5 V logic for its console. See
+  [Setting up the ISE VM](#setting-up-the-ise-vm-for-the-pano-logic-g2).
 - **Docker** (optional), for the OpenROAD ASIC RTL-to-GDS flow: it runs the
   official `openroad/orfs` container image identically across Windows, macOS
   and Linux, with no native OpenROAD compile needed. Particle doesn't have its
@@ -65,6 +73,12 @@ folder to your `PATH` (in `~/.zshrc`):
 export PATH="$HOME/oss-cad-suite/bin:$PATH"
 ```
 
+For the Pano Logic G2 builds, install sv2v:
+
+```sh
+brew install sv2v
+```
+
 ### Windows
 
 Install the tools with winget, from PowerShell or a Command Prompt:
@@ -91,6 +105,10 @@ Advanced app settings → App execution aliases**, switch off the
 For OSS CAD Suite, download the Windows build from the releases page above
 and extract it to `%USERPROFILE%\oss-cad-suite`, so that its tools are in
 `%USERPROFILE%\oss-cad-suite\bin`.
+
+For the Pano Logic G2 builds, download the Windows build of sv2v from the
+[sv2v releases](https://github.com/zachjs/sv2v/releases) and put `sv2v.exe`
+in a folder on your `PATH`.
 
 For the RISC-V toolchain, see
 [RISC-V development tools](#risc-v-development-tools).
@@ -179,6 +197,36 @@ sudo apt install ./code_*.deb
 For OSS CAD Suite, download the Linux archive from the releases page above,
 extract it to `~/oss-cad-suite`, and add
 `export PATH="$HOME/oss-cad-suite/bin:$PATH"` to your `~/.bashrc`.
+
+For the Pano Logic G2 builds, download `sv2v-Linux.zip` from the
+[sv2v releases](https://github.com/zachjs/sv2v/releases) and put the `sv2v`
+binary in a folder on your `PATH` (such as `~/.local/bin`).
+
+## Setting up the ISE VM for the Pano Logic G2
+
+The Pano Logic G2's Spartan-6 is built with Xilinx ISE 14.7, which Xilinx
+ships for Windows 10 and 11 as a VirtualBox VM running Linux. The Makefile's
+`pano-*` targets run on your computer and drive the VM over ssh; see
+[the Pano G2 notes](Documentation/panog2.md) and the
+[configuration guide](Documentation/configuration_guide.md#the-pano-logic-g2).
+
+1. Install the ISE 14.7 VM, with its free licence (it builds for the rev C
+   board's XC6SLX100; a plain ISE WebPACK install on Linux may not support
+   the part). The make targets expect ISE in
+   `/opt/Xilinx/14.7/ISE_DS` (`PANO_ISE` otherwise).
+2. In the VM, start the ssh server at boot, and give your computer an ssh
+   host alias for it, `ise-vm` (`PANO_HOST` otherwise), in `~/.ssh/config`:
+   the VM's port, user and key, and any options its old ssh server needs.
+   `ssh ise-vm true` and `scp` to `ise-vm` must work without a password
+   prompt.
+3. Plug the JTAG cable in and pass it through to the VM (VirtualBox's USB
+   settings); `make pano-vm-check` lists the board's JTAG chain from there.
+4. The builds use `~/Projects/particle-pano` in the VM (`PANO_DIR`
+   otherwise, relative to the VM's home directory).
+
+`make pano-vm-check` checks all of this. The serial console needs an adapter
+that takes 5 V logic, on your computer (see the wiring in the Pano G2
+notes); `make pano-term` opens it.
 
 ## Installing Docker for the ASIC flow (OpenROAD-flow-scripts)
 
@@ -275,6 +323,8 @@ clang --version          # only for the LLVM compiler
 yosys -V                 # optional: OSS CAD Suite
 nextpnr-ecp5 --version   # optional: OSS CAD Suite
 verilator --version      # optional: OSS CAD Suite
+sv2v --version           # optional: the Pano Logic G2 builds
+ssh ise-vm true          # optional: the ISE VM, for the Pano Logic G2
 docker --version         # optional: the OpenROAD flow
 ```
 

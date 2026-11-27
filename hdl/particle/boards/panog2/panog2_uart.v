@@ -16,7 +16,7 @@
 
 module panog2_uart #(
     parameter CLK_HZ = 25000000,
-    parameter BAUD   = 115200
+    parameter BAUD   = 1000000
 ) (
     input  wire clk,        // Y13
     input  wire uart_rx,    // C17: DVI pin 7 (DDC SDA), host -> Pano

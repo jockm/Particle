@@ -79,7 +79,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
         parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
         parcore-console parcore-status parcore-load test-pmon parcore-flash-image parcore-flash-image-jtag \
-        pano-vm-check pano-blink pano-uart pano-prog pano-term
+        pano-vm-check pano-blink pano-uart pano-uart-rohd pano-prog pano-term
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -144,9 +144,10 @@ help:
 	@echo "  make pano-vm-check    - Check ISE in the VM and list the JTAG chain (should show the XC6SLX100)"
 	@echo "  make pano-blink       - Build the LED test (boards/panog2/panog2_blink.v) in the VM: build/panog2/panog2_blink.bit"
 	@echo "  make pano-uart        - Build the serial console test (boards/panog2/panog2_uart.v; PANO_CLOCK_HZ=25000000,"
-	@echo "                          PANO_BAUD=115200): build/panog2/panog2_uart.bit"
+	@echo "                          PANO_BAUD=1000000): build/panog2/panog2_uart.bit"
+	@echo "  make pano-uart-rohd   - The same test from Particle's UART, through sv2v: build/panog2/panog2_uart_rohd.bit"
 	@echo "  make pano-prog        - Load PANO_BIT (default build/panog2/panog2_blink.bit) over JTAG; the flash is untouched"
-	@echo "  make pano-term        - Open the serial console (PANO_PORT=..., PANO_BAUD=115200); Ctrl-] leaves"
+	@echo "  make pano-term        - Open the serial console (PANO_PORT=..., PANO_BAUD=1000000); Ctrl-] leaves"
 	@echo "  make test-pmon        - Run the pmon host tool's tests"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
@@ -313,7 +314,8 @@ PANO_SRC      := $(ROHD_DIR)/boards/panog2
 PANO_BLD      := $(BUILD_DIR)/panog2
 PANO_BIT      ?= $(PANO_BLD)/panog2_blink.bit
 PANO_CLOCK_HZ ?= 25000000
-PANO_BAUD     ?= 115200
+PANO_BAUD     ?= 1000000
+SV2V          ?= sv2v
 PANO_PORT     ?= $(firstword $(wildcard /dev/cu.usbserial-* /dev/cu.wchusbserial* /dev/ttyUSB*))
 PANO_SSH      := ssh $(PANO_HOST)
 PANO_ENV      := PANO_ISE=$(PANO_ISE)
@@ -324,25 +326,37 @@ pano-vm-check:
 	@echo "==> ISE in $(PANO_HOST):$(PANO_ISE)"
 	@$(PANO_SSH) "cd $(PANO_DIR) && $(PANO_ENV) bash vm_check.sh"
 
-# $(call pano_build,TOP,GENERICS): copy TOP.v, TOP.ucf and ise_build.sh to
-# PANO_DIR/TOP in the VM, build there, and copy the bitstream and reports
-# back to build/panog2
+# $(call pano_build,TOP,GENERICS,VDIR,UCF): copy VDIR/TOP.v, the pin file
+# UCF (from boards/panog2) and ise_build.sh to PANO_DIR/TOP in the VM, build
+# there, and copy the bitstream and reports back to build/panog2
 define pano_build
 	@mkdir -p $(PANO_BLD)
 	@$(PANO_SSH) "mkdir -p $(PANO_DIR)/$(1)"
-	@scp -q $(PANO_SRC)/$(1).v $(PANO_SRC)/$(1).ucf $(PANO_SRC)/ise_build.sh $(PANO_HOST):$(PANO_DIR)/$(1)/
+	@scp -q $(3)/$(1).v $(PANO_SRC)/$(4) $(PANO_SRC)/ise_build.sh $(PANO_HOST):$(PANO_DIR)/$(1)/
 	@echo "==> Building $(1) for $(PANO_PART) in $(PANO_HOST):$(PANO_DIR)/$(1)"
-	@$(PANO_SSH) "cd $(PANO_DIR)/$(1) && $(PANO_ENV) PANO_GENERICS='$(2)' bash ise_build.sh $(1) $(PANO_PART) $(1).ucf $(1).v"
+	@$(PANO_SSH) "cd $(PANO_DIR)/$(1) && $(PANO_ENV) PANO_GENERICS='$(2)' bash ise_build.sh $(1) $(PANO_PART) $(4) $(1).v"
 	@scp -q $(foreach f,.bit .syr _map.mrp .par .twr,$(PANO_HOST):$(PANO_DIR)/$(1)/$(1)$(f)) $(PANO_BLD)/
 	@echo "==> Bitstream: $(PANO_BLD)/$(1).bit (reports beside it)"
 endef
 
 pano-blink:
-	$(call pano_build,panog2_blink,)
+	$(call pano_build,panog2_blink,,$(PANO_SRC),panog2_blink.ucf)
 
 pano-uart:
-	$(call pano_build,panog2_uart,CLK_HZ=$(PANO_CLOCK_HZ) BAUD=$(PANO_BAUD))
+	$(call pano_build,panog2_uart,CLK_HZ=$(PANO_CLOCK_HZ) BAUD=$(PANO_BAUD),$(PANO_SRC),panog2_uart.ucf)
 	@echo "    $(PANO_BAUD) baud from a $(PANO_CLOCK_HZ) Hz clock: load it with make pano-prog PANO_BIT=$(PANO_BLD)/panog2_uart.bit"
+
+# The same console test from Particle's own UART: ROHD's SystemVerilog,
+# converted to Verilog-2001 with sv2v, then built as above
+pano-uart-rohd: setup
+	@command -v $(SV2V) > /dev/null || { echo "[FAIL] $(SV2V) not found: install it (macOS: brew install sv2v), or give SV2V=..."; exit 1; }
+	@mkdir -p $(PANO_BLD)/rohd
+	@cd $(ROHD_DIR) && $(DART) run bin/generate_panog2.dart --out ../../$(PANO_BLD)/rohd \
+		--clock-hz $(PANO_CLOCK_HZ) --baud $(PANO_BAUD)
+	@echo "==> sv2v: $(PANO_BLD)/rohd/panog2_uart_rohd.v"
+	@$(SV2V) $(PANO_BLD)/rohd/panog2_uart_rohd.sv > $(PANO_BLD)/rohd/panog2_uart_rohd.v
+	$(call pano_build,panog2_uart_rohd,,$(PANO_BLD)/rohd,panog2_uart.ucf)
+	@echo "    $(PANO_BAUD) baud from a $(PANO_CLOCK_HZ) Hz clock: load it with make pano-prog PANO_BIT=$(PANO_BLD)/panog2_uart_rohd.bit"
 
 pano-prog:
 	@if [ ! -f "$(PANO_BIT)" ]; then \

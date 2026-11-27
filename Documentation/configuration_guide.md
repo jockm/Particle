@@ -140,10 +140,11 @@ A second board, being brought up: the Pano Logic G2 rev C, a thin client with a 
 | `make pano-vm-check` | Checks that ISE's command-line tools are in the VM, and lists the JTAG chain with iMPACT (the XC6SLX100 should be in it) |
 | `make pano-blink` | Builds the LED test, `panog2_blink.v` (the three LEDs lit in turn), in the VM: `build/panog2/panog2_blink.bit`, with the XST, map, place-and-route and timing reports beside it |
 | `make pano-uart` | Builds the serial console test, `panog2_uart.v`: it echoes what it receives and sends a banner after loading and at each press of the Pano button, at `PANO_BAUD` from a `PANO_CLOCK_HZ` clock: `build/panog2/panog2_uart.bit` |
+| `make pano-uart-rohd` | The same echo from Particle's own UART (`lib/panog2_uart_rohd.dart`): generates its SystemVerilog (`bin/generate_panog2.dart`), converts it with `sv2v` (`SV2V`), and builds that in the VM: `build/panog2/panog2_uart_rohd.bit` |
 | `make pano-prog` | Loads `PANO_BIT` (default `build/panog2/panog2_blink.bit`) into the FPGA over JTAG with iMPACT. The board's flash is untouched: a power cycle brings back what it holds |
 | `make pano-term` | Opens the serial console on the host (`PANO_PORT`, default the first `/dev/cu.usbserial-*`, `/dev/cu.wchusbserial*` or `/dev/ttyUSB*`; `PANO_BAUD`). Ctrl-] leaves |
 
-Variables: `PANO_HOST` (default `ise-vm`, an ssh host), `PANO_ISE` (`/opt/Xilinx/14.7/ISE_DS`), `PANO_PART` (`xc6slx100-3-fgg484`), `PANO_DIR` (the work directory in the VM, relative to its home: `Projects/particle-pano`), `PANO_JTAG_POS` (the FPGA's place in the JTAG chain, `1`), `PANO_BIT`, `PANO_CLOCK_HZ` (the clock on Y13: `25000000` while the Ethernet PHY is held in reset), `PANO_BAUD` (`115200`), `PANO_PORT`.
+Variables: `PANO_HOST` (default `ise-vm`, an ssh host), `PANO_ISE` (`/opt/Xilinx/14.7/ISE_DS`), `PANO_PART` (`xc6slx100-3-fgg484`), `PANO_DIR` (the work directory in the VM, relative to its home: `Projects/particle-pano`), `PANO_JTAG_POS` (the FPGA's place in the JTAG chain, `1`), `PANO_BIT`, `PANO_CLOCK_HZ` (the clock on Y13: `25000000` while the Ethernet PHY is held in reset), `PANO_BAUD` (`1000000`), `PANO_PORT`, `SV2V` (`sv2v`).
 
 ---
 

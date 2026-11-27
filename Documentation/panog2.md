@@ -6,7 +6,7 @@ What is known about the board comes from the reverse-engineering work of others:
 
 ## Clock
 
-The board's 25 MHz oscillator drives the Marvell Ethernet PHY, not the FPGA. The PHY's `125CLK` output goes to FPGA pin **Y13**: 25 MHz while the PHY is held in reset, 125 MHz once it is out (its PLL multiplies the 25 MHz). The FPGA pin of the PHY's reset is not yet known here. A design that leaves it alone leaves it pulled down by bitgen's default for unused pins, so presumably held in reset (25 MHz); `panog2_blink` shows which by its speed.
+The board's 25 MHz oscillator drives the Marvell Ethernet PHY, not the FPGA. The PHY's `125CLK` output goes to FPGA pin **Y13**: 25 MHz while the PHY is held in reset, 125 MHz once it is out (its PLL multiplies the 25 MHz). The FPGA pin of the PHY's reset is not yet known here. A design that leaves it alone gets **25 MHz**: the UART tests, built for 25 MHz, talk at 115,200 and 1,000,000 baud (bitgen pulls unused pins down, which presumably holds the PHY in reset).
 
 ## Pins used so far
 
@@ -32,17 +32,18 @@ The console is on the DVI connector's DDC pins, as in LiteX's Pano G2 platform a
 | DDC SCL | 6 | 15 | Pano → host | C14 |
 | Ground | 15 | 10 | | |
 
-The lines idle at 5 V on the connector (measured), so the host's serial adapter must take 5 V logic: a SparkFun Serial Basic (CH340G) set to 5 V is in use. The LiteX guide found 1,000,000 baud to work.
+The lines idle at 5 V on the connector (measured), so the host's serial adapter must take 5 V logic: a SparkFun Serial Basic (CH340G) set to 5 V is in use. 1,000,000 baud works (the make targets' default), as the LiteX guide found.
 
 ## Tools
 
-The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `pano-blink`, `pano-uart`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
+The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `pano-blink`, `pano-uart`, `pano-uart-rohd`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
 
 | File | What it is |
 |---|---|
 | `panog2_blink.v`, `panog2_blink.ucf` | The first test: the three LEDs lit in turn, a step every 2^24 cycles (about 0.67 s at 25 MHz, 0.13 s at 125 MHz) |
 | `ise_build.sh` | The ISE flow in the VM: XST, ngdbuild, map, par, trce, bitgen (`StartupClk:JtagClk`, for loading over JTAG) |
 | `panog2_uart.v`, `panog2_uart.ucf` | The serial console test: an echo, and a banner after loading and at each button press; green flashes for a character received, blue for one sent |
+| `lib/panog2_uart_rohd.dart`, `bin/generate_panog2.dart` (in `hdl/particle`) | The same echo (no banner) from Particle's own UART, `ParticleFtdiUart`, with the same ports, so it uses `panog2_uart.ucf`. `make pano-uart-rohd` generates its SystemVerilog, converts it with `sv2v`, and builds that: the path Particle and Parcore will take to ISE |
 | `impact_prog.sh` | iMPACT in batch mode: load a bitstream, or list the JTAG chain (`--identify`) |
 | `vm_check.sh` | Checks ISE's tools in the VM, then lists the JTAG chain |
 
@@ -50,6 +51,5 @@ Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, 
 
 ## Still to do
 
-* Particle and Parcore on the G2: ROHD's SystemVerilog converted to Verilog-2001 with `sv2v` (ISE's XST reads no SystemVerilog), Spartan-6 equivalents of the ECP5 parts (the PLL, and the SPI flash clock through `STARTUP_SPARTAN6` instead of `USRMCLK`), and the full pin file.
+* Particle and Parcore on the G2: ROHD's SystemVerilog converted to Verilog-2001 with `sv2v` (ISE's XST reads no SystemVerilog; `panog2_uart_rohd` is the first design to take that path), Spartan-6 equivalents of the ECP5 parts (the PLL, and the SPI flash clock through `STARTUP_SPARTAN6` instead of `USRMCLK`), and the full pin file.
 * The PHY's reset pin, for a known 125 MHz clock.
-* The console with Particle's own UART, from ROHD's SystemVerilog through `sv2v` (486b).
