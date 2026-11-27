@@ -50,6 +50,11 @@ The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx
 
 Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, holding Pano's own firmware, is untouched, and a power cycle brings that back.
 
+## What ISE needs from the generated Verilog
+
+* No SystemVerilog: ROHD's output goes through `sv2v` first.
+* Block RAM with byte writes: each byte lane's write needs its own flat condition (`if (wEn && bEn[0])`). With the byte writes inside a shared `if (wEn)`, XST makes `wEn` the enable of the whole port, so the port's read register changes only on writes (it then holds the old contents of the last word written: every load returned that). `ParticleBlockRamTdp` is written that way. `apps/asm/memprobe.asm` checks a core's loads and stores on a new board.
+
 ## Still to do
 
 * One Particle core (`make particle-pano`): its size and speed in ISE, and whether XST makes block RAM of its memory (with byte writes and `$readmemh` contents).

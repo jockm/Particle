@@ -275,19 +275,18 @@ always_ff @(posedge ${p}_clk) begin
   ${p}_a1 <= ${p}_bank1[${p}_aIdx];
   ${p}_aSel <= ${p}_addrA[0];
 end
+// Each byte's write has its own flat condition: with a shared outer
+// if (wEn), Xilinx XST makes wEn the whole port's enable, so the read
+// register then changes only on writes
 always_ff @(posedge ${p}_clk) begin
   ${p}_b0 <= ${p}_bank0[${p}_addrB];
-  if (${p}_wEn) begin
-    if (${p}_bEn[0]) ${p}_bank0[${p}_addrB][7:0] <= ${p}_wData[7:0];
-    if (${p}_bEn[1]) ${p}_bank0[${p}_addrB][15:8] <= ${p}_wData[15:8];
-  end
+  if (${p}_wEn && ${p}_bEn[0]) ${p}_bank0[${p}_addrB][7:0] <= ${p}_wData[7:0];
+  if (${p}_wEn && ${p}_bEn[1]) ${p}_bank0[${p}_addrB][15:8] <= ${p}_wData[15:8];
 end
 always_ff @(posedge ${p}_clk) begin
   ${p}_b1 <= ${p}_bank1[${p}_addrB];
-  if (${p}_wEn) begin
-    if (${p}_bEn[2]) ${p}_bank1[${p}_addrB][7:0] <= ${p}_wData[23:16];
-    if (${p}_bEn[3]) ${p}_bank1[${p}_addrB][15:8] <= ${p}_wData[31:24];
-  end
+  if (${p}_wEn && ${p}_bEn[2]) ${p}_bank1[${p}_addrB][7:0] <= ${p}_wData[23:16];
+  if (${p}_wEn && ${p}_bEn[3]) ${p}_bank1[${p}_addrB][15:8] <= ${p}_wData[31:24];
 end
 assign $raS = ${p}_aSel ? ${p}_a1 : ${p}_a0;
 assign $rbS = {${p}_b1, ${p}_b0};
