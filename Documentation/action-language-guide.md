@@ -1175,7 +1175,7 @@ When a file is checked on its own, outside any program listed in `action.json`, 
 
 ### VS Code
 
-The Action extension, in `apps/tools/vscode/action`, adds syntax highlighting for `.act` files, starts the language server, and checks `action.json`. The Particle extension beside it does the same for Particle assembly. To build the language servers and both extensions and install them (this needs Node.js 20 or later and npm):
+The Action extension, in `apps/tools/vscode/action`, adds syntax highlighting for `.act` files, starts the language server, and checks `action.json`. The Particle extension beside it does the same for Particle assembly. To build the language servers and both extensions and install them (this needs Node.js 22 or later and npm, and VS Code 1.91 or later):
 
 ```sh
 make vscode-install

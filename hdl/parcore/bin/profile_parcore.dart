@@ -229,7 +229,7 @@ Future<void> main(List<String> args) async {
   );
   await top.build();
   // Without ROHD's generation time, so an unchanged design isn't rebuilt
-  var sv = top.generateSynth().replaceAll(
+  var sv = top.dumpSystemVerilog().replaceAll(
       RegExp(r'^.*Generation time:.*\n', multiLine: true), '');
   final ends = RegExp(r'^endmodule : ParticleCpuCore(_\d+)?$', multiLine: true);
   if (!ends.hasMatch(sv)) throw StateError('no ParticleCpuCore module in the design');

@@ -462,7 +462,7 @@ class ParticleRingInterface extends Module {
     final mboxArrives = arrives(NocPacket.mbox);
     final mboxIn = mboxArrives & pDest.eq(Const(coreId, width: 8));
     final arrivedEntry =
-        [NocPacket.channel(eject), NocPacket.payload(eject), pSrc].swizzle();
+        [NocPacket.channel(eject), NocPacket.payload(eject), pSrc].concat();
     const entryWidth = 4 + 32 + 8; // vector, value, source
 
     // The receive queue (mboxReceive) and the broadcast slot
@@ -528,7 +528,7 @@ class ParticleRingInterface extends Module {
     final ansQueue = ParticleLutRam(
       clk: clk,
       wAddr: aqWr,
-      wData: [pSrc, rqFull].swizzle(),
+      wData: [pSrc, rqFull].concat(),
       wEn: answer,
       rAddrA: aqRd,
       rAddrB: aqRd,
@@ -547,7 +547,7 @@ class ParticleRingInterface extends Module {
     final nackPacket = [
       Const(NocPacket.nack, width: 3),
       answerPacket.getRange(0, NocPacket.typeLsb),
-    ].swizzle();
+    ].concat();
     final answerOut = mux(ansQueue.rDataA[0], nackPacket, answerPacket);
 
     // Sending (mboxSend): one MBOX in flight
@@ -758,7 +758,7 @@ class ParticleRingInterface extends Module {
         Const(0, width: 6),
         _credits[j].eq(0) | blocked,
         heldTx.eq(0),
-      ].swizzle();
+      ].concat();
     }
 
     Logic statusOf(NiChannel ch) {

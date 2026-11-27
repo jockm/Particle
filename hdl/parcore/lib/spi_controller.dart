@@ -114,7 +114,7 @@ class SpiController extends Module {
             // Falling edge of SCK: shift (next MOSI bit out, sampled MISO in)
             // and advance the bit counter
             sckReg < Const(0),
-            shiftReg < [shiftReg.slice(6, 0), misoSample].swizzle(),
+            shiftReg < [shiftReg.slice(6, 0), misoSample].concat(),
             If(bitCnt.eq(Const(1, width: 4)), then: [
               busy < Const(0),
               bitCnt < Const(0, width: 4),
@@ -133,7 +133,7 @@ class SpiController extends Module {
     spiMosi <= shiftReg.slice(7, 7);
 
     // Readback Mux
-    final ctrlRead = [Const(0, width: 29), busy, Const(0, width: 1), regCsN].swizzle();
+    final ctrlRead = [Const(0, width: 29), busy, Const(0, width: 1), regCsN].concat();
     final dataRead = shiftReg.zeroExtend(32);
     final divRead  = regDiv.zeroExtend(32);
 

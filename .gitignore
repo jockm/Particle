@@ -2,6 +2,8 @@
 .dart_tool/
 **/.dart_tool/
 *.lock
+# Every Dart package's pubspec.lock is committed (make deps-upgrade)
+!pubspec.lock
 
 # macOS metadata, Finder state, and AppleDouble resource fork shadow files
 .DS_Store

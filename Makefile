@@ -74,7 +74,7 @@ MULTI_NAMES   := $(filter-out ._%,$(notdir $(patsubst %/,%,$(wildcard $(MULTI_RO
 MULTI_BINS    := $(patsubst %,$(BUILD_DIR)/%.bin,$(MULTI_NAMES))
 MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
 
-.PHONY: all setup test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
+.PHONY: all setup deps-upgrade deps-outdated test test-all test-particle test-particle-isa test-parcore test-parcore-isa test-sim test-sim-cluster compiler-tests test-lint \
         lint lint-asm build generate generate-particle generate-parcore \
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
         parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
@@ -91,6 +91,9 @@ help:
 	@echo "Particle & Parcore Build Automation"
 	@echo "==================================="
 	@echo "  make setup            - Fetch Dart dependencies for hdl/particle and parcore"
+	@echo "  make deps-upgrade     - Upgrade every Dart package's dependencies (dart pub upgrade); commit the"
+	@echo "                          pubspec.lock files it changes"
+	@echo "  make deps-outdated    - Show each Dart package's out-of-date dependencies (dart pub outdated)"
 	@echo "  make lint-asm         - Statically lint all assembly files"
 	@echo "  make build            - Build firmware, apps, and generate all HDL"
 	@echo "  make test             - Run all unit and integration tests (ROHD + Sim)"
@@ -147,6 +150,23 @@ setup:
 	@cd $(ROHD_DIR) && $(DART) pub get
 	@echo "==> Fetching dependencies for Parcore ROHD..."
 	@cd $(PARCORE_DIR) && $(DART) pub get
+
+# Every Dart package; each one's pubspec.lock is committed (458)
+DART_PACKAGES := hdl/particle hdl/parcore \
+	apps/tools/pasm apps/tools/pasm_lint apps/tools/pasm_lsp apps/tools/psim \
+	apps/tools/action apps/tools/action_lsp apps/tools/pmon
+
+deps-upgrade:
+	@for p in $(DART_PACKAGES); do \
+		echo "==> $$p: dart pub upgrade"; \
+		(cd $$p && $(DART) pub upgrade) || exit 1; \
+	done
+
+deps-outdated:
+	@for p in $(DART_PACKAGES); do \
+		echo "==> $$p"; \
+		(cd $$p && $(DART) pub outdated) || exit 1; \
+	done
 
 # ------------------------------------------------------------------------------
 # Linting Targets
@@ -768,10 +788,10 @@ $(ACTION_LSP_BIN): $(shell find apps/tools/action_lsp apps/tools/action -name "*
 	@$(DART) compile exe apps/tools/action_lsp/bin/action_lsp.dart -o $@
 
 # VS Code extensions: Action (the language, for any target) and Particle
-# (Particle assembly). Need Node.js 20 or later and npm; not part of
+# (Particle assembly). Need Node.js 22 or later and npm; not part of
 # 'make tools'.
 vscode-ext:
-	@command -v npm > /dev/null || { echo "[FAIL] npm not found: install Node.js 20 or later (it includes npm)"; exit 1; }
+	@command -v npm > /dev/null || { echo "[FAIL] npm not found: install Node.js 22 or later (it includes npm)"; exit 1; }
 	@mkdir -p $(BUILD_DIR)
 	@for e in $(VSCODE_EXTS); do \
 		if [ ! -f "$(VSCODE_DIR)/$$e/package.json" ]; then \

@@ -366,7 +366,7 @@ class ParticleCpuCore extends Module {
         if (config.enableImmBextr)
           CaseItem(Const(ParticleOpcodes.bextrImm, width: 8), [
             aluOp <
-                mux(eImm16[15], Const(AluOps.sbextr, width: 5),
+                mux<Logic>(eImm16[15], Const(AluOps.sbextr, width: 5),
                     Const(AluOps.bextr, width: 5)),
             aluOperandB < eImm16.zeroExtend(32),
           ]),
@@ -542,8 +542,8 @@ class ParticleCpuCore extends Module {
         mode.lte(Const(9, width: 4));
     final isTas = op(ParticleOpcodes.tas);
     // Size in bytes: 1, 2 or 4
-    final size = mux(group.eq(Const(1, width: 4)), Const(1, width: 32),
-        mux(group.eq(Const(2, width: 4)), Const(2, width: 32), Const(4, width: 32)));
+    final size = mux<Logic>(group.eq(Const(1, width: 4)), Const(1, width: 32),
+        mux<Logic>(group.eq(Const(2, width: 4)), Const(2, width: 32), Const(4, width: 32)));
     // Load modes 1..4 and store modes 6..9 change the pointer register
     final modeOfs = mux(isStoreOp, mode - Const(5, width: 4), mode);
     // Without pointer modes those opcodes are illegal and never run
@@ -579,10 +579,10 @@ class ParticleCpuCore extends Module {
         storeWData < mux(isTas, valB, storeVal),
       ], orElse: [
         If(isSize2, then: [
-          storeBEn < mux(effAddr.slice(1, 1).eq(1), Const(0xC, width: 4),
+          storeBEn < mux<Logic>(effAddr.slice(1, 1).eq(1), Const(0xC, width: 4),
               Const(0x3, width: 4)),
           storeWData <
-              [storeVal.slice(15, 0), storeVal.slice(15, 0)].swizzle(),
+              [storeVal.slice(15, 0), storeVal.slice(15, 0)].concat(),
         ], orElse: [
           storeBEn < (Const(1, width: 4) << effAddr.slice(1, 0)),
           storeWData < [
@@ -590,7 +590,7 @@ class ParticleCpuCore extends Module {
             storeVal.slice(7, 0),
             storeVal.slice(7, 0),
             storeVal.slice(7, 0),
-          ].swizzle(),
+          ].concat(),
         ]),
       ]),
     ]);
@@ -720,10 +720,10 @@ class ParticleCpuCore extends Module {
     // {0, pc/2, 1} + {0, offset ^ back, carry}: the low bit carries the 1
     final brSum = Logic(name: 'brSum', width: 33);
     brSum <=
-        [Const(0), pc.getRange(1, 32), Const(1)].swizzle() +
-            [Const(0), brOffset ^ brBack.replicate(31), brCarry].swizzle();
-    final relTarget = [brSum.getRange(1, 32), pc[0]].swizzle();
-    final leaAddr = [brSum.getRange(1, 32), eImm16[0]].swizzle();
+        [Const(0), pc.getRange(1, 32), Const(1)].concat() +
+            [Const(0), brOffset ^ brBack.replicate(31), brCarry].concat();
+    final relTarget = [brSum.getRange(1, 32), pc[0]].concat();
+    final leaAddr = [brSum.getRange(1, 32), eImm16[0]].concat();
     branchTaken <= brCond;
     branchNextPc <= mux(brCond,
         mux(brAbs, mux(op(ParticleOpcodes.reti), epc, valA), relTarget), pcPlus2);
@@ -887,7 +887,7 @@ class ParticleCpuCore extends Module {
           CaseItem(Const(ParticleOpcodes.fifoTryW, width: 8), [
             rfWEn < Const(1),
             rfWAddr < Const(14, width: 4),
-            rfWData < mux(fifoFull, Const(0, width: 32), Const(1, width: 32)),
+            rfWData < mux<Logic>(fifoFull, Const(0, width: 32), Const(1, width: 32)),
           ]),
           CaseItem(Const(ParticleOpcodes.fifoStat, width: 8),
               [rfWEn < Const(1), rfWData < fifoStatus]),
@@ -907,7 +907,7 @@ class ParticleCpuCore extends Module {
       If(doExec & op(ParticleOpcodes.fifoTryR), then: [
         rfWEn2 < Const(1),
         rfWAddr2 < Const(14, width: 4),
-        rfWData2 < mux(fifoEmpty, Const(0, width: 32), Const(1, width: 32)),
+        rfWData2 < mux<Logic>(fifoEmpty, Const(0, width: 32), Const(1, width: 32)),
       ]),
       If(oddTarget, then: [
         rfWEn2 < Const(1),
@@ -1076,8 +1076,8 @@ class ParticleCpuCore extends Module {
     // One adder for both: dPc + disp, or dPc + ~disp + 1
     final dSum = Logic(name: 'dSum', width: 34);
     dSum <=
-        [Const(0), dPc, Const(1)].swizzle() +
-            [Const(0), dImm8Disp ^ dIsBbra.replicate(32), dIsBbra].swizzle();
+        [Const(0), dPc, Const(1)].concat() +
+            [Const(0), dImm8Disp ^ dIsBbra.replicate(32), dIsBbra].concat();
     final dTarget = dSum.getRange(1, 33);
     final dRedirect = dResolves & dTaken;
 
@@ -1208,14 +1208,14 @@ class ParticleCpuCore extends Module {
       lValid < wNext,
       lIsMul < wNext & isMulOp,
       ldMboxReg <
-          mux(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF04, width: 32)),
+          mux<Logic>(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF04, width: 32)),
               Const(1, width: 2),
-              mux(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF08, width: 32)),
+              mux<Logic>(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF08, width: 32)),
                   Const(2, width: 2), Const(0, width: 2))),
       If(wNext, then: [
         ldDest < mux(isTas, rl, rr),
-        ldSizeCode < mux(isSize4, Const(2, width: 2),
-            mux(isSize2, Const(1, width: 2), Const(0, width: 2))),
+        ldSizeCode < mux<Logic>(isSize4, Const(2, width: 2),
+            mux<Logic>(isSize2, Const(1, width: 2), Const(0, width: 2))),
         ldLow < effAddr.slice(1, 0),
       ]),
 

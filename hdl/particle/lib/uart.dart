@@ -69,7 +69,7 @@ class ParticleUartTransceiver extends Module {
       If(~txBusy, then: [
         If(txValid, then: [
           // Frame: [Stop bit (1), Data bit 7..0, Start bit (0)]
-          txShift < [Const(1, width: 1), txData, Const(0, width: 1)].swizzle(),
+          txShift < [Const(1, width: 1), txData, Const(0, width: 1)].concat(),
           txBusy < Const(1),
           txBitIdx < Const(0, width: 4),
           // Reset counter so start bit is held for the full baudDivisor period
@@ -78,7 +78,7 @@ class ParticleUartTransceiver extends Module {
       ], orElse: [
         If(txClkCounter.eq(0), then: [
           txClkCounter < baudDivisor - Const(1, width: 16),
-          txShift < [Const(1, width: 1), txShift.slice(9, 1)].swizzle(),
+          txShift < [Const(1, width: 1), txShift.slice(9, 1)].concat(),
           If(txBitIdx.eq(9), then: [
             txBusy < Const(0),
           ], orElse: [
@@ -136,7 +136,7 @@ class ParticleUartTransceiver extends Module {
           ], orElse: [
             If(rxBitIdx.lte(Const(8, width: 4)), then: [
               // Sample 8 data bits LSB first
-              rxShiftReg < [rxPin, rxShiftReg.slice(7, 1)].swizzle(),
+              rxShiftReg < [rxPin, rxShiftReg.slice(7, 1)].concat(),
               rxBitIdx < rxBitIdx + Const(1, width: 4),
             ], orElse: [
               // rxBitIdx == 9: Center of Stop bit

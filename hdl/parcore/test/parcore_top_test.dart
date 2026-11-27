@@ -46,7 +46,7 @@ void main() {
     });
 
     test("ParcoreTop elaborates, builds synthesis graph, and generates SystemVerilog", () {
-      final sv = top.generateSynth();
+      final sv = top.dumpSystemVerilog();
       expect(sv, contains("module ParcoreTop"));
       expect(sv, contains("parcore_fifo_if_to_id"));
       expect(sv, contains("parcore_fifo_id_to_ex"));

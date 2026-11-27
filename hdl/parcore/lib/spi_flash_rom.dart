@@ -147,7 +147,7 @@ class SpiFlashRom extends Module {
     ]);
     final nextByte = mux(inRange, rom.data, Const(0xFF, width: 8));
 
-    final shifted = [shiftIn.slice(6, 0), mosi].swizzle();
+    final shifted = [shiftIn.slice(6, 0), mosi].concat();
     final byteDone = bitCount.eq(Const(7, width: 3));
 
     Sequential(clk, reset: reset | csN, resetValues: {
@@ -167,21 +167,21 @@ class SpiFlashRom extends Module {
           Case(state, [
             CaseItem(Const(0, width: 3), [
               state <
-                  mux(shifted.eq(Const(0x03, width: 8)), Const(1, width: 3),
+                  mux<Logic>(shifted.eq(Const(0x03, width: 8)), Const(1, width: 3),
                       Const(6, width: 3)),
             ]),
             CaseItem(Const(1, width: 3), [
-              address < [shifted, address.slice(15, 0)].swizzle(),
+              address < [shifted, address.slice(15, 0)].concat(),
               state < Const(2, width: 3),
             ]),
             CaseItem(Const(2, width: 3), [
               address <
                   [address.slice(23, 16), shifted, address.slice(7, 0)]
-                      .swizzle(),
+                      .concat(),
               state < Const(3, width: 3),
             ]),
             CaseItem(Const(3, width: 3), [
-              address < [address.slice(23, 8), shifted].swizzle(),
+              address < [address.slice(23, 8), shifted].concat(),
               state < Const(4, width: 3),
               ramReady < Const(0),
               fallSeen < Const(0),
@@ -214,7 +214,7 @@ class SpiFlashRom extends Module {
           shiftOut < nextByte,
           address < address + 1,
         ], orElse: [
-          shiftOut < [shiftOut.slice(6, 0), Const(1)].swizzle(),
+          shiftOut < [shiftOut.slice(6, 0), Const(1)].concat(),
         ]),
       ]),
     ]);
@@ -251,11 +251,11 @@ class SpiFlashRom extends Module {
     final eraseAddr = Logic(name: 'erase_addr', width: 24);
     final eraseLeft = Logic(name: 'erase_left', width: 13);
     final wip = busy.neq(c(0, 32)) | erasing;
-    final status = [c(0, 6), wel, wip].swizzle();
+    final status = [c(0, 6), wel, wip].concat();
 
     Logic inRangeOf(Logic a) =>
         a.slice(23, idxBits).eq(c(baseAddr >> idxBits, 24 - idxBits));
-    final shifted = [shiftIn.slice(6, 0), mosi].swizzle();
+    final shifted = [shiftIn.slice(6, 0), mosi].concat();
     final byteDone = bitCount.eq(c(7, 3));
 
     // Writes: a programmed byte as it arrives (its bits can only clear, so
@@ -304,7 +304,7 @@ class SpiFlashRom extends Module {
       ]),
       If(startErase, then: [
         erasing < c(1, 1),
-        eraseAddr < [address.slice(23, 12), c(0, 12)].swizzle(),
+        eraseAddr < [address.slice(23, 12), c(0, 12)].concat(),
         eraseLeft < c(4096, 13),
       ]),
       If(erasing, then: [
@@ -315,13 +315,13 @@ class SpiFlashRom extends Module {
     ]);
 
     // While busy, only read status is answered; program and erase need WEL
-    final firstState = mux(
+    final firstState = mux<Logic>(
         shifted.eq(c(0x05, 8)),
         c(8, 4),
-        mux(
+        mux<Logic>(
             wip,
             c(6, 4),
-            mux(
+            mux<Logic>(
                 shifted.eq(c(0x03, 8)) |
                     (wel & (shifted.eq(c(0x02, 8)) | shifted.eq(c(0x20, 8)))),
                 c(1, 4),
@@ -346,27 +346,27 @@ class SpiFlashRom extends Module {
           Case(state, [
             CaseItem(c(0, 4), [cmd < shifted, state < firstState]),
             CaseItem(c(1, 4), [
-              address < [shifted, address.slice(15, 0)].swizzle(),
+              address < [shifted, address.slice(15, 0)].concat(),
               state < c(2, 4),
             ]),
             CaseItem(c(2, 4), [
               address <
                   [address.slice(23, 16), shifted, address.slice(7, 0)]
-                      .swizzle(),
+                      .concat(),
               state < c(3, 4),
             ]),
             CaseItem(c(3, 4), [
-              address < [address.slice(23, 8), shifted].swizzle(),
+              address < [address.slice(23, 8), shifted].concat(),
               state <
-                  mux(cmd.eq(c(0x03, 8)), c(4, 4),
-                      mux(cmd.eq(c(0x02, 8)), c(7, 4), c(9, 4))),
+                  mux<Logic>(cmd.eq(c(0x03, 8)), c(4, 4),
+                      mux<Logic>(cmd.eq(c(0x02, 8)), c(7, 4), c(9, 4))),
               ramReady < c(0, 1),
               fallSeen < c(0, 1),
             ]),
             // A page program: the next byte, within the page
             CaseItem(c(7, 4), [
               address <
-                  [address.slice(23, 8), address.slice(7, 0) + 1].swizzle(),
+                  [address.slice(23, 8), address.slice(7, 0) + 1].concat(),
             ]),
           ]),
         ]),
@@ -390,7 +390,7 @@ class SpiFlashRom extends Module {
           shiftOut < nextByte,
           address < address + 1,
         ], orElse: [
-          shiftOut < [shiftOut.slice(6, 0), c(1, 1)].swizzle(),
+          shiftOut < [shiftOut.slice(6, 0), c(1, 1)].concat(),
         ]),
       ]),
       // The status, again and again: the falling edge after the command's
@@ -399,7 +399,7 @@ class SpiFlashRom extends Module {
         If(bitCount.eq(0), then: [
           shiftOut < status,
         ], orElse: [
-          shiftOut < [shiftOut.slice(6, 0), c(1, 1)].swizzle(),
+          shiftOut < [shiftOut.slice(6, 0), c(1, 1)].concat(),
         ]),
       ]),
     ]);

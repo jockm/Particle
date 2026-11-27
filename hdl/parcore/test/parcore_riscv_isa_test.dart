@@ -33,7 +33,7 @@ Future<({int x31, int gp, int a0, int cycles})> _runVerilatorSynth(
   // SystemVerilog or the C++ harness changes (a cached model would otherwise
   // keep simulating old hardware)
   {
-    var sv = top.generateSynth();
+    var sv = top.dumpSystemVerilog();
     // Each TCM loads its contents with $readmemh from the bank files
     // written below (ParcoreTop(tcmInitDir: '/tmp/parcore_verilator')).
     final svFile = File('${tmpDir.path}/parcore_top.sv');

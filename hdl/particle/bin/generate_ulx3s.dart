@@ -137,7 +137,7 @@ Future<void> main(List<String> args) async {
 
   final sv = StringBuffer()
     ..writeln(ulx3sBoardVerilog(pll: pll, coreModule: top.definitionName))
-    ..writeln(top.generateSynth());
+    ..writeln(top.dumpSystemVerilog());
   final svFile = File('${dir.path}/particle_ulx3s.sv')..writeAsStringSync(sv.toString());
 
   final mhz = clockHz / 1e6;

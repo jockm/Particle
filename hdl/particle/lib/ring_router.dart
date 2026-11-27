@@ -63,7 +63,7 @@ class NocPacket {
         channel.zeroExtend(4),
         Const(src, width: 8),
         payload.zeroExtend(32),
-      ].swizzle();
+      ].concat();
 
   static Logic type(Logic p) => p.getRange(typeLsb, typeLsb + 3);
   static Logic dest(Logic p) => p.getRange(destLsb, destLsb + 8);

@@ -79,7 +79,7 @@ class ParticleMemoryBus extends Module {
         ]),
         CaseItem(Const(1, width: 2), [
           bEnCalc <
-              mux(byteOffset.slice(1, 1).eq(1), Const(0xC, width: 4),
+              mux<Logic>(byteOffset.slice(1, 1).eq(1), Const(0xC, width: 4),
                   Const(0x3, width: 4)),
         ]),
         CaseItem(Const(2, width: 2), [
@@ -100,10 +100,10 @@ class ParticleMemoryBus extends Module {
                 wData.slice(7, 0),
                 wData.slice(7, 0),
                 wData.slice(7, 0)
-              ].swizzle(),
+              ].concat(),
         ]),
         CaseItem(Const(1, width: 2), [
-          wDataAligned < [wData.slice(15, 0), wData.slice(15, 0)].swizzle(),
+          wDataAligned < [wData.slice(15, 0), wData.slice(15, 0)].concat(),
         ]),
         CaseItem(Const(2, width: 2), [
           wDataAligned < wData,

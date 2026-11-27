@@ -124,7 +124,7 @@ Future<void> main(List<String> args) async {
         coreModule: top.definitionName,
         buttons: true,
         flash: realFlash))
-    ..writeln(top.generateSynth());
+    ..writeln(top.dumpSystemVerilog());
   final svFile = File('${dir.path}/parcore_ulx3s.sv')
     ..writeAsStringSync(sv.toString());
 

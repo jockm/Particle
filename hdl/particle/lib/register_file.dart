@@ -208,7 +208,7 @@ class RegisterFile extends Module {
     final nextBank = [
       for (var i = 0; i < 16; i++)
         inRam(i) ? _bank[i] ^ swapped(idx(i)) : Const(0),
-    ].rswizzle();
+    ].rconcat();
     final swap14 = swapped(idx(14));
     Sequential(
       clk,

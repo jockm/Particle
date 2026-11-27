@@ -34,7 +34,7 @@ Future<void> main() async {
 
   await core.build();
 
-  final svCode = core.generateSynth();
+  final svCode = core.dumpSystemVerilog();
 
   final outputFile = File('particle_top.sv');
   await outputFile.writeAsString(svCode);

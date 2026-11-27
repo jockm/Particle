@@ -131,7 +131,7 @@ class SdramController extends Module {
             outBa < cmdAddr.slice(23, 22),
             outAddr < cmdAddr.slice(21, 9),
             count < cmdBurstLen,
-            state < mux(cmdRw, Const(2, width: 4), Const(1, width: 4)),
+            state < mux<Logic>(cmdRw, Const(2, width: 4), Const(1, width: 4)),
           ]),
         ]),
 

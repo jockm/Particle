@@ -132,7 +132,7 @@ void main() {
         conductorBinary: condBinFile.readAsBytesSync(),
       );
       await top.build();
-      final sv = top.generateSynth();
+      final sv = top.dumpSystemVerilog();
       expect(sv, contains('module ParcoreTop'));
       expect(sv, contains('SpiController'));
       expect(sv, contains('parcore_conductor'));

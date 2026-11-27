@@ -150,6 +150,6 @@ class ParticleFifoSubsystem extends Module {
           Const(0, width: 6),
           full,
           empty,
-        ].swizzle();
+        ].concat();
   }
 }

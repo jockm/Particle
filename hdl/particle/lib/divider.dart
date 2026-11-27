@@ -67,7 +67,7 @@ class ParticleDivider extends Module {
     );
 
     // One bit shift left of the 64-bit working register
-    final accShifted = [acc.slice(62, 0), Const(0, width: 1)].swizzle();
+    final accShifted = [acc.slice(62, 0), Const(0, width: 1)].concat();
     final remPart = accShifted.slice(63, 32);
     final quotPart = accShifted.slice(31, 0);
 
@@ -76,8 +76,8 @@ class ParticleDivider extends Module {
 
     final nextAcc = mux(
       subOk,
-      [subDiff, quotPart.slice(31, 1), Const(1, width: 1)].swizzle(),
-      [remPart, quotPart.slice(31, 1), Const(0, width: 1)].swizzle(),
+      [subDiff, quotPart.slice(31, 1), Const(1, width: 1)].concat(),
+      [remPart, quotPart.slice(31, 1), Const(0, width: 1)].concat(),
     );
 
     final finalQuot = mux(
@@ -114,7 +114,7 @@ class ParticleDivider extends Module {
             isSigned & (dividend.slice(31, 31) ^ divisor.slice(31, 31)),
         signResRem < isSigned & dividend.slice(31, 31),
         regDivisor < absDivisor,
-        acc < [Const(0, width: 32), absDividend].swizzle(),
+        acc < [Const(0, width: 32), absDividend].concat(),
       ], orElse: [
         If(busy, then: [
           If(divByZero, then: [

@@ -6,13 +6,12 @@ version: 0.1.0
 publish_to: 'none'
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: ^3.6.0
 
 dependencies:
-  rohd: ^0.6.11
+  rohd: ^0.7.5
   particle_rohd:
     path: ../particle
 
 dev_dependencies:
-  lints: ^3.0.0
   test: ^1.24.0

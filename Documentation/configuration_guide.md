@@ -45,7 +45,7 @@ Each design has a `make` target, run from the repository root. Each fetches the 
 | `make generate-ulx3s` | `build/ulx3s/particle_ulx3s.sv`, `program_bank0.hex`, `program_bank1.hex` | The ULX3S board design (`ulx3s_board`), with a program in its block RAM. See *The ULX3S Board* below. |
 | `make generate` | `particle_top.sv` and `parcore_top.sv` | |
 
-The generators are Dart programs (`hdl/particle/bin/generate.dart`, `generate_ulx3s.dart`, and `hdl/parcore/bin/generate_parcore.dart`) that build the design with Intel ROHD and write it with `generateSynth()`.
+The generators are Dart programs (`hdl/particle/bin/generate.dart`, `generate_ulx3s.dart`, and `hdl/parcore/bin/generate_parcore.dart`) that build the design with Intel ROHD (0.7) and write it with `dumpSystemVerilog()`.
 
 ---
 

@@ -264,7 +264,7 @@ class ParticleNetworkInterface extends Module {
         Const(0, width: 6),
         _credits[j].eq(0),
         held.eq(0),
-      ].swizzle();
+      ].concat();
     }
 
     Logic statusOf(NiChannel ch) {

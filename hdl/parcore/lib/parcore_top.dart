@@ -223,10 +223,10 @@ class ParcoreTop extends Module {
     final coreHalted = [for (var n = 0; n < 4; n++) Logic(name: 'core${n}_halted')];
     final coreState = [
       for (var n = 0; n < 4; n++)
-        mux(condCoreReset[n], Const(3, width: 2),
-            mux(coreHalted[n], Const(2, width: 2),
-                mux(coreWaiting[n], Const(1, width: 2), Const(0, width: 2)))),
-    ].rswizzle();
+        mux<Logic>(condCoreReset[n], Const(3, width: 2),
+            mux<Logic>(coreHalted[n], Const(2, width: 2),
+                mux<Logic>(coreWaiting[n], Const(1, width: 2), Const(0, width: 2)))),
+    ].rconcat();
     // CYCLES (0xF000_002C, read only): cycles since reset, for the
     // watchdog's and the console's timing. CORE_PC (0xF000_0030 + 4n, read
     // only): the PC of the instruction in core n's E stage.
@@ -251,7 +251,7 @@ class ParcoreTop extends Module {
       for (var n = 0; n < 4; n++) ~coreBlocked[n] & ~condCoreReset[n],
       Const(0, width: 4),
       ringBusy,
-    ].rswizzle();
+    ].rconcat();
     final activityRead = condMemREn & isActivitySel;
     Sequential(clk, reset: reset, resetValues: {activity: Const(0, width: 9)}, [
       activity < (mux(activityRead, Const(0, width: 9), activity) | activityNow),
@@ -324,7 +324,7 @@ class ParcoreTop extends Module {
     final consoleStatus = [
       rxNotEmpty,
       ~consoleUart.output('txReady'),
-    ].rswizzle();
+    ].rconcat();
     final corePcRead = mux(
         condMemAddr[3],
         mux(condMemAddr[2], corePc[3], corePc[2]),
@@ -361,7 +361,7 @@ class ParcoreTop extends Module {
       readSpiVal < spiCtrl.rData,
       readIoVal <
           mux(isStatusSel,
-              [Const(flashWritable ? 1 : 0), regStatus].swizzle().zeroExtend(32),
+              [Const(flashWritable ? 1 : 0), regStatus].concat().zeroExtend(32),
               mux(isCoreStateSel, coreState.zeroExtend(32),
                   mux(isCyclesSel, cycles,
                       mux(isCorePcSel, corePcRead,
@@ -934,8 +934,8 @@ class ParcoreTop extends Module {
     );
     uartTx <= ftdiUart.output('txPin');
 
-    c3DevStatus <= [Const(0, width: 30), ~ftdiUart.output('txReady'), ~ftdiUart.output('rxValid')].swizzle();
-    c3DevPopData <= [Const(0, width: 24), ftdiUart.output('rxData')].swizzle();
+    c3DevStatus <= [Const(0, width: 30), ~ftdiUart.output('txReady'), ~ftdiUart.output('rxValid')].concat();
+    c3DevPopData <= [Const(0, width: 24), ftdiUart.output('rxData')].concat();
     c3FifoStatus <= ni3.statusWord;
     c3FifoPopData <= ni3.popData;
   }

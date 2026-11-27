@@ -144,7 +144,7 @@ Future<String> _pipelineSystemVerilog() async {
     tcmInitDir: _verilatorDir,
   );
   await top.build();
-  final sv = top.generateSynth();
+  final sv = top.dumpSystemVerilog();
   await Simulator.reset();
   return sv;
 }

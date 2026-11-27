@@ -38,7 +38,7 @@ make vscode-install
 builds the servers and both extensions (Action and Particle) and installs
 them. Then reload any open VS Code windows. `make vscode-ext` only builds
 the `.vsix` files (`build/action.vsix`, `build/particle.vsix`). Both need
-Node.js 20 or later and npm.
+Node.js 22 or later and npm, and VS Code 1.91 or later.
 
 ## The project file
 
@@ -101,6 +101,5 @@ extension.
 
 ## Node.js versions
 
-`package.json` pins (under `overrides`) the versions of some packages that
-the packaging tool `vsce` pulls in, so the extension can be packaged with
-Node.js 20 as well as 22. Newer releases of those packages require Node.js 22.
+The packaging tool, `vsce` 4, and the packages it pulls in need Node.js 22
+or later.

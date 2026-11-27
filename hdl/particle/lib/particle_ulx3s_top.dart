@@ -187,7 +187,7 @@ class ParticleUlx3sTop extends Module {
           Const(0, width: 30),
           ~u.output('txReady'),
           ~u.output('rxValid'),
-        ].swizzle();
+        ].concat();
 
     fifoStatus <= mux(
       isCh0,

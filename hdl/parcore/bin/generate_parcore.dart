@@ -24,7 +24,7 @@ Future<void> main() async {
 
   await parcore.build();
 
-  final svCode = parcore.generateSynth();
+  final svCode = parcore.dumpSystemVerilog();
 
   final outputFile = File('parcore_top.sv');
   await outputFile.writeAsString(svCode);

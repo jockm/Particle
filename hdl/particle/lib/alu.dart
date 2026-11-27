@@ -61,8 +61,8 @@ class ParticleAlu extends Module {
       AluOps.ssle,
     ]);
     // {0, A, 1} + {0, B ^ sub, sub}: the low bit carries sub in
-    final addX = [Const(0), a, Const(1)].swizzle();
-    final addY = [Const(0), b ^ ones(subtract), subtract].swizzle();
+    final addX = [Const(0), a, Const(1)].concat();
+    final addY = [Const(0), b ^ ones(subtract), subtract].concat();
     final sum = Logic(name: 'alu_sum', width: w + 2);
     sum <= addX + addY;
     final addOut = sum.getRange(1, w + 1);
@@ -86,13 +86,13 @@ class ParticleAlu extends Module {
     final leftMaskBits = [
       for (var i = 0; i < w; i++) s.lte(Const(i, width: 5)),
     ];
-    final leftMask = leftMaskBits.rswizzle();
-    final rightMask = leftMaskBits.swizzle();
+    final leftMask = leftMaskBits.rconcat();
+    final rightMask = leftMaskBits.concat();
     // BEXTR's length mask: bit i = (i < len)
     final len = b.getRange(5, 10);
     final lenMask = [
       for (var i = 0; i < w; i++) Const(i, width: 5).lt(len),
-    ].rswizzle();
+    ].rconcat();
     final isBextr = anyOp([AluOps.bextr, AluOps.sbextr]);
     final shiftMask = mux(
       isOp(AluOps.shiftl),
@@ -118,7 +118,7 @@ class ParticleAlu extends Module {
     final oneHot = [
       for (var i = 0; i < w; i++)
         i == 0 ? leftMaskBits[0] : leftMaskBits[i] & ~leftMaskBits[i - 1],
-    ].rswizzle();
+    ].rconcat();
     final bitOp = anyOp([AluOps.bset, AluOps.bclr, AluOps.binv]);
     final logicB =
         mux(bitOp, oneHot, mux(isOp(AluOps.not), ones(Const(1)), b));
@@ -156,7 +156,7 @@ class ParticleAlu extends Module {
       a.getRange(8, 16),
       a.getRange(16, 24),
       a.getRange(24, 32),
-    ].swizzle();
+    ].concat();
     final clzOut = _countLeadingZeros(a);
 
     // ---- Result: one group per unit, ORed together ----
@@ -221,8 +221,8 @@ class ParticleAlu extends Module {
             // High half all zero: its size plus the low half's count
             mux(
               groups[i].$1,
-              [Const(1), groups[i + 1].$2].swizzle(),
-              [Const(0), groups[i].$2].swizzle(),
+              [Const(1), groups[i + 1].$2].concat(),
+              [Const(0), groups[i].$2].concat(),
             ),
           ),
       ];
@@ -252,7 +252,7 @@ class ParticleRotateStage extends Module with SystemVerilog {
     a = addInput('a', a, width: a.width);
     s = addInput('s', s);
     addOutput('y', width: a.width);
-    y <= mux(s, [a.getRange(0, count), a.getRange(count, a.width)].swizzle(), a);
+    y <= mux(s, [a.getRange(0, count), a.getRange(count, a.width)].concat(), a);
   }
 
   @override

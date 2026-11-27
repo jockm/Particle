@@ -138,7 +138,7 @@ void main() {
       final rom = top.subModules.whereType<SpiFlashRom>().single;
       File('$_dir/parcore_image_rom.hex')
           .writeAsStringSync(SpiFlashRom.hexFile(rom.contents));
-      File('$_dir/parcore_ulx3s_top.sv').writeAsStringSync(top.generateSynth());
+      File('$_dir/parcore_ulx3s_top.sv').writeAsStringSync(top.dumpSystemVerilog());
       File('$_dir/sim_main.cpp').writeAsStringSync(_simMain);
 
       final objDir = Directory('$_dir/obj_dir');

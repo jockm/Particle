@@ -244,7 +244,7 @@ void _writeTcms(String dir, List<int> conductor) {
 Future<void> _runScript(Module top, String dir, int divisor,
     List<_Step> steps) async {
   final name = top.definitionName;
-  File('$dir/top.sv').writeAsStringSync(top.generateSynth());
+  File('$dir/top.sv').writeAsStringSync(top.dumpSystemVerilog());
   File('$dir/sim_main.cpp')
       .writeAsStringSync(_simMain.replaceAll('VParcoreUlx3sTop', 'V$name'));
   File('$dir/script.txt').writeAsStringSync([
