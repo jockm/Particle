@@ -131,6 +131,18 @@ ecppack <top>.config <top>.bit
 
 Use `--25k` or `--45k` for the smaller boards. The top level's port names must match the pin file's (`clk_25mhz`, `led`, `btn`, `gp`, …).
 
+## The Pano Logic G2
+
+A second board, being brought up: the Pano Logic G2 rev C, a thin client with a Spartan-6 XC6SLX100-3 (`xc6slx100-3-fgg484`). Its FPGA is built with ISE 14.7, which runs in Xilinx's ISE VM; the make targets run on the host, reach the VM with `ssh`, run the scripts in `hdl/particle/boards/panog2` there, and copy the results back to `build/panog2`. ISE reads Verilog-2001 and VHDL only, so the generated SystemVerilog will need converting first (with `sv2v`), when Particle and Parcore are built for it. See [panog2.md](panog2.md) for the board's clock, pins and setup.
+
+| Target | What it does |
+|---|---|
+| `make pano-vm-check` | Checks that ISE's command-line tools are in the VM, and lists the JTAG chain with iMPACT (the XC6SLX100 should be in it) |
+| `make pano-blink` | Builds the LED test, `panog2_blink.v` (the three LEDs lit in turn), in the VM: `build/panog2/panog2_blink.bit`, with the XST, map, place-and-route and timing reports beside it |
+| `make pano-prog` | Loads `PANO_BIT` (default `build/panog2/panog2_blink.bit`) into the FPGA over JTAG with iMPACT. The board's flash is untouched: a power cycle brings back what it holds |
+
+Variables: `PANO_HOST` (default `ise-vm`, an ssh host), `PANO_ISE` (`/opt/Xilinx/14.7/ISE_DS`), `PANO_PART` (`xc6slx100-3-fgg484`), `PANO_DIR` (the work directory in the VM, relative to its home: `Projects/particle-pano`), `PANO_JTAG_POS` (the FPGA's place in the JTAG chain, `1`), `PANO_BIT`.
+
 ---
 
 ## VS Code Tasks

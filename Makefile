@@ -78,7 +78,8 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
         lint lint-asm build generate generate-particle generate-parcore \
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
         parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
-        parcore-console parcore-status parcore-load test-pmon parcore-flash-image parcore-flash-image-jtag
+        parcore-console parcore-status parcore-load test-pmon parcore-flash-image parcore-flash-image-jtag \
+        pano-vm-check pano-blink pano-prog
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -138,6 +139,11 @@ help:
 	@echo "                                  (a PARCORE_REAL_FLASH=1 bitstream must be running)"
 	@echo "  make parcore-flash-image-jtag - Write the boot image to the flash at 0x400000 over JTAG"
 	@echo "  make pmon             - Build the pmon host tool (build/tools/pmon)"
+	@echo ""
+	@echo "Pano Logic G2 (rev C), built with ISE 14.7 in a VM over ssh (PANO_HOST=ise-vm):"
+	@echo "  make pano-vm-check    - Check ISE in the VM and list the JTAG chain (should show the XC6SLX100)"
+	@echo "  make pano-blink       - Build the LED test (boards/panog2/panog2_blink.v) in the VM: build/panog2/panog2_blink.bit"
+	@echo "  make pano-prog        - Load PANO_BIT (default build/panog2/panog2_blink.bit) over JTAG; the flash is untouched"
 	@echo "  make test-pmon        - Run the pmon host tool's tests"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
@@ -287,6 +293,52 @@ ulx3s-term:
 	@$(PYTHON) $(ROHD_DIR)/boards/ulx3s/ulx3s_term.py $(ULX3S_PORT) $(ULX3S_BAUD)
 
 term: ulx3s-term
+
+# ------------------------------------------------------------------------------
+# Pano Logic G2 (rev C, XC6SLX100-3). ISE 14.7 runs in a VM (Xilinx's ISE
+# VM, reached with ssh PANO_HOST); these targets copy the sources there, run
+# the scripts in hdl/particle/boards/panog2, and copy the results back to
+# build/panog2. PANO_DIR is the work directory in the VM, relative to its
+# home (Projects is shared with Windows).
+# ------------------------------------------------------------------------------
+PANO_HOST     ?= ise-vm
+PANO_ISE      ?= /opt/Xilinx/14.7/ISE_DS
+PANO_PART     ?= xc6slx100-3-fgg484
+PANO_DIR      ?= Projects/particle-pano
+PANO_JTAG_POS ?= 1
+PANO_SRC      := $(ROHD_DIR)/boards/panog2
+PANO_BLD      := $(BUILD_DIR)/panog2
+PANO_BIT      ?= $(PANO_BLD)/panog2_blink.bit
+PANO_SSH      := ssh $(PANO_HOST)
+PANO_ENV      := PANO_ISE=$(PANO_ISE)
+
+pano-vm-check:
+	@$(PANO_SSH) "mkdir -p $(PANO_DIR)"
+	@scp -q $(PANO_SRC)/vm_check.sh $(PANO_SRC)/impact_prog.sh $(PANO_HOST):$(PANO_DIR)/
+	@echo "==> ISE in $(PANO_HOST):$(PANO_ISE)"
+	@$(PANO_SSH) "cd $(PANO_DIR) && $(PANO_ENV) bash vm_check.sh"
+
+pano-blink:
+	@mkdir -p $(PANO_BLD)
+	@$(PANO_SSH) "mkdir -p $(PANO_DIR)/blink"
+	@scp -q $(PANO_SRC)/panog2_blink.v $(PANO_SRC)/panog2_blink.ucf $(PANO_SRC)/ise_build.sh \
+		$(PANO_HOST):$(PANO_DIR)/blink/
+	@echo "==> Building panog2_blink for $(PANO_PART) in $(PANO_HOST):$(PANO_DIR)/blink"
+	@$(PANO_SSH) "cd $(PANO_DIR)/blink && $(PANO_ENV) bash ise_build.sh panog2_blink $(PANO_PART) panog2_blink.ucf panog2_blink.v"
+	@scp -q $(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.bit $(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.syr \
+		$(PANO_HOST):$(PANO_DIR)/blink/panog2_blink_map.mrp $(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.par \
+		$(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.twr $(PANO_BLD)/
+	@echo "==> Bitstream: $(PANO_BLD)/panog2_blink.bit (reports beside it)"
+
+pano-prog:
+	@if [ ! -f "$(PANO_BIT)" ]; then \
+		echo "[FAIL] $(PANO_BIT) not found: run make pano-blink first, or give PANO_BIT=..."; exit 1; \
+	fi
+	@$(PANO_SSH) "mkdir -p $(PANO_DIR)/prog"
+	@scp -q "$(PANO_BIT)" $(PANO_HOST):$(PANO_DIR)/prog/load.bit
+	@scp -q $(PANO_SRC)/impact_prog.sh $(PANO_HOST):$(PANO_DIR)/prog/
+	@echo "==> Loading $(PANO_BIT) over JTAG (FPGA at chain position $(PANO_JTAG_POS))"
+	@$(PANO_SSH) "cd $(PANO_DIR)/prog && $(PANO_ENV) bash impact_prog.sh load.bit $(PANO_JTAG_POS)"
 
 # ------------------------------------------------------------------------------
 # Parcore on the ULX3S: the conductor loads the stage firmware and a RISC-V

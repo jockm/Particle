@@ -1,0 +1,17 @@
+# =============================================================================
+# File: hdl/particle/boards/panog2/panog2_blink.ucf
+# Description: Pins for panog2_blink.v on the Pano Logic G2 rev C.
+#
+# Y13 is the Ethernet PHY's 125CLK output (25 MHz while the PHY is in reset);
+# the period below is for 125 MHz, the faster of the two. F13 green, H13 blue
+# and the H12 button are from the panologic-g2 reverse-engineering notes;
+# E12 is the third LED in LiteX's Pano G2 platform, probably red.
+# =============================================================================
+
+NET "clk"       LOC = "Y13" | IOSTANDARD = LVCMOS33;
+NET "clk"       TNM_NET = "clk";
+TIMESPEC "TS_clk" = PERIOD "clk" 8 ns HIGH 50%;
+
+NET "led_red"   LOC = "E12" | IOSTANDARD = LVCMOS33;
+NET "led_green" LOC = "F13" | IOSTANDARD = LVCMOS33;
+NET "led_blue"  LOC = "H13" | IOSTANDARD = LVCMOS33;
