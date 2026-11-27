@@ -28,9 +28,12 @@ if [ ! -f "$ISE/settings64.sh" ]; then
     echo "[FAIL] $ISE/settings64.sh not found (set PANO_ISE)" >&2
     exit 1
 fi
-# (its own commands may return non-zero: not a failure)
+# Sourced from a function, so it sees none of this script's arguments (it
+# takes its first argument as ISE's location); its own commands may return
+# non-zero, which is not a failure
+load_ise() { . "$ISE/settings64.sh"; }
 set +e
-. "$ISE/settings64.sh" > /dev/null
+load_ise > /dev/null
 set -e
 
 rm -rf xst _ngo "$top".bit "$top".ncd "${top}"_map.ncd

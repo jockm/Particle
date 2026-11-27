@@ -13,7 +13,11 @@ if [ ! -f "$ISE/settings64.sh" ]; then
     echo "[FAIL] $ISE/settings64.sh not found (set PANO_ISE)" >&2
     exit 1
 fi
-. "$ISE/settings64.sh" > /dev/null
+# Sourced from a function, so it sees none of this script's arguments (it
+# takes its first argument as ISE's location); its own commands may return
+# non-zero, which is not a failure
+load_ise() { . "$ISE/settings64.sh"; }
+load_ise > /dev/null
 status=0
 for t in xst ngdbuild map par trce bitgen impact; do
     if command -v "$t" > /dev/null; then
