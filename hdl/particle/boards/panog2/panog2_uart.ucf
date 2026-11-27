@@ -1,6 +1,9 @@
 # =============================================================================
 # File: hdl/particle/boards/panog2/panog2_uart.ucf
-# Description: Pins for panog2_uart.v on the Pano Logic G2 rev C.
+# Description: Pins for the Pano Logic G2 rev C designs with a console:
+#              panog2_uart.v, panog2_uart_rohd (lib/panog2_uart_rohd.dart),
+#              and panog2_board (lib/panog2_board.dart) around Particle.
+#              The clock is 25 MHz (40 ns): the Ethernet PHY held in reset.
 #
 # The UART is on the DVI connector's DDC pins, as LiteX's Pano G2 platform
 # and its Linux-on-Pano guide have it: C17 is DDC SDA (DVI pin 7, VGA pin 12
@@ -11,7 +14,7 @@
 
 NET "clk"       LOC = "Y13" | IOSTANDARD = LVCMOS33;
 NET "clk"       TNM_NET = "clk";
-TIMESPEC "TS_clk" = PERIOD "clk" 8 ns HIGH 50%;
+TIMESPEC "TS_clk" = PERIOD "clk" 40 ns HIGH 50%;
 
 NET "uart_rx"   LOC = "C17" | IOSTANDARD = LVCMOS33;
 NET "uart_tx"   LOC = "C14" | IOSTANDARD = LVCMOS33;

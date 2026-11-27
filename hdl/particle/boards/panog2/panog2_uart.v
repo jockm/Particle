@@ -7,7 +7,7 @@
 //              blue for one sent.
 //
 // 8 data bits, no parity, 1 stop bit, at BAUD from a CLK_HZ clock (make
-// pano-uart passes PANO_CLOCK_HZ and PANO_BAUD as XST generics). The DDC
+// uart-pano passes PANO_CLOCK_HZ and PANO_BAUD as XST generics). The DDC
 // lines idle at 5 V on the board side, so the host's adapter must take
 // 5 V logic.
 //

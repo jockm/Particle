@@ -2,7 +2,7 @@
 // File: hdl/particle/bin/generate_ulx3s.dart
 // Architecture: Particle 32-bit RISC on Lattice ECP5 (ULX3S)
 // Description: Generates the ULX3S design: SystemVerilog for the board
-//              (ulx3s_board around ParticleUlx3sTop) and the block RAM
+//              (ulx3s_board around ParticleSingleCoreTop) and the block RAM
 //              initialisation files for a program.
 // =============================================================================
 //
@@ -12,7 +12,7 @@
 //
 // <program.hex> is `pasm --format hex` output: one 16-bit word per line,
 // starting at --base. The generator writes, in <dir>:
-//   particle_ulx3s.sv    ulx3s_board (top level) and particle_ulx3s_top
+//   particle_ulx3s.sv    ulx3s_board (top level) and particle_single_core_top
 //   program_bank0.hex    block RAM bank 0 (halfwords at byte addresses 4n)
 //   program_bank1.hex    block RAM bank 1 (halfwords at byte addresses 4n+2)
 // The .sv file loads the bank files by name, so run Yosys in <dir>.
@@ -124,7 +124,7 @@ Future<void> main(List<String> args) async {
   File('${dir.path}/program_bank1.hex').writeAsStringSync(bankFile(bank1));
 
   // Build the design
-  final top = ParticleUlx3sTop(
+  final top = ParticleSingleCoreTop(
     clk: Logic(name: 'clk'),
     resetN: Logic(name: 'reset_n'),
     ftdiRxPin: Logic(name: 'ftdi_rx_pin'),

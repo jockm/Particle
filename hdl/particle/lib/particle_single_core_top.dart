@@ -1,14 +1,17 @@
 // =============================================================================
-// File: hdl/particle/lib/particle_ulx3s_top.dart
-// Architecture: Particle 32-bit RISC on Lattice ECP5 (ULX3S)
-// Description: Board-level design for the ULX3S: one ParticleCpuCore with
-//              64 KiB of block RAM, the FTDI USB UART on FIFO channel 0 and a
-//              GPIO UART on FIFO channel 1, and the PC shown on the LEDs.
+// File: hdl/particle/lib/particle_single_core_top.dart
+// Architecture: Particle 32-bit RISC
+// Description: A one-core board design: one ParticleCpuCore with 64 KiB of
+//              block RAM, a console UART on FIFO channel 0 and a second UART
+//              on FIFO channel 1, and the PC on the LED outputs. Used by the
+//              ULX3S (lib/ulx3s_board.dart) and the Pano Logic G2
+//              (lib/panog2_board.dart).
 // =============================================================================
 //
-// The clock comes from the PLL in the board wrapper (lib/ulx3s_board.dart),
-// which also maps these ports to the ULX3S pin names. This module is plain
-// ROHD, so it can be simulated directly.
+// The clock comes from the board wrapper, which also maps these ports to the
+// board's pins. The port names are still the ULX3S's (ftdi_* for the console
+// UART, gpio_* for the second), which Parcore's ULX3S top shares. This module
+// is plain ROHD, so it can be simulated directly.
 //
 // FIFO channels, as the core sees them:
 //   channel 0: FTDI UART (default 1 Mbps)
@@ -25,7 +28,7 @@ import 'cpu_config.dart';
 import 'cpu_core.dart';
 import 'uart.dart';
 
-class ParticleUlx3sTop extends Module {
+class ParticleSingleCoreTop extends Module {
   Logic get clk => input('clk');
 
   /// Active-low reset: low resets the core (button pressed or PLL unlocked).
@@ -43,7 +46,7 @@ class ParticleUlx3sTop extends Module {
   /// The memory, for tests that want to look inside it.
   late final ParticleBlockRamTdp ram;
 
-  ParticleUlx3sTop({
+  ParticleSingleCoreTop({
     required Logic clk,
     required Logic resetN,
     required Logic ftdiRxPin,
@@ -54,8 +57,8 @@ class ParticleUlx3sTop extends Module {
     int programBase = 0x100,
     String? initFileBank0,
     String? initFileBank1,
-    super.name = 'particle_ulx3s_top',
-  }) : super(definitionName: 'particle_ulx3s_top') {
+    super.name = 'particle_single_core_top',
+  }) : super(definitionName: 'particle_single_core_top') {
     addInput('clk', clk);
     addInput('reset_n', resetN);
     addInput('ftdi_rx_pin', ftdiRxPin);

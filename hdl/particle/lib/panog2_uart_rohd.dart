@@ -5,7 +5,7 @@
 //              UART (ParticleFtdiUart): what arrives is sent back. The first
 //              ROHD design for the G2, and the test of its path to ISE:
 //              ROHD's SystemVerilog, converted to Verilog-2001 with sv2v
-//              (make pano-uart-rohd).
+//              (make uart-rohd-pano).
 // =============================================================================
 //
 // Its ports match boards/panog2/panog2_uart.ucf (the hand-written

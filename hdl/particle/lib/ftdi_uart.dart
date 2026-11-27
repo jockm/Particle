@@ -3,7 +3,7 @@
 // Architecture: Particle 32-bit RISC
 // Description: ULX3S FTDI UART peripheral: a ParticleUartTransceiver with its
 //              divisor fixed by the clock and baud rate (1 Mbps by default,
-//              as in ParticleUlx3sTop and ParcoreTop).
+//              as in ParticleSingleCoreTop and ParcoreTop).
 // =============================================================================
 
 import 'package:rohd/rohd.dart';

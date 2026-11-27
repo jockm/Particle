@@ -3,7 +3,7 @@
 // Architecture: Particle 32-bit RISC on Lattice ECP5 (ULX3S)
 // Description: SystemVerilog board wrapper for the ULX3S: the ECP5 PLL and
 //              the mapping from the board's pin names (ulx3s_v20.lpf) to
-//              ParticleUlx3sTop.
+//              ParticleSingleCoreTop.
 // =============================================================================
 //
 // The wrapper is written as text because it needs two things ROHD 0.5 can't
@@ -76,7 +76,7 @@ class Ecp5PllSettings {
 /// held high.
 String ulx3sBoardVerilog({
   required Ecp5PllSettings pll,
-  String coreModule = 'particle_ulx3s_top',
+  String coreModule = 'particle_single_core_top',
   bool buttons = false,
   bool flash = false,
 }) {

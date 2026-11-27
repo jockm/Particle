@@ -1,13 +1,15 @@
 #!/bin/bash
 # =============================================================================
 # File: hdl/particle/boards/panog2/ise_build.sh
-# Description: Runs in the ISE 14.7 VM (make pano-blink copies it there): the
-#              command-line ISE flow from Verilog to a bitstream.
+# Description: Runs in the ISE 14.7 VM (the Pano G2 make targets copy it
+#              there): the command-line ISE flow from Verilog to a bitstream.
 #
 # usage: bash ise_build.sh TOP PART UCF VERILOG...
 #   run in the directory holding the files; PANO_ISE is ISE's directory
 #   (default /opt/Xilinx/14.7/ISE_DS); PANO_GENERICS, if set, gives the top
-#   module's parameters (as "CLK_HZ=25000000 BAUD=115200"). Leaves TOP.bit, and the reports
+#   module's parameters (as "CLK_HZ=25000000 BAUD=115200"); PANO_TOP_MODULE,
+#   if set, is the top module's name when it isn't TOP (TOP still names the
+#   output files). Leaves TOP.bit, and the reports
 #   TOP.syr (XST), TOP_map.mrp (map), TOP.par (place and route) and TOP.twr
 #   (timing), here.
 #
@@ -52,7 +54,7 @@ run
 -ofn $top
 -ofmt NGC
 -p $part
--top $top
+-top ${PANO_TOP_MODULE:-$top}
 -opt_mode Speed
 -opt_level 1
 EOF

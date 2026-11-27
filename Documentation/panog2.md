@@ -36,14 +36,15 @@ The lines idle at 5 V on the connector (measured), so the host's serial adapter 
 
 ## Tools
 
-The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `pano-blink`, `pano-uart`, `pano-uart-rohd`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
+The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `blink-pano`, `uart-pano`, `uart-rohd-pano`, `particle-pano`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
 
 | File | What it is |
 |---|---|
 | `panog2_blink.v`, `panog2_blink.ucf` | The first test: the three LEDs lit in turn, a step every 2^24 cycles (about 0.67 s at 25 MHz, 0.13 s at 125 MHz) |
 | `ise_build.sh` | The ISE flow in the VM: XST, ngdbuild, map, par, trce, bitgen (`StartupClk:JtagClk`, for loading over JTAG) |
 | `panog2_uart.v`, `panog2_uart.ucf` | The serial console test: an echo, and a banner after loading and at each button press; green flashes for a character received, blue for one sent |
-| `lib/panog2_uart_rohd.dart`, `bin/generate_panog2.dart` (in `hdl/particle`) | The same echo (no banner) from Particle's own UART, `ParticleFtdiUart`, with the same ports, so it uses `panog2_uart.ucf`. `make pano-uart-rohd` generates its SystemVerilog, converts it with `sv2v`, and builds that: the path Particle and Parcore will take to ISE |
+| `lib/panog2_board.dart` (in `hdl/particle`) | The Verilog-2001 top level `panog2_board` around one Particle core (`ParticleSingleCoreTop`): the console on FIFO channel 0, the button as reset (its idle level learnt after configuration), and the LED: red while in reset, green blinking while the core runs, blue for console traffic. `make particle-pano` builds it with `PANO_PROGRAM` (default `apps/asm/panog2_echo.asm`, a banner and an echo) |
+| `lib/panog2_uart_rohd.dart`, `bin/generate_panog2.dart` (in `hdl/particle`) | The same echo (no banner) from Particle's own UART, `ParticleFtdiUart`, with the same ports, so it uses `panog2_uart.ucf`. `make uart-rohd-pano` generates its SystemVerilog, converts it with `sv2v`, and builds that: the path Particle and Parcore will take to ISE |
 | `impact_prog.sh` | iMPACT in batch mode: load a bitstream, or list the JTAG chain (`--identify`) |
 | `vm_check.sh` | Checks ISE's tools in the VM, then lists the JTAG chain |
 
@@ -51,5 +52,6 @@ Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, 
 
 ## Still to do
 
-* Particle and Parcore on the G2: ROHD's SystemVerilog converted to Verilog-2001 with `sv2v` (ISE's XST reads no SystemVerilog; `panog2_uart_rohd` is the first design to take that path), Spartan-6 equivalents of the ECP5 parts (the PLL, and the SPI flash clock through `STARTUP_SPARTAN6` instead of `USRMCLK`), and the full pin file.
+* One Particle core (`make particle-pano`): its size and speed in ISE, and whether XST makes block RAM of its memory (with byte writes and `$readmemh` contents).
+* Parcore on the G2: Spartan-6 equivalents of the ECP5 parts (the PLL, and the SPI flash clock through `STARTUP_SPARTAN6` instead of `USRMCLK`), and the full pin file.
 * The PHY's reset pin, for a known 125 MHz clock.

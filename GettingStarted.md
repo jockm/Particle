@@ -30,7 +30,7 @@ repository root unless a step says otherwise.
   (`make test-parcore` uses it by default). Download the build for your
   platform from the [official OSS CAD Suite releases](https://github.com/YosysHQ/oss-cad-suite/releases).
 - **sv2v** (optional): converts ROHD's SystemVerilog to the Verilog-2001 that
-  Xilinx ISE reads, for the Pano Logic G2 (`make pano-uart-rohd`). From the
+  Xilinx ISE reads, for the Pano Logic G2 (`make uart-rohd-pano`). From the
   [sv2v releases](https://github.com/zachjs/sv2v/releases), or Homebrew.
 - **Xilinx ISE 14.7** (optional), for the Pano Logic G2 (a Spartan-6 board):
   Xilinx's ISE VM for Windows 10 and 11, reached over ssh, with a Xilinx

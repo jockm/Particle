@@ -2,7 +2,7 @@
 // File: hdl/particle/boards/panog2/panog2_blink.v
 // Description: First light on the Pano Logic G2 (rev C, XC6SLX100): the three
 //              LEDs light one at a time, in turn. Proves the build flow in the
-//              ISE VM (make pano-blink, make pano-prog), the clock pin and the
+//              ISE VM (make blink-pano, make pano-prog), the clock pin and the
 //              LED pins.
 //
 // The clock on Y13 comes from the Ethernet PHY: 25 MHz while the PHY is in

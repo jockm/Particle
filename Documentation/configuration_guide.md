@@ -6,7 +6,7 @@ This guide covers configuring the Particle core through `CpuConfig`, generating 
 
 ## Core Configuration (`CpuConfig`)
 
-The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed to `ParticleCpuCore` (and to the board top level, `ParticleUlx3sTop`):
+The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed to `ParticleCpuCore` (and to the board top level, `ParticleSingleCoreTop`):
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -24,11 +24,11 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | `enableLoadOverlap` | `false` | The instruction after a load (or `TAS` or `MUL`) may run while the load's data is written, when it doesn't use the load's register: a load takes one cycle instead of two. The register file gets a second LUT-RAM write port (its two banks), so it needs `enableShadowBank` `false`. Costs LUTs and clock speed: on Parcore's cores 0 and 1 it saved about as much time as the slower clock lost, so Parcore leaves it off for now (472). See *Registers* in [hdl_architecture.md](hdl_architecture.md). |
 | `tcmSizeBytes` | `65536` | On-chip tightly coupled block RAM, in bytes (64 KiB) |
 | `mmioBaseAddr` | `0xF0000000` | Base address of the memory-mapped I/O and external memory window |
-| `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleUlx3sTop`, which always has it) |
-| `ulx3sUartFifoChannel` | `0` | FIFO channel of the FTDI UART (not used: `ParticleUlx3sTop` puts it on channel 0) |
-| `systemClockHz` | `25000000` | System clock, for the UART baud divisors. `ParticleUlx3sTop` defaults to 35 MHz, from the PLL |
-| `enableAuxGpioUart` | `true` | Include the auxiliary UART on the GPIO header pins (not used by `ParticleUlx3sTop`, which always has it) |
-| `auxUartFifoChannel` | `1` | FIFO channel of the auxiliary UART (not used: `ParticleUlx3sTop` puts it on channel 1) |
+| `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleSingleCoreTop`, which always has it) |
+| `ulx3sUartFifoChannel` | `0` | FIFO channel of the FTDI UART (not used: `ParticleSingleCoreTop` puts it on channel 0) |
+| `systemClockHz` | `25000000` | System clock, for the UART baud divisors. `ParticleSingleCoreTop` defaults to 35 MHz (the ULX3S's PLL); the Pano G2 builds give 25 MHz |
+| `enableAuxGpioUart` | `true` | Include the auxiliary UART on the GPIO header pins (not used by `ParticleSingleCoreTop`, which always has it) |
+| `auxUartFifoChannel` | `1` | FIFO channel of the auxiliary UART (not used: `ParticleSingleCoreTop` puts it on channel 1) |
 | `auxUartDefaultBaud` | `115200` | Baud rate of the auxiliary UART. The core has no MMIO bus yet, so it can't be changed at run time |
 
 See `hdl_architecture.md` for what the hardware implements today.
@@ -138,13 +138,16 @@ A second board, being brought up: the Pano Logic G2 rev C, a thin client with a 
 | Target | What it does |
 |---|---|
 | `make pano-vm-check` | Checks that ISE's command-line tools are in the VM, and lists the JTAG chain with iMPACT (the XC6SLX100 should be in it) |
-| `make pano-blink` | Builds the LED test, `panog2_blink.v` (the three LEDs lit in turn), in the VM: `build/panog2/panog2_blink.bit`, with the XST, map, place-and-route and timing reports beside it |
-| `make pano-uart` | Builds the serial console test, `panog2_uart.v`: it echoes what it receives and sends a banner after loading and at each press of the Pano button, at `PANO_BAUD` from a `PANO_CLOCK_HZ` clock: `build/panog2/panog2_uart.bit` |
-| `make pano-uart-rohd` | The same echo from Particle's own UART (`lib/panog2_uart_rohd.dart`): generates its SystemVerilog (`bin/generate_panog2.dart`), converts it with `sv2v` (`SV2V`), and builds that in the VM: `build/panog2/panog2_uart_rohd.bit` |
+| `make blink-pano` | Builds the LED test, `panog2_blink.v` (the three LEDs lit in turn), in the VM: `build/panog2/panog2_blink.bit`, with the XST, map, place-and-route and timing reports beside it |
+| `make uart-pano` | Builds the serial console test, `panog2_uart.v`: it echoes what it receives and sends a banner after loading and at each press of the Pano button, at `PANO_BAUD` from a `PANO_CLOCK_HZ` clock: `build/panog2/panog2_uart.bit` |
+| `make uart-rohd-pano` | The same echo from Particle's own UART (`lib/panog2_uart_rohd.dart`): generates its SystemVerilog (`bin/generate_panog2.dart`), converts it with `sv2v` (`SV2V`), and builds that in the VM: `build/panog2/panog2_uart_rohd.bit` |
+| `make particle-pano` | One Particle core (`ParticleSingleCoreTop`) running `PANO_PROGRAM` from its 64 KiB of block RAM, at the 25 MHz clock: assembles the program, generates the design (`generate_panog2.dart --design particle`: the Verilog-2001 wrapper `panog2_board` and the core's SystemVerilog), converts the core with `sv2v`, and builds them in the VM with the block RAM contents: `build/panog2/panog2_particle.bit`. The console is FIFO channel 0, the Pano button resets the core, and the LED shows red in reset, green blinking while running, blue for console traffic |
 | `make pano-prog` | Loads `PANO_BIT` (default `build/panog2/panog2_blink.bit`) into the FPGA over JTAG with iMPACT. The board's flash is untouched: a power cycle brings back what it holds |
 | `make pano-term` | Opens the serial console on the host (`PANO_PORT`, default the first `/dev/cu.usbserial-*`, `/dev/cu.wchusbserial*` or `/dev/ttyUSB*`; `PANO_BAUD`). Ctrl-] leaves |
 
-Variables: `PANO_HOST` (default `ise-vm`, an ssh host), `PANO_ISE` (`/opt/Xilinx/14.7/ISE_DS`), `PANO_PART` (`xc6slx100-3-fgg484`), `PANO_DIR` (the work directory in the VM, relative to its home: `Projects/particle-pano`), `PANO_JTAG_POS` (the FPGA's place in the JTAG chain, `1`), `PANO_BIT`, `PANO_CLOCK_HZ` (the clock on Y13: `25000000` while the Ethernet PHY is held in reset), `PANO_BAUD` (`1000000`), `PANO_PORT`, `SV2V` (`sv2v`).
+Variables: `PANO_HOST` (default `ise-vm`, an ssh host), `PANO_ISE` (`/opt/Xilinx/14.7/ISE_DS`), `PANO_PART` (`xc6slx100-3-fgg484`), `PANO_DIR` (the work directory in the VM, relative to its home: `Projects/particle-pano`), `PANO_JTAG_POS` (the FPGA's place in the JTAG chain, `1`), `PANO_BIT`, `PANO_CLOCK_HZ` (the clock on Y13: `25000000` while the Ethernet PHY is held in reset), `PANO_BAUD` (`1000000`), `PANO_PORT`, `PANO_PROGRAM` (`apps/asm/panog2_echo.asm`), `SV2V` (`sv2v`).
+
+Targets that build something name the goal first and the board second (`particle-pano`); targets that only make sense for the board keep its name first (`pano-prog`, `pano-term`, `pano-vm-check`).
 
 ---
 

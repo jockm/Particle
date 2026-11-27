@@ -1,6 +1,6 @@
 // =============================================================================
-// File: hdl/particle/test/particle_ulx3s_top_test.dart
-// Description: Runs apps/asm/ulx3s_echo.asm on ParticleUlx3sTop: the program
+// File: hdl/particle/test/particle_single_core_top_test.dart
+// Description: Runs apps/asm/ulx3s_echo.asm on ParticleSingleCoreTop: the program
 //              is fetched from the synchronous block RAM model, prints its
 //              banner on both UARTs and echoes bytes sent to each UART.
 //              Needs build/ulx3s_echo.bin (`make apps`, or `make test-particle`
@@ -77,7 +77,7 @@ void main() {
     await Simulator.reset();
   });
 
-  test('ParticleUlx3sTop runs ulx3s_echo: banner and echo on both UARTs',
+  test('ParticleSingleCoreTop runs ulx3s_echo: banner and echo on both UARTs',
       () async {
     final image = File('../../build/ulx3s_echo.bin');
     expect(image.existsSync(), isTrue,
@@ -88,7 +88,7 @@ void main() {
     final ftdiRx = Logic(name: 'ftdi_rx');
     final gpioRx = Logic(name: 'gpio_rx');
 
-    final top = ParticleUlx3sTop(
+    final top = ParticleSingleCoreTop(
       clk: clk,
       resetN: resetN,
       ftdiRxPin: ftdiRx,
