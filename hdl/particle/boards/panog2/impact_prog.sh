@@ -5,6 +5,8 @@
 #              copy it there): iMPACT in batch mode over the JTAG cable.
 #
 # usage: bash impact_prog.sh BITFILE [POSITION]   load BITFILE into the FPGA
+#   (iMPACT's own errors start "ERROR:"; the status register it prints
+#   after loading names its error bits too, and those aren't shown)
 #        bash impact_prog.sh --identify           list the JTAG chain
 #   POSITION is the FPGA's place in the chain (default 1). PANO_ISE is
 #   ISE's directory (default /opt/Xilinx/14.7/ISE_DS).
@@ -34,7 +36,7 @@ Identify -inferir
 quit
 EOF
     impact -batch impact_identify.cmd > impact_identify.log 2>&1 || true
-    grep -E "[Cc]able|IDCODE|Manufacturer's ID|Added Device|ERROR" impact_identify.log || true
+    grep -E "[Cc]able|IDCODE|Manufacturer's ID|Added Device|ERROR:" impact_identify.log || true
     if grep -qE "Manufacturer's ID|Added Device" impact_identify.log; then exit 0; fi
     echo "[FAIL] no JTAG chain found (log: impact_identify.log)" >&2
     exit 1
@@ -56,7 +58,7 @@ Program -p $pos
 quit
 EOF
 impact -batch impact_prog.cmd > impact_prog.log 2>&1 || true
-grep -E "Manufacturer's ID|Programmed successfully|ERROR" impact_prog.log || true
+grep -E "Manufacturer's ID|Programmed successfully|ERROR:" impact_prog.log || true
 if grep -q "Programmed successfully" impact_prog.log; then exit 0; fi
 echo "[FAIL] programming did not succeed (log: impact_prog.log)" >&2
 exit 1

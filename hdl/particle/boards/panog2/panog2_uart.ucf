@@ -1,0 +1,22 @@
+# =============================================================================
+# File: hdl/particle/boards/panog2/panog2_uart.ucf
+# Description: Pins for panog2_uart.v on the Pano Logic G2 rev C.
+#
+# The UART is on the DVI connector's DDC pins, as LiteX's Pano G2 platform
+# and its Linux-on-Pano guide have it: C17 is DDC SDA (DVI pin 7, VGA pin 12
+# through a DVI-to-VGA adapter), host -> Pano; C14 is DDC SCL (DVI pin 6,
+# VGA pin 15), Pano -> host; ground is DVI pin 15 (VGA pin 10). The lines
+# idle at 5 V on the connector, so the host's adapter must take 5 V logic.
+# =============================================================================
+
+NET "clk"       LOC = "Y13" | IOSTANDARD = LVCMOS33;
+NET "clk"       TNM_NET = "clk";
+TIMESPEC "TS_clk" = PERIOD "clk" 8 ns HIGH 50%;
+
+NET "uart_rx"   LOC = "C17" | IOSTANDARD = LVCMOS33;
+NET "uart_tx"   LOC = "C14" | IOSTANDARD = LVCMOS33;
+NET "button"    LOC = "H12" | IOSTANDARD = LVCMOS33;
+
+NET "led_red"   LOC = "E12" | IOSTANDARD = LVCMOS33;
+NET "led_green" LOC = "F13" | IOSTANDARD = LVCMOS33;
+NET "led_blue"  LOC = "H13" | IOSTANDARD = LVCMOS33;

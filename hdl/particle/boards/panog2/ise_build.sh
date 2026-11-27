@@ -6,7 +6,8 @@
 #
 # usage: bash ise_build.sh TOP PART UCF VERILOG...
 #   run in the directory holding the files; PANO_ISE is ISE's directory
-#   (default /opt/Xilinx/14.7/ISE_DS). Leaves TOP.bit, and the reports
+#   (default /opt/Xilinx/14.7/ISE_DS); PANO_GENERICS, if set, gives the top
+#   module's parameters (as "CLK_HZ=25000000 BAUD=115200"). Leaves TOP.bit, and the reports
 #   TOP.syr (XST), TOP_map.mrp (map), TOP.par (place and route) and TOP.twr
 #   (timing), here.
 #
@@ -55,6 +56,9 @@ run
 -opt_mode Speed
 -opt_level 1
 EOF
+if [ -n "$PANO_GENERICS" ]; then
+    echo "-generics {$PANO_GENERICS}" >> "$top.xst"
+fi
 
 echo "==> XST (log: $top.syr)"
 xst -intstyle silent -ifn "$top.xst" -ofn "$top.syr"

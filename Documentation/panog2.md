@@ -13,22 +13,36 @@ The board's 25 MHz oscillator drives the Marvell Ethernet PHY, not the FPGA. The
 | Signal | Pin | Notes |
 |---|---|---|
 | Clock | Y13 | See *Clock* |
+| Red LED | E12 | |
 | Green LED | F13 | |
 | Blue LED | H13 | |
-| Third LED | E12 | In LiteX's platform; probably the red one |
-| Pano button | H12 | Not used yet |
-| DVI DDC SCL / SDA | C14 / C17 | LiteX uses them as a serial port (tx C14, rx C17): a candidate for a custom cable |
+| Pano button | H12 | Its polarity isn't known yet; `panog2_uart` takes its level after loading as "not pressed" |
+| UART, Pano → host | C14 | DVI DDC SCL (see *Serial console*) |
+| UART, host → Pano | C17 | DVI DDC SDA |
 
-All are `LVCMOS33`.
+All are `LVCMOS33`. The three LEDs are one light, behind the Pano button on top of the case; a high output lights each colour (`panog2_blink` showed green, blue, red for F13, H13, E12, one at a time).
+
+## Serial console
+
+The console is on the DVI connector's DDC pins, as in LiteX's Pano G2 platform and its Linux-on-Pano guide (LiteX's default; the micro HDMI connector's DDC pins are another choice):
+
+| DVI signal | DVI pin | VGA pin (through a DVI-to-VGA adapter) | Direction | FPGA pin |
+|---|---|---|---|---|
+| DDC SDA | 7 | 12 | host → Pano | C17 |
+| DDC SCL | 6 | 15 | Pano → host | C14 |
+| Ground | 15 | 10 | | |
+
+The lines idle at 5 V on the connector (measured), so the host's serial adapter must take 5 V logic: a SparkFun Serial Basic (CH340G) set to 5 V is in use. The LiteX guide found 1,000,000 baud to work.
 
 ## Tools
 
-The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `pano-blink`, `pano-prog`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
+The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `pano-blink`, `pano-uart`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
 
 | File | What it is |
 |---|---|
 | `panog2_blink.v`, `panog2_blink.ucf` | The first test: the three LEDs lit in turn, a step every 2^24 cycles (about 0.67 s at 25 MHz, 0.13 s at 125 MHz) |
 | `ise_build.sh` | The ISE flow in the VM: XST, ngdbuild, map, par, trce, bitgen (`StartupClk:JtagClk`, for loading over JTAG) |
+| `panog2_uart.v`, `panog2_uart.ucf` | The serial console test: an echo, and a banner after loading and at each button press; green flashes for a character received, blue for one sent |
 | `impact_prog.sh` | iMPACT in batch mode: load a bitstream, or list the JTAG chain (`--identify`) |
 | `vm_check.sh` | Checks ISE's tools in the VM, then lists the JTAG chain |
 
@@ -38,4 +52,4 @@ Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, 
 
 * Particle and Parcore on the G2: ROHD's SystemVerilog converted to Verilog-2001 with `sv2v` (ISE's XST reads no SystemVerilog), Spartan-6 equivalents of the ECP5 parts (the PLL, and the SPI flash clock through `STARTUP_SPARTAN6` instead of `USRMCLK`), and the full pin file.
 * The PHY's reset pin, for a known 125 MHz clock.
-* A serial port for the console: the DVI DDC pins or another cable.
+* The console with Particle's own UART, from ROHD's SystemVerilog through `sv2v` (486b).

@@ -79,7 +79,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
         parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
         parcore-console parcore-status parcore-load test-pmon parcore-flash-image parcore-flash-image-jtag \
-        pano-vm-check pano-blink pano-prog
+        pano-vm-check pano-blink pano-uart pano-prog pano-term
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -143,7 +143,10 @@ help:
 	@echo "Pano Logic G2 (rev C), built with ISE 14.7 in a VM over ssh (PANO_HOST=ise-vm):"
 	@echo "  make pano-vm-check    - Check ISE in the VM and list the JTAG chain (should show the XC6SLX100)"
 	@echo "  make pano-blink       - Build the LED test (boards/panog2/panog2_blink.v) in the VM: build/panog2/panog2_blink.bit"
+	@echo "  make pano-uart        - Build the serial console test (boards/panog2/panog2_uart.v; PANO_CLOCK_HZ=25000000,"
+	@echo "                          PANO_BAUD=115200): build/panog2/panog2_uart.bit"
 	@echo "  make pano-prog        - Load PANO_BIT (default build/panog2/panog2_blink.bit) over JTAG; the flash is untouched"
+	@echo "  make pano-term        - Open the serial console (PANO_PORT=..., PANO_BAUD=115200); Ctrl-] leaves"
 	@echo "  make test-pmon        - Run the pmon host tool's tests"
 	@echo "  make firmware         - Assemble all Parcore pipeline microkernels"
 	@echo "  make apps             - Build Action and ASM application binaries (and each apps/act/multi folder)"
@@ -309,6 +312,9 @@ PANO_JTAG_POS ?= 1
 PANO_SRC      := $(ROHD_DIR)/boards/panog2
 PANO_BLD      := $(BUILD_DIR)/panog2
 PANO_BIT      ?= $(PANO_BLD)/panog2_blink.bit
+PANO_CLOCK_HZ ?= 25000000
+PANO_BAUD     ?= 115200
+PANO_PORT     ?= $(firstword $(wildcard /dev/cu.usbserial-* /dev/cu.wchusbserial* /dev/ttyUSB*))
 PANO_SSH      := ssh $(PANO_HOST)
 PANO_ENV      := PANO_ISE=$(PANO_ISE)
 
@@ -318,17 +324,25 @@ pano-vm-check:
 	@echo "==> ISE in $(PANO_HOST):$(PANO_ISE)"
 	@$(PANO_SSH) "cd $(PANO_DIR) && $(PANO_ENV) bash vm_check.sh"
 
-pano-blink:
+# $(call pano_build,TOP,GENERICS): copy TOP.v, TOP.ucf and ise_build.sh to
+# PANO_DIR/TOP in the VM, build there, and copy the bitstream and reports
+# back to build/panog2
+define pano_build
 	@mkdir -p $(PANO_BLD)
-	@$(PANO_SSH) "mkdir -p $(PANO_DIR)/blink"
-	@scp -q $(PANO_SRC)/panog2_blink.v $(PANO_SRC)/panog2_blink.ucf $(PANO_SRC)/ise_build.sh \
-		$(PANO_HOST):$(PANO_DIR)/blink/
-	@echo "==> Building panog2_blink for $(PANO_PART) in $(PANO_HOST):$(PANO_DIR)/blink"
-	@$(PANO_SSH) "cd $(PANO_DIR)/blink && $(PANO_ENV) bash ise_build.sh panog2_blink $(PANO_PART) panog2_blink.ucf panog2_blink.v"
-	@scp -q $(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.bit $(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.syr \
-		$(PANO_HOST):$(PANO_DIR)/blink/panog2_blink_map.mrp $(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.par \
-		$(PANO_HOST):$(PANO_DIR)/blink/panog2_blink.twr $(PANO_BLD)/
-	@echo "==> Bitstream: $(PANO_BLD)/panog2_blink.bit (reports beside it)"
+	@$(PANO_SSH) "mkdir -p $(PANO_DIR)/$(1)"
+	@scp -q $(PANO_SRC)/$(1).v $(PANO_SRC)/$(1).ucf $(PANO_SRC)/ise_build.sh $(PANO_HOST):$(PANO_DIR)/$(1)/
+	@echo "==> Building $(1) for $(PANO_PART) in $(PANO_HOST):$(PANO_DIR)/$(1)"
+	@$(PANO_SSH) "cd $(PANO_DIR)/$(1) && $(PANO_ENV) PANO_GENERICS='$(2)' bash ise_build.sh $(1) $(PANO_PART) $(1).ucf $(1).v"
+	@scp -q $(foreach f,.bit .syr _map.mrp .par .twr,$(PANO_HOST):$(PANO_DIR)/$(1)/$(1)$(f)) $(PANO_BLD)/
+	@echo "==> Bitstream: $(PANO_BLD)/$(1).bit (reports beside it)"
+endef
+
+pano-blink:
+	$(call pano_build,panog2_blink,)
+
+pano-uart:
+	$(call pano_build,panog2_uart,CLK_HZ=$(PANO_CLOCK_HZ) BAUD=$(PANO_BAUD))
+	@echo "    $(PANO_BAUD) baud from a $(PANO_CLOCK_HZ) Hz clock: load it with make pano-prog PANO_BIT=$(PANO_BLD)/panog2_uart.bit"
 
 pano-prog:
 	@if [ ! -f "$(PANO_BIT)" ]; then \
@@ -339,6 +353,14 @@ pano-prog:
 	@scp -q $(PANO_SRC)/impact_prog.sh $(PANO_HOST):$(PANO_DIR)/prog/
 	@echo "==> Loading $(PANO_BIT) over JTAG (FPGA at chain position $(PANO_JTAG_POS))"
 	@$(PANO_SSH) "cd $(PANO_DIR)/prog && $(PANO_ENV) bash impact_prog.sh load.bit $(PANO_JTAG_POS)"
+
+# The serial console, on the host: the first USB serial port found, unless
+# PANO_PORT is given
+pano-term:
+	@if [ -z "$(PANO_PORT)" ]; then \
+		echo "[FAIL] No USB serial port found: connect the adapter, or give PANO_PORT=/dev/..."; exit 1; \
+	fi
+	@$(PYTHON) $(ROHD_DIR)/boards/ulx3s/ulx3s_term.py $(PANO_PORT) $(PANO_BAUD)
 
 # ------------------------------------------------------------------------------
 # Parcore on the ULX3S: the conductor loads the stage firmware and a RISC-V
