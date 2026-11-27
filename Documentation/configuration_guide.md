@@ -21,6 +21,7 @@ The configuration is declared in `hdl/particle/lib/cpu_config.dart` and passed t
 | `enableSubword` | `true` | Byte and halfword loads and stores (`LD8`, `ST8`, `LD16`, `ST16`, every mode). When `false` they take vector 15. |
 | `enableMboxReceive` | `true` | Taking `MBOX` traps from other cores. When `false` an incoming strobe is ignored; the core can still send. |
 | `enableShadowBank` | `true` | The shadow registers S1–S15. When `false` `XCHG`, `XCHGALL` and `XCHGMOST` take vector 15, and the register file has one LUT-RAM bank. Firmware for such a core defines `NO_SHADOW_BANK` before including `lib/vectors.inc` (see that file). |
+| `enableLoadOverlap` | `false` | The instruction after a load (or `TAS` or `MUL`) may run while the load's data is written, when it doesn't use the load's register: a load takes one cycle instead of two. The register file gets a second LUT-RAM write port (its two banks), so it needs `enableShadowBank` `false`. Costs LUTs and clock speed: on Parcore's cores 0 and 1 it saved about as much time as the slower clock lost, so Parcore leaves it off for now (472). See *Registers* in [hdl_architecture.md](hdl_architecture.md). |
 | `tcmSizeBytes` | `65536` | On-chip tightly coupled block RAM, in bytes (64 KiB) |
 | `mmioBaseAddr` | `0xF0000000` | Base address of the memory-mapped I/O and external memory window |
 | `enableUlx3sFtdiUart` | `true` | Include the ULX3S on-board FTDI UART (not used by `ParticleUlx3sTop`, which always has it) |

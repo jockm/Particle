@@ -12,6 +12,8 @@
 // Comments in it set:
 //   ; check-memory: <addr> <bytes>   a memory area to compare (any number)
 //   ; max-cycles: <n>                cycle limit (default 20000)
+// Every program also runs on a core with enableLoadOverlap (and without the
+// shadow bank, which it needs; psim leaves the shadow bank out too).
 // It must avoid what psim and the hardware are allowed to do differently:
 // TRAP 0 and TRAP 15 (psim stops), and filling a FIFO to 256 entries.
 // (Undefined opcodes and misaligned accesses behave the same in both: see
@@ -103,7 +105,8 @@ PsimResult runPsim(String binary, int maxCycles, List<(int, int)> areas,
 String h(int v) => '0x${v.toRadixString(16).padLeft(8, '0')}';
 
 /// Runs one program both ways and returns the differences (empty: equal).
-Future<List<String>> compareProgram(File source, Directory workDir) async {
+Future<List<String>> compareProgram(File source, Directory workDir,
+    {bool loadOverlap = false}) async {
   final text = source.readAsStringSync();
   final areas = [
     for (final m in RegExp(r';\s*check-memory:\s*(0x[0-9A-Fa-f]+|\d+)\s+(\d+)')
@@ -118,9 +121,10 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
   // "; config: no-pointer-modes no-subword no-shadow-bank" leaves features
   // out of both the core and psim
   final configM = RegExp(r';\s*config:([^\n]*)').firstMatch(text);
-  final leftOut = configM == null
-      ? <String>{}
-      : configM.group(1)!.trim().split(RegExp(r'\s+')).toSet();
+  final leftOut = {
+    if (configM != null) ...configM.group(1)!.trim().split(RegExp(r'\s+')),
+    if (loadOverlap) 'no-shadow-bank',
+  };
   const known = {
     'no-pointer-modes', 'no-subword', 'no-shadow-bank', 'no-long-branches',
     'no-imm-bextr', 'no-wait-halt',
@@ -135,6 +139,7 @@ Future<List<String>> compareProgram(File source, Directory workDir) async {
     enableLongBranches: !leftOut.contains('no-long-branches'),
     enableImmBextr: !leftOut.contains('no-imm-bextr'),
     enableWaitHalt: !leftOut.contains('no-wait-halt'),
+    enableLoadOverlap: loadOverlap,
   );
 
   final binary = assemble(source, workDir,
@@ -185,27 +190,34 @@ void main() {
     await CoreHarness.stopActive();
   });
 
-  group('Differential ISA test (psim vs ROHD core)', () {
-    for (final program in programs) {
-      test(program.uri.pathSegments.last, () async {
-        final diffs = await compareProgram(program, workDir);
-        expect(diffs, isEmpty, reason: diffs.join('\n'));
-      }, timeout: const Timeout(Duration(minutes: 5)));
-    }
+  // Seeded random programs: the same seeds every run
+  final seeds = (Platform.environment['ISA_RANDOM_SEEDS'] ?? '1,2,3,4,5,6,7,8')
+      .split(',')
+      .where((s) => s.isNotEmpty)
+      .map(int.parse)
+      .toList();
 
-    // Seeded random programs: the same seeds every run
-    final seeds = (Platform.environment['ISA_RANDOM_SEEDS'] ?? '1,2,3,4,5,6,7,8')
-        .split(',')
-        .where((s) => s.isNotEmpty)
-        .map(int.parse);
-    for (final seed in seeds) {
-      test('random program, seed $seed', () async {
-        final source = File('${workDir.path}/random_$seed.asm')
-          ..writeAsStringSync(randomProgram(seed));
-        final diffs = await compareProgram(source, workDir);
-        expect(diffs, isEmpty,
-            reason: '${source.path}\n${diffs.join('\n')}');
-      }, timeout: const Timeout(Duration(minutes: 5)));
-    }
-  });
+  for (final overlap in [false, true]) {
+    final suffix = overlap ? ' with load overlap' : '';
+    group('Differential ISA test (psim vs ROHD core)$suffix', () {
+      for (final program in programs) {
+        test(program.uri.pathSegments.last, () async {
+          final diffs =
+              await compareProgram(program, workDir, loadOverlap: overlap);
+          expect(diffs, isEmpty, reason: diffs.join('\n'));
+        }, timeout: const Timeout(Duration(minutes: 5)));
+      }
+
+      for (final seed in seeds) {
+        test('random program, seed $seed', () async {
+          final source = File('${workDir.path}/random_$seed.asm')
+            ..writeAsStringSync(randomProgram(seed));
+          final diffs =
+              await compareProgram(source, workDir, loadOverlap: overlap);
+          expect(diffs, isEmpty,
+              reason: '${source.path}\n${diffs.join('\n')}');
+        }, timeout: const Timeout(Duration(minutes: 5)));
+      }
+    });
+  }
 }

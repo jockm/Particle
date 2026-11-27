@@ -33,6 +33,12 @@
 //     the swap.
 //   * Without the shadow bank ([shadowBank] false) there is one LUT RAM,
 //     no bank bits and no S14; the swap inputs are ignored.
+//   * With [dualWrite] (only without the shadow bank) the two LUT RAMs give
+//     a second write port instead: port 1 writes bank 0 and port 2 bank 1,
+//     and the bank bit of the register written says which holds its value
+//     (port 2's when both write the same register). The core uses it to
+//     write a load's data while the next instruction writes its result
+//     (CpuConfig.enableLoadOverlap).
 
 import 'package:rohd/rohd.dart';
 
@@ -74,6 +80,10 @@ class RegisterFile extends Module {
   /// the swap inputs are ignored and the shadows read as zero.
   final bool shadowBank;
 
+  /// Whether the LUT RAM registers take a write from each port in one cycle
+  /// (two banks, no shadows).
+  final bool dualWrite;
+
   late final List<ParticleLutRam> _banks;
   late final Logic _bank;
   late final Logic _r14;
@@ -95,8 +105,12 @@ class RegisterFile extends Module {
     Logic? wData2,
     Logic? wEn2,
     this.shadowBank = true,
+    this.dualWrite = false,
     super.name = 'register_file',
   }) {
+    if (shadowBank && dualWrite) {
+      throw ArgumentError('dualWrite needs shadowBank false');
+    }
     addInput('clk', clk);
     addInput('reset', reset);
     addInput('rAddrA', rAddrA, width: ParticleWidths.regAddr);
@@ -140,6 +154,7 @@ class RegisterFile extends Module {
     }
     final b = _bank.value;
     if (!b.isValid) return -1;
+    if (dualWrite) return _banks[b[index].toBool() ? 1 : 0].word(index);
     if (!shadowBank) return _banks[0].word(index);
     final activeBank = b[index].toBool() ? 1 : 0;
     return _banks[active ? activeBank : 1 - activeBank].word(index);
@@ -162,8 +177,9 @@ class RegisterFile extends Module {
             (xchgMostEn & ~addr.eq(idx(15))) |
             (xchgEn & xchgRegIdx.eq(addr))
         : Const(0);
+    final twoBanks = shadowBank || dualWrite;
     // The bank bit of register [addr]
-    Logic bankOf(Logic addr) => shadowBank
+    Logic bankOf(Logic addr) => twoBanks
         ? [for (var i = 0; i < 16; i++) _bank[i]]._select(addr)
         : Const(0);
 
@@ -184,18 +200,33 @@ class RegisterFile extends Module {
       Const(0, width: ParticleWidths.word),
       ramWData,
     );
+    // With dualWrite: port 1 to bank 0, port 2 to bank 1
+    final dualP1 =
+        dualWrite ? wEn & ramReg(wAddr) & ~(wEn2 & wAddr2.eq(wAddr)) : null;
     _banks = [
-      for (var b = 0; b < (shadowBank ? 2 : 1); b++)
-        ParticleLutRam(
-          clk: clk,
-          wAddr: wAddrBanks,
-          wData: wDataBanks,
-          wEn: clear | (ramWEn & (b == 0 ? ~ramBank : ramBank)),
-          rAddrA: rAddrA,
-          rAddrB: rAddrB,
-          width: ParticleWidths.word,
-          name: 'bank$b',
-        ),
+      for (var b = 0; b < (twoBanks ? 2 : 1); b++)
+        dualWrite
+            ? ParticleLutRam(
+                clk: clk,
+                wAddr: mux(clear, clearCount, b == 0 ? wAddr : wAddr2),
+                wData: mux(clear, Const(0, width: ParticleWidths.word),
+                    b == 0 ? wData : wData2),
+                wEn: clear | (b == 0 ? dualP1! : p2Ram),
+                rAddrA: rAddrA,
+                rAddrB: rAddrB,
+                width: ParticleWidths.word,
+                name: 'bank$b',
+              )
+            : ParticleLutRam(
+                clk: clk,
+                wAddr: wAddrBanks,
+                wData: wDataBanks,
+                wEn: clear | (ramWEn & (b == 0 ? ~ramBank : ramBank)),
+                rAddrA: rAddrA,
+                rAddrB: rAddrB,
+                width: ParticleWidths.word,
+                name: 'bank$b',
+              ),
     ];
 
     Logic read(Logic addr, Logic bank0, Logic bank1) =>
@@ -205,9 +236,15 @@ class RegisterFile extends Module {
     rDataB <= read(rAddrB, _banks[0].rDataB, _banks[last].rDataB);
 
     // The bank bits, R14 and S14, and the clear
+    // With dualWrite a register's bank is the one last written
     final nextBank = [
       for (var i = 0; i < 16; i++)
-        inRam(i) ? _bank[i] ^ swapped(idx(i)) : Const(0),
+        !inRam(i)
+            ? Const(0)
+            : dualWrite
+                ? mux(p2Ram & wAddr2.eq(idx(i)), Const(1),
+                    mux(dualP1! & wAddr.eq(idx(i)), Const(0), _bank[i]))
+                : _bank[i] ^ swapped(idx(i)),
     ].rconcat();
     final swap14 = swapped(idx(14));
     Sequential(
@@ -251,7 +288,7 @@ class RegisterFile extends Module {
     clk.negedge.listen((_) {
       bool on(Logic l) => l.value.isValid && l.value.toInt() == 1;
       int? val(Logic l) => l.value.isValid ? l.value.toInt() : null;
-      if (on(clear) || !on(wEn) || !on(wEn2)) return;
+      if (dualWrite || on(clear) || !on(wEn) || !on(wEn2)) return;
       final a1 = val(wAddr);
       final a2 = val(wAddr2);
       if (a1 == null || a2 == null) return;

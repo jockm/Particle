@@ -2,8 +2,8 @@
 // File: hdl/particle/test/cpu_core_test.dart
 // Description: Core behaviour the differential ISA test can't check against
 //              psim: reset, cycle counts, MBOX interrupts (including during a
-//              FIFO stall and a divide), vector 15, misaligned loads, and a
-//              core built without its divider.
+//              FIFO stall and a divide), vector 15, misaligned loads, a
+//              core built without its divider, and load overlap.
 //
 // Programs are assembled with build/tools/pasm (`make tools`).
 // =============================================================================
@@ -95,6 +95,44 @@ _h: BBRA    _h              ; 0x112
     expect(st.reg(3), equals(2));
     expect(st.reg(4), equals(0));
     expect(st.reg(5), equals(1));
+    await h.stop();
+  });
+
+  test('Cycle counts with enableLoadOverlap: a load 1 when the next '
+      'instruction leaves its register alone, 2 when it uses it', () async {
+    final h = CoreHarness(
+        asm('''
+.org 0x100
+    LDI     R2, 0x8000      ; 0x100 (2 cycles)
+    ST32    (R2), R2        ; 0x104
+    LD32    R3, (R2)        ; 0x106 (1: the ADD doesn't use R3)
+    ADD     R4, 1           ; 0x108
+    LD32    R5, (R2++)      ; 0x10A (1: a pointer update while R5 is written)
+    LD32    R6, (--R2)      ; 0x10C (2: the ADD uses R6)
+    ADD     R6, 1           ; 0x10E
+    LD32    R14, (R2)       ; 0x110 (2: LD R14, imm8 writes R14)
+    LD      R14, 9          ; 0x112
+_h: BBRA    _h              ; 0x114
+'''),
+        config: const CpuConfig(
+            enableShadowBank: false, enableLoadOverlap: true));
+    await h.start();
+    final seen = <int, int>{};
+    for (var c = 0; c < 24; c++) {
+      if (h.inExec) seen.putIfAbsent(h.pc, () => c);
+      await h.step();
+    }
+    expect(seen[0x108]! - seen[0x106]!, equals(1), reason: 'independent');
+    expect(seen[0x10C]! - seen[0x10A]!, equals(1), reason: 'pointer update');
+    expect(seen[0x10E]! - seen[0x10C]!, equals(2), reason: 'load-use');
+    expect(seen[0x112]! - seen[0x110]!, equals(2), reason: 'R14 written');
+    final st = h.snapshot();
+    expect(st.reg(3), equals(0x8000));
+    expect(st.reg(4), equals(1));
+    expect(st.reg(5), equals(0x8000));
+    expect(st.reg(6), equals(0x8001));
+    expect(st.reg(2), equals(0x8000));
+    expect(st.reg(14), equals(9));
     await h.stop();
   });
 

@@ -63,6 +63,13 @@ class CpuConfig {
   /// (vector 15). Default: true.
   final bool enableWaitHalt;
 
+  /// The instruction after a load (or TAS or MUL) may run in the cycle the
+  /// load's data is written, when it doesn't read or write the load's
+  /// register: the register file gets a second LUT RAM write port
+  /// (two LUT RAM banks), so it needs [enableShadowBank] false. Without it
+  /// that cycle is a bubble. Default: false.
+  final bool enableLoadOverlap;
+
   /// On-chip tightly-coupled BRAM size in bytes (Default: 64 KB)
   final int tcmSizeBytes;
 
@@ -104,6 +111,7 @@ class CpuConfig {
     this.enableLongBranches = true,
     this.enableImmBextr = true,
     this.enableWaitHalt = true,
+    this.enableLoadOverlap = false,
     this.tcmSizeBytes = 65536,
     this.mmioBaseAddr = 0xF0000000,
     this.enableUlx3sFtdiUart = true,

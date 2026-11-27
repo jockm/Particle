@@ -25,7 +25,8 @@
 ;   R11  the mirror entry being applied (0 when none)
 ;   R12  _apply_mirror's return address
 ; For each instruction: R5 the instruction, R3 the control word, R4 w1, R6
-; w2, R7 B, R13 W3, R15 the next PC; R2 and R14 scratch. Registers named in
+; w2, R7 B, R13 W3; R15 the next PC when it isn't PC + 4 (_send_*_goto); R2
+; and R14 scratch. Registers named in
 ; w1, w2 and B go as their number times 8 (parcore_ops.inc): R4 is scaled as
 ; it is extracted, R6 (rd or rs2) at _push, since the control word's Rd is the
 ; plain number.
@@ -45,7 +46,8 @@
 ; x0 and rs1 x1 or x5) pops its guess. A wrong guess costs a redirect.
 .define RAS_TOP         0x40
 
-; Push R15 (PC + 4) on the return-address stack. Uses R2, R14.
+; Push R15 (PC + 4: the caller sets it) on the return-address stack. Uses R2,
+; R14.
 .macro RAS_PUSH
     LD      R14, RAS_TOP
     LD32    R2, (R14)
@@ -59,6 +61,34 @@
 ; dst = src[pos + len - 1 : pos] (len 1..7). Uses R14.
 .macro FIELD dst, src, pos, len
     BEXTR   %dst, %src, %pos, %len
+.endmacro
+
+; The tails, inline in the commonest handlers so they take no jump to a
+; shared one: R2 = op << 8 | class << 4 | mem_op; R6 = rd (SEND_RD) or w2
+; (SEND_NORD: the control word gets Rd 0); then the packet, and on to the
+; next instruction (PC + 4)
+.macro SEND_RD_TAIL
+    SHIFTL  R2, 8
+    OR      R2, R6
+    SHIFTL  R2, 8
+    OR      R3, R2
+    PUSH_TAIL
+.endmacro
+.macro SEND_NORD_TAIL
+    SHIFTL  R2, 8
+    SHIFTL  R2, 8
+    OR      R3, R2
+    PUSH_TAIL
+.endmacro
+.macro PUSH_TAIL
+    SHIFTL  R6, 3               ; w2: rd or rs2, times 8
+    FIFO.W  R3, R1              ; the control word
+    FIFO.W  R4, R1              ; w1
+    FIFO.W  R6, R1              ; w2
+    FIFO.W  R7, R1              ; B
+    FIFO.W  R13, R1             ; W3
+    ADD     R10, 4
+    JUMP    _if_main_loop
 .endmacro
 
     RESET_SLOT _reset_vector
@@ -173,24 +203,11 @@ _apply_mirror:
 _if_program_end:
     WAIT
 _if_main_loop:
-    ; Apply one mirrored store, if core 3 sent any (FENCE.I coherence)
-    FIFO.STAT R4, R8
-    AND     R4, 1               ; bit 0: empty
-    FBRA.NZ R4, ._room
-    FIFO.R  R11, R8
-    RJUMP   _apply_mirror, R12
-    BBRA    _if_main_loop
-._room:
     ; Fewer than 16 words queued in ifToId (bits 16:8 of its status)?
     FIFO.STAT R14, R1
     SHIFTR  R14, QUEUE_SHIFT
-    BBRA.NZ R14, _if_main_loop
-    LD32    R5, (R10)           ; the instruction
-    LD      R14, R5
-    BBRA.Z  R14, _if_program_end ; a zero word: the end of the program
-
-    LD      R15, R10
-    ADD     R15, 4              ; the next PC, unless predicted otherwise
+    FBRA.NZ R14, _if_queue_full
+    LD32    R5, (R10)           ; the instruction (a zero word: entry 0)
     LD      R13, R10            ; W3: the PC
     LD      R3, R9              ; the control word: the flags so far
     FIELD   R6, R5, 7, 5        ; w2: rd (scaled at _push)
@@ -198,7 +215,7 @@ _if_main_loop:
     SHIFTL  R4, 3               ; w1: rs1 * 8 (core 1's register slot)
     FIELD   R2, R5, 0, 7
     JTBL    R2
-    FBRA    _h_illegal          ; 0x00
+    FBRA    _h_zero             ; 0x00: a zero word ends the program
     FBRA    _h_illegal          ; 0x01
     FBRA    _h_illegal          ; 0x02
     FBRA    _h_load             ; 0x03
@@ -327,6 +344,26 @@ _if_main_loop:
     FBRA    _h_illegal          ; 0x7E
     FBRA    _h_illegal          ; 0x7F
 
+; ifToId is full: meanwhile apply one store core 3 mirrored (FENCE.I
+; coherence), if it sent any. Only here (462; the FENCE.I handler takes them
+; all): core 2 waits while its channel to core 3 is half full, so a core 3
+; waiting on a full memToIf holds the pipeline up until core 0's queue fills
+; and core 0 comes here.
+_if_queue_full:
+    FIFO.STAT R14, R8
+    AND     R14, 1              ; bit 0: empty
+    BBRA.NZ R14, _if_main_loop
+    FIFO.R  R11, R8
+    RJUMP   _apply_mirror, R12
+    BBRA    _if_main_loop
+
+; Opcode 0: a zero word is the end of the program (or past it, after a branch
+; guessed not taken); anything else is illegal
+_h_zero:
+    LD      R14, R5
+    BBRA.Z  R14, _if_program_end
+    JUMP    _h_illegal
+
 _t_jal:
     JUMP    _h_jal
 _t_jalr:
@@ -367,7 +404,7 @@ _h_load:
     LDI     R14, OP_MEM * 256 + CLASS_RS1_IMM * 16
     OR      R2, R14
     SBEXTR  R7, R5, 20, 12      ; B: the offset
-    JUMP    _send_rd
+    SEND_RD_TAIL
 
 ; ------------------------------------------------------------------------------
 ; OP-IMM: OP_ADD + funct3, SRAI OP_SRA, the Zbb forms their own;
@@ -381,7 +418,7 @@ _h_op_imm:
 _op_imm_send:
     SBEXTR  R7, R5, 20, 12      ; B: the I-immediate
     SHIFTL  R2, 8               ; op << 8, CLASS_RS1_IMM, mem_op 0
-    JUMP    _send_rd
+    SEND_RD_TAIL
 
 ; ------------------------------------------------------------------------------
 ; STORE: OP_MEM, CLASS_STORE; mem_op = funct3 + 8; w2 rs2, B the offset
@@ -399,7 +436,7 @@ _h_store:
     SHIFTL  R7, 5
     OR      R7, R6
     FIELD   R6, R5, 20, 5       ; w2: rs2
-    JUMP    _send_nord
+    SEND_NORD_TAIL
 
 ; ------------------------------------------------------------------------------
 ; BRANCH: OP_BEQ + funct3, CLASS_BRANCH; w2 rs2. Backward: guess taken
@@ -432,37 +469,45 @@ _h_branch:
     FIELD   R6, R5, 20, 5       ; w2: rs2
     FBRA.N  R5, ._b_backward    ; inst[31]: the offset's sign
     LD      R13, R7             ; forward: not taken; if wrong, the target
-    JUMP    _send_nord
+    SEND_NORD_TAIL
 ._b_backward:
     OR      R3, 8               ; predicted taken
-    LD      R13, R15            ; if wrong, PC + 4
+    LD      R13, R10
+    ADD     R13, 4              ; if wrong, PC + 4
     LD      R15, R7             ; fetch the target next
-    JUMP    _send_nord
+    JUMP    _send_nord_goto
 
 ; ------------------------------------------------------------------------------
-; The shared tail: R2 = op << 8 | class << 4 | mem_op; R6 = rd (_send_rd) or
-; w2 (_send_nord, the control word gets Rd 0); then the packet, and the PC
-; moves on to R15
+; The shared tails (the commonest handlers have their own copies:
+; SEND_RD_TAIL, SEND_NORD_TAIL): R2 = op << 8 | class << 4 | mem_op; R6 = rd
+; (_send_rd) or w2 (_send_nord, the control word gets Rd 0); then the packet,
+; and the PC moves on to PC + 4, or with _send_*_goto to R15
 ; ------------------------------------------------------------------------------
-_send_nord:
+_send_rd:
+    SEND_RD_TAIL
+_send_nord_goto:
     SHIFTL  R2, 8
     SHIFTL  R2, 8
     OR      R3, R2
-    FBRA    _push
-_send_rd:
+    FBRA    _push_goto
+_send_rd_goto:
     SHIFTL  R2, 8
     OR      R2, R6
     SHIFTL  R2, 8
     OR      R3, R2
-_push:
+_push_goto:
     SHIFTL  R6, 3               ; w2: rd or rs2, times 8
     FIFO.W  R3, R1              ; the control word
     FIFO.W  R4, R1              ; w1
     FIFO.W  R6, R1              ; w2
     FIFO.W  R7, R1              ; B
     FIFO.W  R13, R1             ; W3
-_advance:
+_goto:
     LD      R10, R15
+    JUMP    _if_main_loop
+; Nothing to send: on to PC + 4
+_advance:
+    ADD     R10, 4
     JUMP    _if_main_loop
 
 _t_op_imm_shift:
@@ -485,7 +530,7 @@ _op_send:
     SHIFTL  R2, 8
     LD      R14, CLASS_RS1_RS2 * 16
     OR      R2, R14
-    JUMP    _send_rd
+    SEND_RD_TAIL
 _t_op_funct7:
     JUMP    _op_funct7
 
@@ -506,7 +551,9 @@ _h_jalr:
     OR      R14, 4
     SUB     R14, 5
     FBRA.NZ R14, ._jalr_send    ; rd not x1 or x5: not a call
-    RAS_PUSH
+    LD      R15, R10
+    ADD     R15, 4
+    RAS_PUSH                    ; PC + 4
     FBRA    ._jalr_send
 ._jalr_rd0:
     LD      R14, R4
@@ -525,6 +572,8 @@ _h_jalr:
     ST32    (R14), R2
     OR      R3, 8               ; predicted
     LD      R15, R13            ; fetch the guess next
+    LDI     R2, OP_JALR * 256 + CLASS_RS1_IMM * 16
+    JUMP    _send_rd_goto
 ._jalr_send:
     LDI     R2, OP_JALR * 256 + CLASS_RS1_IMM * 16
     JUMP    _send_rd
@@ -554,14 +603,16 @@ _h_jal:
     OR      R14, 4
     SUB     R14, 5
     FBRA.NZ R14, ._jal_go       ; rd not x1 or x5: not a call
-    RAS_PUSH                    ; R15 = PC + 4
+    LD      R15, R10
+    ADD     R15, 4
+    RAS_PUSH                    ; PC + 4
 ._jal_go:
     LD      R15, R10
     ADD     R15, R7             ; fetch the target next
     LD      R14, R6
-    BBRA.Z  R14, _advance       ; no link: nothing to send
+    BBRA.Z  R14, _goto          ; no link: nothing to send
     LDI     R2, OP_JAL * 256 + CLASS_IMM * 16
-    JUMP    _send_rd
+    JUMP    _send_rd_goto
 
 ; ------------------------------------------------------------------------------
 ; LUI (OP_LUI) and AUIPC (OP_AUIPC): CLASS_IMM, B the U-immediate
@@ -575,7 +626,7 @@ _h_auipc:
     LD      R7, R5
     SHIFTR  R7, 12
     SHIFTL  R7, 12              ; inst[31:12] << 12
-    JUMP    _send_rd
+    SEND_RD_TAIL
 
 ; ------------------------------------------------------------------------------
 ; MISC-MEM: funct3 0 FENCE (nothing to do: one core does every load and

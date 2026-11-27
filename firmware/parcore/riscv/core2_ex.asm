@@ -70,6 +70,12 @@ _reset_vector:
 ; Send [R10, R15, R14, R13] to core 3, then the main loop
 ; ==============================================================================
 _forward_to_mem:
+    ; Wait while exToMem holds 128 words or more (a FIFO.W without room is
+    ; dropped): core 3 may be waiting for core 0 to take its mirrored stores,
+    ; which core 0 does only while its own queue is full (462)
+    FIFO.STAT R9, R2
+    SHIFTR  R9, 15
+    BBRA.NZ R9, _forward_to_mem
     FIFO.W  R10, R2             ; control word
     FIFO.W  R15, R2             ; result
     FIFO.W  R14, R2             ; address / target

@@ -175,7 +175,9 @@ class ParticleCpuCore extends Module {
     //      here (no register still being written) redirect the fetch
     //   E  execute, with the operands forwarded from the last cycle's writes;
     //      register writes; traps, MBOX, jumps and the other branches redirect
-    //   W  a load's (or TAS's) data arrives and is written (E is empty then)
+    //   W  a load's (or TAS's or MUL's) data arrives and is written; E is
+    //      empty then, unless the core has enableLoadOverlap and the next
+    //      instruction doesn't touch the load's register
     // -------------------------------------------------------------------------
     final trapBase = config.trapTableBase;
     final strideShift = (config.trapStrideBytes - 1).bitLength;
@@ -278,6 +280,9 @@ class ParticleCpuCore extends Module {
     Logic anyOp(List<int> codes) =>
         codes.map(op).reduce((a, b) => a | b);
 
+    if (config.enableLoadOverlap && config.enableShadowBank) {
+      throw ArgumentError('enableLoadOverlap needs enableShadowBank false');
+    }
     final rf = RegisterFile(
       clk: clk,
       reset: reset,
@@ -294,6 +299,7 @@ class ParticleCpuCore extends Module {
       xchgMostEn: rfXchgMostEn,
       xchgRegIdx: rr,
       shadowBank: config.enableShadowBank,
+      dualWrite: config.enableLoadOverlap,
     );
     registerFile = rf;
     // The core stays in reset while the register file clears its LUT RAM
@@ -404,7 +410,7 @@ class ParticleCpuCore extends Module {
     );
 
     // Ops whose result is the ALU result, written to Rr (or R14)
-    final aluWritesRr = anyOp([
+    final aluRrOps = [
       ParticleOpcodes.add, ParticleOpcodes.sub, ParticleOpcodes.addImm4,
       ParticleOpcodes.subImm4, ParticleOpcodes.neg, ParticleOpcodes.sadd,
       ParticleOpcodes.ssub, ParticleOpcodes.saddImm4, ParticleOpcodes.ssubImm4,
@@ -424,11 +430,13 @@ class ParticleCpuCore extends Module {
       ParticleOpcodes.sslt, ParticleOpcodes.ssltImm4,
       ParticleOpcodes.ssltNegImm4, ParticleOpcodes.seq, ParticleOpcodes.sne,
       ParticleOpcodes.sle, ParticleOpcodes.ssle,
-    ]);
-    final aluWritesR14 = anyOp([
+    ];
+    const aluR14Ops = [
       ParticleOpcodes.sltR14Imm8, ParticleOpcodes.sltR14NegImm8,
       ParticleOpcodes.ssltR14Imm8, ParticleOpcodes.ssltR14NegImm8,
-    ]);
+    ];
+    final aluWritesRr = anyOp(aluRrOps);
+    final aluWritesR14 = anyOp(aluR14Ops);
 
     // -------------------------------------------------------------------------
     // Multiplier (when enabled)
@@ -813,22 +821,27 @@ class ParticleCpuCore extends Module {
     final imm16Extended = mux(op(ParticleOpcodes.ldis),
         eImm16.signExtend(32), eImm16.zeroExtend(32));
 
+    // W's data, and whether it goes to port 2 (lPort2: the instruction in E
+    // with it writes port 1)
+    late final wbData = mux(
+        lIsMul,
+        mulResult,
+        mux(
+            ldMboxReg.eq(Const(1, width: 2)),
+            mboxValueReg,
+            mux(ldMboxReg.eq(Const(2, width: 2)),
+                mboxSourceReg.zeroExtend(32), ldData)));
+    final lPort2 = config.enableLoadOverlap ? Logic(name: 'lPort2') : null;
+
     Combinational([
       // Port 1: an instruction's result, or a load's data in W
       rfWEn < Const(0),
       rfWAddr < rr,
       rfWData < aluUnit.result,
-      If(lValid, then: [
+      If(lPort2 == null ? lValid : lValid & ~lPort2, then: [
         rfWEn < Const(1),
         rfWAddr < ldDest,
-        rfWData < mux(
-            lIsMul,
-            mulResult,
-            mux(
-                ldMboxReg.eq(Const(1, width: 2)),
-                mboxValueReg,
-                mux(ldMboxReg.eq(Const(2, width: 2)),
-                    mboxSourceReg.zeroExtend(32), ldData))),
+        rfWData < wbData,
       ]),
       If(divWaiting & divDone & ~mboxTake, then: [
         rfWEn < Const(1),
@@ -899,6 +912,14 @@ class ParticleCpuCore extends Module {
       rfWEn2 < Const(0),
       rfWAddr2 < Const(14, width: 4),
       rfWData2 < pc,
+      // A load's data in W when the instruction in E writes port 1 (D let
+      // it in only if it can't also write port 2)
+      if (lPort2 != null)
+        If(lValid & lPort2, then: [
+          rfWEn2 < Const(1),
+          rfWAddr2 < ldDest,
+          rfWData2 < wbData,
+        ]),
       If(doExec & ptrMode, then: [
         rfWEn2 < Const(1),
         rfWAddr2 < ptrReg,
@@ -1057,10 +1078,71 @@ class ParticleCpuCore extends Module {
     ]);
     final dImmReady = fValid & fPc.eq(dPc + Const(2, width: 32));
     final eFree = (~eValid | eDone).named('eFree');
+
+    // With enableLoadOverlap the instruction in D may go to E as a load in E
+    // goes to W, when it neither reads nor writes the load's register, and
+    // doesn't write both ports (W takes the port it leaves free). Built only
+    // for such a core, so a core without it is the same logic as before.
+    ({Logic ok, Logic mayP1}) overlapLogic() {
+      final dRrW = dInst.slice(7, 4);
+      final dMayP1 = dAnyOp([
+        ...aluRrOps, ...aluR14Ops,
+        ParticleOpcodes.ldi, ParticleOpcodes.ldis, ParticleOpcodes.ld,
+        ParticleOpcodes.ldImm4, ParticleOpcodes.ldNegImm4,
+        ParticleOpcodes.ldImm8, ParticleOpcodes.ldNegImm8,
+        ParticleOpcodes.push4, ParticleOpcodes.push8,
+        ParticleOpcodes.jmp, ParticleOpcodes.rjump,
+        ParticleOpcodes.fifoR, ParticleOpcodes.fifoTryR,
+        ParticleOpcodes.fifoTryW, ParticleOpcodes.fifoStat,
+        if (config.enableLongBranches) ...[
+          ParticleOpcodes.rjumpDisp16, ParticleOpcodes.lea,
+        ],
+        if (config.enableDivider) ...divOps,
+      ]).named('dMayP1');
+      final dGroup = dOpcode.slice(7, 4);
+      final dMode = dOpcode.slice(3, 0);
+      final dPtrMode = config.enablePointerModes
+          ? (dGroup.eq(Const(1, width: 4)) |
+                  dGroup.eq(Const(2, width: 4)) |
+                  dGroup.eq(Const(3, width: 4))) &
+              ((dMode.gte(Const(1, width: 4)) & dMode.lte(Const(4, width: 4))) |
+                  (dMode.gte(Const(6, width: 4)) &
+                      dMode.lte(Const(9, width: 4))))
+          : Const(0);
+      // Port 2: pointer updates, TRYR, TRAP, and the jumps that can trap on an
+      // odd target
+      final dMayP2 = (dPtrMode |
+              dAnyOp([
+                ParticleOpcodes.fifoTryR, ParticleOpcodes.trapR,
+                ParticleOpcodes.trapImm4, ParticleOpcodes.jmp,
+                ParticleOpcodes.reti,
+              ]))
+          .named('dMayP2');
+      // The ones that write R14 without naming it (rAddrA covers the reads)
+      final dWritesR14 = dAnyOp([
+        ...aluR14Ops,
+        ParticleOpcodes.ldImm8, ParticleOpcodes.ldNegImm8,
+        ParticleOpcodes.push8, ParticleOpcodes.fifoTryW,
+        ParticleOpcodes.fifoTryR, ParticleOpcodes.trapR,
+        ParticleOpcodes.trapImm4,
+      ]);
+      final eLdDest = mux(isTas, rl, rr);
+      final dLdHazard = ~eLdDest.eq(0) &
+          (eLdDest.eq(rAddrA) |
+              eLdDest.eq(dRl) |
+              eLdDest.eq(dRrW) |
+              (eLdDest.eq(Const(14, width: 4)) & dWritesR14));
+      return (
+        ok: (~dLdHazard & ~(dMayP1 & dMayP2)).named('dOverlapOk'),
+        mayP1: dMayP1,
+      );
+    }
+
+    final overlap = config.enableLoadOverlap ? overlapLogic() : null;
     final dAdvance = (dValid &
         ~eRedirect &
         eFree &
-        ~wNext &
+        (overlap == null ? ~wNext : ~wNext | overlap.ok) &
         (~dIsLdi | dImmReady)).named('dAdvance');
 
     // D decides the unconditional FBRA/BBRA imm8 forms: they need no
@@ -1133,6 +1215,7 @@ class ParticleCpuCore extends Module {
       eFb1: Const(0),
       eFb2: Const(0),
       lValid: Const(0),
+      if (lPort2 != null) lPort2: Const(0),
       lIsMul: Const(0),
       ldMboxReg: Const(0, width: 2),
       ldDest: Const(0, width: 4),
@@ -1206,6 +1289,7 @@ class ParticleCpuCore extends Module {
       ]),
 
       lValid < wNext,
+      if (lPort2 != null) lPort2 < wNext & dAdvance & overlap!.mayP1,
       lIsMul < wNext & isMulOp,
       ldMboxReg <
           mux<Logic>(wNext & isLoadOp & effAddr.eq(Const(0xFFFFFF04, width: 32)),

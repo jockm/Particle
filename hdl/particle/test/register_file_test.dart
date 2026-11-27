@@ -1,8 +1,9 @@
 // =============================================================================
 // File: hdl/particle/test/register_file_test.dart
 // Architecture: Particle 32-bit RISC
-// Description: Unit testbench for 16x32 Register File, hardwired R0, and
-//              single-cycle hardware shadow bank context switching.
+// Description: Unit testbench for 16x32 Register File, hardwired R0,
+//              single-cycle hardware shadow bank context switching, and the
+//              dual-write mode (no shadow bank).
 // =============================================================================
 
 import 'dart:async';
@@ -319,6 +320,77 @@ void main() {
       expect(rf.rDataA.value.toInt(), equals(value), reason: 'R$reg');
       expect(rf.regValue(reg), equals(value));
       expect(rf.shadowValue(reg), equals(0));
+    }
+  });
+
+  test('Dual write: both ports write the LUT RAM in one cycle; port 2 wins '
+      'a register both write', () async {
+    final clkGen = SimpleClockGenerator(10);
+    Logic l(String n, [int w = 1]) => Logic(name: n, width: w);
+    final reset = l('reset');
+    final rAddrA = l('rAddrA', 4), rAddrB = l('rAddrB', 4);
+    final wAddr = l('wAddr', 4), wAddr2 = l('wAddr2', 4);
+    final wData = l('wData', ParticleWidths.word);
+    final wData2 = l('wData2', ParticleWidths.word);
+    final wEn = l('wEn'), wEn2 = l('wEn2');
+    final rf = RegisterFile(
+      clk: clkGen.clk,
+      reset: reset,
+      rAddrA: rAddrA,
+      rAddrB: rAddrB,
+      wAddr: wAddr,
+      wData: wData,
+      wEn: wEn,
+      wAddr2: wAddr2,
+      wData2: wData2,
+      wEn2: wEn2,
+      xchgEn: Const(0),
+      xchgAllEn: Const(0),
+      xchgMostEn: Const(0),
+      xchgRegIdx: Const(0, width: 4),
+      shadowBank: false,
+      dualWrite: true,
+    );
+    await rf.build();
+    unawaited(Simulator.run());
+    for (final x in [wEn, wEn2, rAddrA, rAddrB, wAddr, wAddr2, wData, wData2]) {
+      x.put(0);
+    }
+    reset.put(1);
+    for (var i = 0; i < 2; i++) {
+      await clkGen.clk.nextPosedge;
+    }
+    reset.put(0);
+    for (var i = 0; i < RegisterFile.clearCycles; i++) {
+      await clkGen.clk.nextPosedge;
+    }
+    Future<void> write(int a1, int d1, int a2, int d2) async {
+      wAddr.put(a1);
+      wData.put(d1);
+      wEn.put(1);
+      wAddr2.put(a2);
+      wData2.put(d2);
+      wEn2.put(1);
+      await clkGen.clk.nextPosedge;
+      wEn.put(0);
+      wEn2.put(0);
+    }
+
+    // Two registers at once, then each again from the other port
+    await write(3, 0x33, 7, 0x77);
+    await write(7, 0x707, 3, 0x303);
+    // The same register from both: port 2's value
+    await write(9, 0x91, 9, 0x92);
+    // R14 from port 1 and a LUT RAM register from port 2
+    await write(14, 0xEE, 5, 0x55);
+    for (final (reg, value) in [
+      (3, 0x303), (7, 0x707), (9, 0x92), (14, 0xEE), (5, 0x55), (0, 0),
+    ]) {
+      rAddrA.put(reg);
+      rAddrB.put(reg);
+      expect(rf.rDataA.value.toInt(), equals(value), reason: 'R$reg port A');
+      expect(rf.rDataB.value.toInt(), equals(value), reason: 'R$reg port B');
+      expect(rf.regValue(reg), equals(value), reason: 'R$reg');
     }
   });
 }
