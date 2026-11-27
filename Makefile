@@ -79,7 +79,7 @@ MULTI_TESTS   := $(filter test_%,$(MULTI_NAMES))
         generate-ulx3s ulx3s-bit ulx3s-size ulx3s-timing ulx3s-prog ulx3s-flash ulx3s-term firmware apps clean help \
         parcore-guest parcore-image generate-parcore-ulx3s parcore-bit parcore-size parcore-timing parcore-prog parcore-flash parcore-profile \
         parcore-console parcore-status parcore-load test-pmon parcore-flash-image parcore-flash-image-jtag \
-        pano-vm-check blink-pano uart-pano uart-rohd-pano particle-pano pano-prog pano-term
+        pano-vm-check blink-pano uart-pano uart-rohd-pano particle-pano parcore-pano pano-prog pano-term
 
 # ------------------------------------------------------------------------------
 # Top-Level Targets
@@ -148,6 +148,8 @@ help:
 	@echo "  make uart-rohd-pano   - The same test from Particle's UART, through sv2v: build/panog2/panog2_uart_rohd.bit"
 	@echo "  make particle-pano    - One Particle core running PANO_PROGRAM (apps/asm/panog2_echo.asm), through sv2v:"
 	@echo "                          build/panog2/panog2_particle.bit"
+	@echo "  make parcore-pano     - Parcore running PARCORE_GUEST (apps/riscv/hello.S), booted from an on-chip ROM:"
+	@echo "                          build/panog2/panog2_parcore.bit (the guest's UART on the console; no pmon yet)"
 	@echo "  make pano-prog        - Load PANO_BIT (default build/panog2/panog2_blink.bit) over JTAG; the flash is untouched"
 	@echo "  make pano-term        - Open the serial console (PANO_PORT=..., PANO_BAUD=1000000); Ctrl-] leaves"
 	@echo "  make test-pmon        - Run the pmon host tool's tests"
@@ -381,6 +383,27 @@ particle-pano: setup $(PASM_BIN) $(PASM_LINT_BIN)
 	@cat $(PANO_BLD)/particle/panog2_board.v $(PANO_BLD)/particle/particle_core.v > $(PANO_BLD)/particle/panog2_particle.v
 	$(call pano_build,panog2_particle,,$(PANO_BLD)/particle,panog2_uart.ucf,panog2_board,$(PANO_BLD)/particle/program_bank0.hex $(PANO_BLD)/particle/program_bank1.hex)
 	@echo "    $(PANO_PROGRAM) at $(PANO_CLOCK_HZ) Hz, console $(PANO_BAUD) baud: load it with make pano-prog PANO_BIT=$(PANO_BLD)/panog2_particle.bit"
+
+# Parcore (bin/generate_parcore_panog2.dart) inside panog2_board, at
+# PANO_CLOCK_HZ: the conductor boots the stage cores from the image
+# (parcore-image: PARCORE_GUEST) in an on-chip ROM. The guest's UART (core 3,
+# 1 Mbps) is on the DVI DDC pins (make pano-term); the pmon console isn't
+# wired yet. The Pano button resets; the light shows LED 7 red, LED 0 green
+# and LED 1 blue.
+PANO_PARCORE_FILES := $(foreach t,conductor core0 core1 core2 core3,$(foreach b,0 1,$(PANO_BLD)/parcore/$(t)_tcm_bank$(b).hex)) \
+	$(PANO_BLD)/parcore/parcore_image_rom.hex
+parcore-pano: parcore-image
+	@command -v $(SV2V) > /dev/null || { echo "[FAIL] $(SV2V) not found: install it (macOS: brew install sv2v), or give SV2V=..."; exit 1; }
+	@mkdir -p $(PANO_BLD)/parcore
+	@cd $(PARCORE_DIR) && $(DART) run bin/generate_parcore_panog2.dart \
+		--conductor ../../$(PARCORE_BLD)/conductor/conductor.bin \
+		--image ../../$(PARCORE_ULX3S_BLD)/parcore_image.bin \
+		--out ../../$(PANO_BLD)/parcore --clock-hz $(PANO_CLOCK_HZ)
+	@echo "==> sv2v: $(PANO_BLD)/parcore/parcore_core.v"
+	@$(SV2V) $(PANO_BLD)/parcore/parcore_core.sv > $(PANO_BLD)/parcore/parcore_core.v
+	@cat $(PANO_BLD)/parcore/panog2_board.v $(PANO_BLD)/parcore/parcore_core.v > $(PANO_BLD)/parcore/panog2_parcore.v
+	$(call pano_build,panog2_parcore,,$(PANO_BLD)/parcore,panog2_uart.ucf,panog2_board,$(PANO_PARCORE_FILES))
+	@echo "    $(PARCORE_GUEST) at $(PANO_CLOCK_HZ) Hz: load it with make pano-prog PANO_BIT=$(PANO_BLD)/panog2_parcore.bit"
 
 pano-prog:
 	@if [ ! -f "$(PANO_BIT)" ]; then \

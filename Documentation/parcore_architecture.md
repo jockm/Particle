@@ -251,6 +251,10 @@ On the ULX3S the image comes from `SpiFlashRom` (`lib/spi_flash_rom.dart`), an o
 
 `ParcoreUlx3sTop` (`lib/parcore_ulx3s_top.dart`) is `ParcoreTop` with the conductor's code in its TCM, the stage cores' TCMs empty, the boot image in a `SpiFlashRom` (or, with `realFlash`, the `flash_*` pins for the board's flash), and a two-flip-flop reset synchroniser. The board wrapper (the particle package's `ulx3sBoardVerilog`) adds the PLL and pins: the power button resets, the FTDI UART is the guest's console, the header's `gp[0]` (transmit) and `gp[1]` (receive) are pmon's console, `btn[6:1]` are the buttons and `led[7:0]` the LEDs; with `flash`, it adds the flash's pins and drives its clock through `USRMCLK`. `bin/generate_parcore_ulx3s.dart` writes the design and the memories' contents (`--real-flash` for `PARCORE_REAL_FLASH=1`).
 
+### The Pano Logic G2 design
+
+The Pano Logic G2 (rev C, a Spartan-6 XC6SLX100; see [panog2.md](panog2.md)) is the board Parcore is tried on while the ULX3S is out of use (493). The same `ParcoreUlx3sTop` goes inside the particle package's `panoG2BoardVerilog` wrapper (plain Verilog-2001; Parcore's SystemVerilog goes through `sv2v` for ISE): the 25 MHz clock straight in, the Pano button as reset, the guest's UART on the DVI connector's DDC pins, and the light showing LED 7 red (the conductor's fault flasher), LED 0 green and LED 1 blue. The boot image is in the on-chip ROM. pmon's console isn't wired yet (its receive is held idle; 502: the micro HDMI connector's DDC pins later), nor are the other five buttons (held at zero). `bin/generate_parcore_panog2.dart` writes the design and the memories' contents; `make parcore-pano` builds it in the ISE VM.
+
 The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, shows the buttons on LEDs 0–5 with a heartbeat on LED 7, and names each button as it's pressed. It debounces the buttons in software: a change counts once they have read the same for 64 passes of its main loop, about 10 ms. `apps/riscv/build_riscv_guest.sh` builds a guest with a RISC-V GCC or LLVM toolchain (see `apps/riscv/riscv_toolchain.sh`), linked by `apps/riscv/link.ld` at `0x500` like the official tests.
 
 ## Building and Generating
@@ -268,6 +272,7 @@ The demo guest, `apps/riscv/hello.S`, prints a banner, echoes what you type, sho
 | `make parcore-size` | The size of each kind of core and of every module (LUT4s, flip-flops, block RAMs and so on), without place and route: `build/parcore_ulx3s/size_report.txt` |
 | `make parcore-timing` | The last `parcore-bit`'s Fmax and critical path |
 | `make parcore-profile` | Runs `PARCORE_PROFILE_GUEST` (default `apps/riscv/bench.S`) on Parcore in Verilator and prints the cycles per RISC-V instruction, overall and per phase, and where each stage core's cycles go (see [Profiling](#profiling)) |
+| `make parcore-pano` | Generates the Pano G2 design with that image (`PANO_CLOCK_HZ`, 25 MHz), converts it with `sv2v`, and builds it with ISE in the VM: `build/panog2/panog2_parcore.bit` (`make pano-prog PANO_BIT=...` loads it, `make pano-term` opens the guest's console; see [configuration_guide.md](configuration_guide.md#the-pano-logic-g2)) |
 | `make parcore-prog`, `make parcore-flash` | Load the bitstream into the ULX3S, or write it to its flash |
 | `make parcore-console`, `make parcore-status`, `make parcore-load` | pmon, the conductor's console, through a USB serial adapter on `gp[0]`/`gp[1]` (`PMON_PORT`; see [pmon](pmon.md)) |
 | `make parcore-flash-image-jtag`, `make parcore-flash-image` | Write the boot image into the board's flash at 0x400000, for a `PARCORE_REAL_FLASH=1` bitstream: over JTAG, or through pmon |

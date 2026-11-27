@@ -3,7 +3,8 @@
 // Architecture: Particle 32-bit RISC on the Pano Logic G2 (Spartan-6)
 // Description: Verilog-2001 board wrapper for the Pano G2 (rev C): the
 //              board's pins (boards/panog2/panog2_uart.ucf) to
-//              ParticleSingleCoreTop, the Pano button as reset, and the LED.
+//              ParticleSingleCoreTop or Parcore's top (ParcoreUlx3sTop), the
+//              Pano button as reset, and the LED.
 // =============================================================================
 //
 // Written as text, like lib/ulx3s_board.dart, and as plain Verilog-2001 so
@@ -22,14 +23,20 @@
 //   led_green F13 blinks (about 0.7 s on, 0.7 s off) while the core runs
 //   led_blue H13  console traffic: lit for about 50 ms after either line
 //                 is low (a character's start bit)
-// FIFO channel 1, the second UART, has its receive held idle and its
-// transmit left unconnected.
+// With [coreLeds] (Parcore) the light shows the core's LEDs instead: red its
+// LED 7 (the conductor's fault flasher), green LED 0 (booting, then the
+// guest's LED 0) and blue LED 1. The second UART (Particle: FIFO channel 1;
+// Parcore: the pmon console) has its receive held idle and its transmit
+// left unconnected. With [buttons] (Parcore) the core's six-bit buttons
+// input is held at zero (none pressed).
 
 /// The `panog2_board` top level around [coreModule] (ParticleSingleCoreTop's
-/// definition name), whose clock is [clockHz].
+/// definition name, or Parcore's), whose clock is [clockHz].
 String panoG2BoardVerilog({
   required int clockHz,
   String coreModule = 'particle_single_core_top',
+  bool buttons = false,
+  bool coreLeds = false,
 }) {
   final debounce = clockHz ~/ 100; // 10 ms
   final flash = clockHz ~/ 20; // 50 ms
@@ -86,12 +93,23 @@ module panog2_board (
     .ftdi_rx_pin(uart_rx),
     .gpio_rx_pin(1'b1),
     .ftdi_tx_pin(uart_tx),
-    .gpio_tx_pin(),
+    .gpio_tx_pin(),${buttons ? "\n    .buttons(6'b000000)," : ''}
     .leds(core_leds)
   );
 
   // ---- The LED ----
-  reg [24:0] beat = 25'd0;
+${coreLeds ? _coreLeds : _boardLeds(flash)}
+endmodule
+''';
+}
+
+/// The light from the core's LEDs (Parcore)
+const _coreLeds = '''  assign led_red   = core_leds[7];
+  assign led_green = core_leds[0];
+  assign led_blue  = core_leds[1];''';
+
+/// The light from the wrapper's own state (one Particle core)
+String _boardLeds(int flash) => '''  reg [24:0] beat = 25'd0;
   always @(posedge clk)
     beat <= beat + 25'd1;
   reg        rx_s1 = 1'b1, rx_s2 = 1'b1;
@@ -106,7 +124,4 @@ module panog2_board (
   end
   assign led_red   = in_reset;
   assign led_green = !in_reset && beat[24];
-  assign led_blue  = (traffic != 24'd0);
-endmodule
-''';
-}
+  assign led_blue  = (traffic != 24'd0);''';

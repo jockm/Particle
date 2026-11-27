@@ -36,7 +36,7 @@ The lines idle at 5 V on the connector (measured), so the host's serial adapter 
 
 ## Tools
 
-The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `blink-pano`, `uart-pano`, `uart-rohd-pano`, `particle-pano`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
+The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx's ISE VM, and loaded over JTAG with iMPACT through a Platform Cable USB (DLC9G) passed through to the VM. The host reaches the VM as the ssh host `ise-vm`; `scp` works to it. The make targets (`pano-vm-check`, `blink-pano`, `uart-pano`, `uart-rohd-pano`, `particle-pano`, `parcore-pano`, `pano-prog`, `pano-term`) are in [configuration_guide.md](configuration_guide.md#the-pano-logic-g2); the scripts they copy into the VM are in `hdl/particle/boards/panog2`:
 
 | File | What it is |
 |---|---|
@@ -44,11 +44,18 @@ The FPGA is built with ISE 14.7 (Spartan-6 isn't supported by Vivado), in Xilinx
 | `ise_build.sh` | The ISE flow in the VM: XST, ngdbuild, map, par, trce, bitgen (`StartupClk:JtagClk`, for loading over JTAG) |
 | `panog2_uart.v`, `panog2_uart.ucf` | The serial console test: an echo, and a banner after loading and at each button press; green flashes for a character received, blue for one sent |
 | `lib/panog2_board.dart` (in `hdl/particle`) | The Verilog-2001 top level `panog2_board` around one Particle core (`ParticleSingleCoreTop`): the console on FIFO channel 0, the button as reset (its idle level learnt after configuration), and the LED: red while in reset, green blinking while the core runs, blue for console traffic. `make particle-pano` builds it with `PANO_PROGRAM` (default `apps/asm/panog2_echo.asm`, a banner and an echo) |
+| `bin/generate_parcore_panog2.dart` (in `hdl/parcore`) | Parcore in the same `panog2_board` wrapper (with `buttons` and `coreLeds`): the light shows Parcore's LED 7 red, LED 0 green and LED 1 blue, the guest's UART is the console, the boot image is in the on-chip ROM, and pmon's console isn't wired yet. `make parcore-pano` builds it (see [parcore_architecture.md](parcore_architecture.md#the-pano-logic-g2-design)) |
 | `lib/panog2_uart_rohd.dart`, `bin/generate_panog2.dart` (in `hdl/particle`) | The same echo (no banner) from Particle's own UART, `ParticleFtdiUart`, with the same ports, so it uses `panog2_uart.ucf`. `make uart-rohd-pano` generates its SystemVerilog, converts it with `sv2v`, and builds that: the path Particle and Parcore will take to ISE |
 | `impact_prog.sh` | iMPACT in batch mode: load a bitstream, or list the JTAG chain (`--identify`) |
 | `vm_check.sh` | Checks ISE's tools in the VM, then lists the JTAG chain |
 
 Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, holding Pano's own firmware, is untouched, and a power cycle brings that back.
+
+## Results
+
+| Design | LUTs | Fmax (ISE's estimate) | On the board |
+|---|---|---|---|
+| One Particle core (`particle-pano`), 64 KiB block RAM | 3,447 of 63,288 (5%), 1,045 slices, 32 RAMB16BWER | 43.8 MHz (22.8 ns) | Runs at 25 MHz: `memprobe.asm` and `panog2_echo.asm` correct |
 
 ## What ISE needs from the generated Verilog
 
@@ -57,6 +64,8 @@ Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, 
 
 ## Still to do
 
-* One Particle core (`make particle-pano`): its size and speed in ISE, and whether XST makes block RAM of its memory (with byte writes and `$readmemh` contents).
-* Parcore on the G2: Spartan-6 equivalents of the ECP5 parts (the PLL, and the SPI flash clock through `STARTUP_SPARTAN6` instead of `USRMCLK`), and the full pin file.
+* Parcore on the G2 (`make parcore-pano`): its size and speed in ISE, and the guest on the board. Then:
+  * pmon's console, on the micro HDMI connector's DDC pins (AB19 transmit, AA21 receive in LiteX's platform; 502);
+  * booting from the board's flash (the SPI flash clock through `STARTUP_SPARTAN6`, as `USRMCLK` on the ECP5), once it's known where Pano's own firmware sits in it (505);
+* A Spartan-6 PLL, for a faster clock than the 25 MHz on Y13.
 * The PHY's reset pin, for a known 125 MHz clock.
