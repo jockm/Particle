@@ -12,7 +12,8 @@
 // Writes into <dir> (make parcore-pano does this, then sv2v and ISE):
 //   panog2_board.v        top level panog2_board (particle's
 //                         lib/panog2_board.dart): the 25 MHz clock straight
-//                         in, the Pano button as reset, the guest's UART
+//                         in, or a Spartan-6 PLL's for another --clock-hz,
+//                         the Pano button as reset, the guest's UART
 //                         (core 3) on the DVI DDC pins, and the light from
 //                         the LEDs (red 7, green 0, blue 1)
 //   parcore_core.sv       ParcoreUlx3sTop (its name is still the ULX3S's)
@@ -104,11 +105,17 @@ Future<void> main(List<String> args) async {
       .writeAsStringSync(SpiFlashRom.hexFile(rom.contents));
 
   File('${dir.path}/parcore_core.sv').writeAsStringSync(top.dumpSystemVerilog());
-  File('${dir.path}/panog2_board.v').writeAsStringSync(panoG2BoardVerilog(
-      clockHz: clockHz,
-      coreModule: top.definitionName,
-      buttons: true,
-      coreLeds: true));
+  final String board;
+  try {
+    board = panoG2BoardVerilog(
+        clockHz: clockHz,
+        coreModule: top.definitionName,
+        buttons: true,
+        coreLeds: true);
+  } on ArgumentError catch (e) {
+    usage('${e.message}');
+  }
+  File('${dir.path}/panog2_board.v').writeAsStringSync(board);
 
   print('==> Parcore Pano G2 design written to ${dir.path}: panog2_board.v '
       '(top level) and parcore_core.sv, ${clockHz / 1e6} MHz');

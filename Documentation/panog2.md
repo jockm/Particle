@@ -8,6 +8,8 @@ What is known about the board comes from the reverse-engineering work of others:
 
 The board's 25 MHz oscillator drives the Marvell Ethernet PHY, not the FPGA. The PHY's `125CLK` output goes to FPGA pin **Y13**: 25 MHz while the PHY is held in reset, 125 MHz once it is out (its PLL multiplies the 25 MHz). The FPGA pin of the PHY's reset is not yet known here. A design that leaves it alone gets **25 MHz**: the UART tests, built for 25 MHz, talk at 115,200 and 1,000,000 baud (bitgen pulls unused pins down, which presumably holds the PHY in reset).
 
+For a faster clock, `panog2_board` puts a Spartan-6 `PLL_BASE` on Y13 when `PANO_CLOCK_HZ` isn't 25 MHz: `Spartan6PllSettings` (in `lib/panog2_board.dart`) finds a multiplier and dividers that make the frequency exactly, with the VCO in 400–1000 MHz and nearest 700 (40 MHz: 25 × 32 ÷ 20, VCO 800 MHz). Its output drives the design through a `BUFG`, and the core is held in reset until the PLL locks. ISE derives the output's timing constraint from the 40 ns period on Y13 in the UCF.
+
 ## Pins used so far
 
 | Signal | Pin | Notes |
@@ -56,6 +58,9 @@ Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, 
 | Design | LUTs | Fmax (ISE's estimate) | On the board |
 |---|---|---|---|
 | One Particle core (`particle-pano`), 64 KiB block RAM | 3,447 of 63,288 (5%), 1,045 slices, 32 RAMB16BWER | 43.8 MHz (22.8 ns) | Runs at 25 MHz: `memprobe.asm` and `panog2_echo.asm` correct |
+| Parcore (`parcore-pano`): the conductor and four stage cores | 12,322 of 63,288 (19%), 3,852 slices | 49.2 MHz (20.3 ns) | Runs at 25 MHz: the conductor boots the stage cores from the on-chip ROM, and `hello.S` greets and echoes |
+
+The Fmax figures are ISE's estimates from builds constrained to 25 MHz; a build asked for more may reach more, or less.
 
 ## What ISE needs from the generated Verilog
 
@@ -64,8 +69,8 @@ Loading over JTAG changes only the FPGA's configuration; the board's SPI flash, 
 
 ## Still to do
 
-* Parcore on the G2 (`make parcore-pano`): its size and speed in ISE, and the guest on the board. Then:
+* Parcore on the G2 (`make parcore-pano`, running; see *Results*), then:
   * pmon's console, on the micro HDMI connector's DDC pins (AB19 transmit, AA21 receive in LiteX's platform; 502);
-  * booting from the board's flash (the SPI flash clock through `STARTUP_SPARTAN6`, as `USRMCLK` on the ECP5), once it's known where Pano's own firmware sits in it (505);
-* A Spartan-6 PLL, for a faster clock than the 25 MHz on Y13.
+  * booting from the board's flash (the SPI flash clock through `STARTUP_SPARTAN6`, as `USRMCLK` on the ECP5), once it's known where Pano's own firmware sits in it (505).
+* The PLL on the board: 40 MHz first (508), then higher if ISE's timing allows.
 * The PHY's reset pin, for a known 125 MHz clock.

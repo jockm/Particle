@@ -23,8 +23,10 @@
 // starting at --base. The core loads the bank files by name ($readmemh), so
 // they go beside the Verilog. --baud is the console UART's (FIFO channel 0).
 //
-// --clock-hz is the clock on pin Y13: 25 MHz while the Ethernet PHY is held
-// in reset, as it is when a design leaves the PHY's reset pin alone.
+// --clock-hz is the design's clock. The pin Y13 gives 25 MHz (the Ethernet
+// PHY held in reset, as it is when a design leaves the PHY's reset pin
+// alone); for --design particle any other frequency comes from a Spartan-6
+// PLL in the wrapper (lib/panog2_board.dart), if it can make it exactly.
 
 import 'dart:io';
 
@@ -172,8 +174,13 @@ Future<void> generateParticle(
   );
   await top.build();
   File('${dir.path}/particle_core.sv').writeAsStringSync(top.dumpSystemVerilog());
-  File('${dir.path}/panog2_board.v').writeAsStringSync(
-      panoG2BoardVerilog(clockHz: clockHz, coreModule: top.definitionName));
+  final String board;
+  try {
+    board = panoG2BoardVerilog(clockHz: clockHz, coreModule: top.definitionName);
+  } on ArgumentError catch (e) {
+    usage('${e.message}');
+  }
+  File('${dir.path}/panog2_board.v').writeAsStringSync(board);
   print('==> Pano G2 Particle design written to ${dir.path}: panog2_board.v '
       '(top level) and particle_core.sv, ${clockHz / 1e6} MHz, console '
       '$baud baud');

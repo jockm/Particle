@@ -205,8 +205,8 @@ binary in a folder on your `PATH` (such as `~/.local/bin`).
 ## Setting up the ISE VM for the Pano Logic G2
 
 The Pano Logic G2's Spartan-6 is built with Xilinx ISE 14.7, which Xilinx
-ships for Windows 10 and 11 as a VirtualBox VM running Linux. The Makefile's
-`pano-*` targets run on your computer and drive the VM over ssh; see
+ships for Windows 10 and 11 as a VirtualBox VM running Linux. The Pano G2
+make targets run on your computer and drive the VM over ssh; see
 [the Pano G2 notes](Documentation/panog2.md) and the
 [configuration guide](Documentation/configuration_guide.md#the-pano-logic-g2).
 
@@ -214,11 +214,7 @@ ships for Windows 10 and 11 as a VirtualBox VM running Linux. The Makefile's
    board's XC6SLX100; a plain ISE WebPACK install on Linux may not support
    the part). The make targets expect ISE in
    `/opt/Xilinx/14.7/ISE_DS` (`PANO_ISE` otherwise).
-2. In the VM, start the ssh server at boot, and give your computer an ssh
-   host alias for it, `ise-vm` (`PANO_HOST` otherwise), in `~/.ssh/config`:
-   the VM's port, user and key, and any options its old ssh server needs.
-   `ssh ise-vm true` and `scp` to `ise-vm` must work without a password
-   prompt.
+2. Set up ssh, so the make targets can reach the VM (the steps below).
 3. Plug the JTAG cable in and pass it through to the VM (VirtualBox's USB
    settings); `make pano-vm-check` lists the board's JTAG chain from there.
 4. The builds use `~/Projects/particle-pano` in the VM (`PANO_DIR`
@@ -227,6 +223,71 @@ ships for Windows 10 and 11 as a VirtualBox VM running Linux. The Makefile's
 `make pano-vm-check` checks all of this. The serial console needs an adapter
 that takes 5 V logic, on your computer (see the wiring in the Pano G2
 notes); `make pano-term` opens it.
+
+### ssh to the VM
+
+The VM's ssh server is old and needs the `ssh-rsa` signature algorithm for
+host and user keys, which current OpenSSH clients turn off unless asked:
+hence the `HostKeyAlgorithms` and `PubkeyAcceptedKeyTypes` options below. These steps
+work from macOS and Linux.
+
+1. In the VM, start the ssh server, have it start at boot, and let
+   connections through the firewall:
+
+   ```sh
+   sudo service sshd start
+   sudo chkconfig sshd on
+   sudo iptables -I INPUT -p tcp --dport 22 -j ACCEPT
+   sudo service iptables save
+   ```
+
+2. Forward a port to it in VirtualBox: in the VM's window, open
+   **Devices → Network → Network Settings**, click **Advanced**, then
+   **Port Forwarding**, and add a rule:
+
+   | Field | Value |
+   |---|---|
+   | Name | SSH |
+   | Protocol | TCP |
+   | Host IP | (blank) |
+   | Host Port | 2222 |
+   | Guest IP | (blank) |
+   | Guest Port | 22 |
+
+   Then close the VM's window, quit VirtualBox, and open it again.
+
+3. From your computer, check the connection. `<host>` is the network name or
+   IP address of the computer running VirtualBox (`localhost` if that is
+   this computer). The VM's user is `ise`, password `xilinx`:
+
+   ```sh
+   ssh -p 2222 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa ise@<host>
+   ```
+
+4. Copy your ssh key to the VM, so the make targets don't ask for the
+   password:
+
+   ```sh
+   ssh-copy-id -p 2222 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa ise@<host>
+   ```
+
+5. Add a host alias for it to `~/.ssh/config`, `ise-vm` (the make targets'
+   `PANO_HOST`):
+
+   ```
+   Host ise-vm
+       HostName <host>
+       Port 2222
+       User ise
+       HostKeyAlgorithms +ssh-rsa
+       PubkeyAcceptedKeyTypes +ssh-rsa
+   ```
+
+   `ssh ise-vm true` should now return without asking for anything, and
+   `scp` to `ise-vm` works too.
+
+Newer OpenSSH clients also warn on each connection that the VM's key
+exchange isn't post-quantum; that doesn't affect the builds.
 
 ## Installing Docker for the ASIC flow (OpenROAD-flow-scripts)
 
